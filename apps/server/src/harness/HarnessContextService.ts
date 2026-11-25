@@ -23,12 +23,14 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HarnessApprovalAuditStore from "./HarnessApprovalAuditStore.ts";
 import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
+import * as HarnessMemoryStore from "./HarnessMemoryStore.ts";
 import {
   isMcpServerAllowedByMode,
   type NativeDiscoveredSkill,
   projectHarnessContext,
 } from "./HarnessProjector.ts";
 import * as McpGateway from "./McpGateway.ts";
+import * as PluginHost from "./PluginHost.ts";
 
 export class HarnessContextService extends Context.Service<
   HarnessContextService,
@@ -42,6 +44,8 @@ export class HarnessContextService extends Context.Service<
 const make = Effect.gen(function* () {
   const gateway = yield* McpGateway.McpGateway;
   const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+  const memoryStore = yield* Effect.serviceOption(HarnessMemoryStore.HarnessMemoryStore);
+  const pluginHost = yield* Effect.serviceOption(PluginHost.PluginHost);
   const approvalAuditStore = yield* Effect.serviceOption(
     HarnessApprovalAuditStore.HarnessApprovalAuditStore,
   );
@@ -265,7 +269,7 @@ const make = Effect.gen(function* () {
           ? {
               modeId: activeMode.id,
               modeName: activeMode.name,
-              modeDigest: thread.modeDigest ?? activeMode.contentDigest,
+              modeDigest: activeMode.contentDigest,
               modeReadOnly: activeMode.readonly,
             }
           : {
@@ -278,8 +282,15 @@ const make = Effect.gen(function* () {
         harnessGatewayActive:
           snapshot.managedPolicyAllowsHarness &&
           (activeGatewayCount > 0 ||
-            projected?.needsGatewayTools === true ||
-            (thread.interactionMode === "plan" && planModeSource === "harness-propose-plan")),
+            (supportsMcpTools &&
+              (projected?.needsGatewayTools === true ||
+                Option.isSome(memoryStore) ||
+                (activeMode?.id === "creator" &&
+                  thread.interactionMode !== "plan" &&
+                  !activeMode.readonly) ||
+                (Option.isSome(pluginHost) && pluginHost.value.listActiveSdkTools().length > 0))) ||
+            ((thread.interactionMode === "plan" || activeMode?.proposePlan === true) &&
+              planModeSource === "harness-propose-plan")),
         mcpServers,
         skills: projected?.skills ?? [],
         rules: projected?.rules ?? [],

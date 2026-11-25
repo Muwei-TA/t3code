@@ -447,8 +447,8 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
               <AlertTitle>{gt("Secret safety scan clean")}</AlertTitle>
               <AlertDescription>
                 <T>
-                  Local trust ledgers (plugins-state.json, approval-rules.json) are excluded via
-                  .gitignore.
+                  Only declarative portable files (AGENTS.md, skills, rules, commands, modes, and
+                  memory) sync. Local trust ledgers and executable configs stay local.
                 </T>
               </AlertDescription>
             </Alert>
@@ -589,14 +589,27 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
                 />
                 <Button
                   size="sm"
-                  disabled={!canSyncRemote || !preview.canPush || busy}
+                  disabled={
+                    !canSyncRemote ||
+                    !preview.canPush ||
+                    !preview.remoteUrl ||
+                    !preview.branch ||
+                    !preview.previewTreeDigest ||
+                    busy
+                  }
                   onClick={async () => {
+                    if (!preview.remoteUrl || !preview.branch || !preview.previewTreeDigest) return;
                     setBusy(true);
                     const res = await pushSync({
                       environmentId,
-                      input: commitMessage.trim()
-                        ? { commitMessage: TrimmedNonEmptyString.make(commitMessage.trim()) }
-                        : {},
+                      input: {
+                        ...(commitMessage.trim()
+                          ? { commitMessage: TrimmedNonEmptyString.make(commitMessage.trim()) }
+                          : {}),
+                        expectedRemoteUrl: TrimmedNonEmptyString.make(preview.remoteUrl),
+                        expectedBranch: TrimmedNonEmptyString.make(preview.branch),
+                        expectedTreeDigest: TrimmedNonEmptyString.make(preview.previewTreeDigest),
+                      },
                     });
                     setBusy(false);
                     if (res._tag === "Success") {

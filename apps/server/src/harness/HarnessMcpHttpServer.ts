@@ -222,6 +222,27 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     const librarySnapshot = Option.isSome(libraryStore)
       ? yield* libraryStore.value.getSnapshot(workspaceRoot).pipe(Effect.orElseSucceed(() => null))
       : null;
+    const activeRun =
+      shell.activeRunId !== null && typeof projections.getThreadRecords === "function"
+        ? yield* projections.getThreadRecords(scope.thread.threadId, ["runs"]).pipe(
+            Effect.map(
+              (records) => records.runs.find((run) => run.id === shell.activeRunId) ?? null,
+            ),
+            Effect.orElseSucceed(() => null),
+          )
+        : null;
+    const effectiveInteractionMode =
+      activeRun?.runtimePolicy.interactionMode ?? shell.interactionMode;
+    const effectiveRuntimeMode = activeRun?.runtimePolicy.runtimeMode ?? shell.runtimeMode;
+    const activeMode = Option.isSome(libraryStore)
+      ? yield* libraryStore.value
+          .resolveMode({
+            ...(shell.modeId !== undefined ? { modeId: shell.modeId } : {}),
+            interactionMode: effectiveInteractionMode,
+            workspaceRoot,
+          })
+          .pipe(Effect.orElseSucceed(() => null))
+      : null;
     const includeLibraryTools =
       snapshot.managedPolicyAllowsHarness &&
       supportsMcpTools &&
@@ -233,16 +254,18 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     const includeCreatorTools =
       snapshot.managedPolicyAllowsHarness &&
       supportsMcpTools &&
-      shell.interactionMode !== "plan" &&
-      shell.modeId === "creator";
+      effectiveInteractionMode !== "plan" &&
+      activeMode?.readonly !== true &&
+      (activeMode?.id === "creator" || shell.modeId === "creator");
     const context: McpGateway.GatewaySessionContext = {
       providerSessionId: scope.thread.providerSessionId,
       workspaceRoot,
-      interactionMode: shell.interactionMode,
-      runtimeMode: shell.runtimeMode,
+      interactionMode: effectiveInteractionMode,
+      runtimeMode: effectiveRuntimeMode,
+      activeMode,
       includeProposePlan:
         snapshot.managedPolicyAllowsHarness &&
-        shell.interactionMode === "plan" &&
+        (effectiveInteractionMode === "plan" || activeMode?.proposePlan === true) &&
         !emitsProposedPlan &&
         supportsMcpTools,
       includeLibraryTools,
@@ -268,7 +291,16 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     const tools = yield* gateway.listToolsForSession(state.context);
     const pluginTools =
       state.managedPolicyAllowsHarness && Option.isSome(pluginHost)
-        ? pluginHost.value.listActiveSdkTools()
+        ? pluginHost.value.listActiveSdkTools().filter(
+            (tool) =>
+              McpGateway.checkHarnessRuntimeToolCeiling({
+                toolName: tool.exposedName,
+                interactionMode: state.context.interactionMode,
+                runtimeMode: state.context.runtimeMode,
+                activeMode: state.context.activeMode,
+                readOnly: tool.readOnly,
+              }) === null,
+          )
         : [];
     return jsonRpcSuccess(
       rpc.id,
@@ -279,6 +311,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
             description: tool.description,
             inputSchema: tool.inputSchema,
             ...(tool.readOnly ? { annotations: { readOnlyHint: true } } : {}),
+            ...(tool._meta ? { _meta: tool._meta } : {}),
           })),
           ...pluginTools.map((tool) => ({
             name: tool.exposedName,
@@ -446,7 +479,42 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
       );
     }
 
+    const enforceLiveRuntimeCeiling = Effect.fn("HarnessMcpHttpServer.enforceLiveRuntimeCeiling")(
+      function* (input: {
+        readonly readOnly: boolean;
+        readonly isBuiltInReadOnly?: boolean | undefined;
+      }) {
+        const freshState = yield* resolveThreadState;
+        if (
+          freshState === null ||
+          !isLiveCallerShell(freshState.shell, scope.thread.providerInstanceId)
+        ) {
+          return "The calling provider no longer owns an active thread run.";
+        }
+        if (!freshState.managedPolicyAllowsHarness) {
+          return "Portable harness extensions are disabled by this environment's managed policy.";
+        }
+        return McpGateway.checkHarnessRuntimeToolCeiling({
+          toolName,
+          interactionMode: freshState.context.interactionMode,
+          runtimeMode: freshState.context.runtimeMode,
+          activeMode: freshState.context.activeMode,
+          readOnly: input.readOnly,
+          isBuiltInReadOnly: input.isBuiltInReadOnly,
+        });
+      },
+    );
+
     if (toolName === McpGateway.HARNESS_WRITE_SKILL_NAME) {
+      const ceilingErr = yield* enforceLiveRuntimeCeiling({ readOnly: false });
+      if (ceilingErr !== null) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          { isError: true, content: [{ type: "text", text: ceilingErr }] },
+          sessionId,
+        );
+      }
       if (!state.context.includeCreatorTools || Option.isNone(libraryStore)) {
         yield* emitPostToolHook(true);
         return jsonRpcSuccess(
@@ -518,6 +586,15 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     }
 
     if (toolName === McpGateway.HARNESS_CREATE_MODE_NAME) {
+      const ceilingErr = yield* enforceLiveRuntimeCeiling({ readOnly: false });
+      if (ceilingErr !== null) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          { isError: true, content: [{ type: "text", text: ceilingErr }] },
+          sessionId,
+        );
+      }
       if (!state.context.includeCreatorTools || Option.isNone(libraryStore)) {
         yield* emitPostToolHook(true);
         return jsonRpcSuccess(
@@ -612,6 +689,15 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     }
 
     if (toolName === McpGateway.HARNESS_PLUGIN_PACK_NAME) {
+      const ceilingErr = yield* enforceLiveRuntimeCeiling({ readOnly: false });
+      if (ceilingErr !== null) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          { isError: true, content: [{ type: "text", text: ceilingErr }] },
+          sessionId,
+        );
+      }
       if (!state.context.includeCreatorTools || Option.isNone(pluginHost)) {
         yield* emitPostToolHook(true);
         return jsonRpcSuccess(
@@ -1016,19 +1102,12 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     }
 
     if (toolName === McpGateway.HARNESS_MEMORY_WRITE_NAME) {
-      if (state.context.interactionMode === "plan") {
+      const ceilingErr = yield* enforceLiveRuntimeCeiling({ readOnly: false });
+      if (ceilingErr !== null) {
         yield* emitPostToolHook(true);
         return jsonRpcSuccess(
           rpc.id,
-          {
-            isError: true,
-            content: [
-              {
-                type: "text",
-                text: "Blocked harness_memory_write in Plan mode because it writes to disk.",
-              },
-            ],
-          },
+          { isError: true, content: [{ type: "text", text: ceilingErr }] },
           sessionId,
         );
       }
@@ -1094,18 +1173,14 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
         .listActiveSdkTools()
         .find((candidate) => candidate.exposedName === toolName);
       if (sdkTool) {
-        if (state.context.interactionMode === "plan" && !sdkTool.readOnly) {
+        const ceilingErr = yield* enforceLiveRuntimeCeiling({ readOnly: sdkTool.readOnly });
+        if (ceilingErr !== null) {
           yield* emitPostToolHook(true);
           return jsonRpcSuccess(
             rpc.id,
             {
               isError: true,
-              content: [
-                {
-                  type: "text",
-                  text: `Blocked "${toolName}" in Plan mode because this plugin tool is not marked read-only.`,
-                },
-              ],
+              content: [{ type: "text", text: ceilingErr }],
             },
             sessionId,
           );

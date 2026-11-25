@@ -21,6 +21,12 @@ import * as Schema from "effect/Schema";
 import * as YAML from "yaml";
 
 import * as HarnessStore from "./HarnessStore.ts";
+import {
+  assertContainedNoSymlinks,
+  safeReadFileUtf8,
+  safeRemoveFile,
+  safeWriteFileAtomic,
+} from "./safeFileOps.ts";
 
 const decodeMemoryId = Schema.decodeUnknownOption(HarnessMemoryId);
 const decodeIsoDateTime = Schema.decodeUnknownOption(IsoDateTime);
@@ -98,18 +104,30 @@ export const layer = Layer.effect(
         .pipe(Effect.map((workspace) => workspace.managedPolicyAllowsHarness));
 
     const loadAllEntries = Effect.fn("HarnessMemoryStore.loadAllEntries")(function* () {
+      const rootDir = store.harnessDir;
       const dir = memoryDir();
       const nowIso = IsoDateTime.make(DateTime.formatIso(yield* DateTime.now));
       return yield* Effect.tryPromise({
         try: async (): Promise<ReadonlyArray<HarnessMemoryEntry>> => {
+          const dirStat = await NodeFSP.lstat(dir).catch(() => null);
+          if (dirStat === null) return [];
+          if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
+            throw new Error(`Refusing symlinked or non-directory memory root: ${dir}`);
+          }
+          await assertContainedNoSymlinks(rootDir, dir);
+
           const entries: Array<HarnessMemoryEntry> = [];
           const dirents = await NodeFSP.readdir(dir, { withFileTypes: true }).catch(() => []);
           for (const dirent of dirents) {
-            if (!dirent.isFile() || !dirent.name.endsWith(".md")) continue;
+            if (dirent.isSymbolicLink() || !dirent.isFile() || !dirent.name.endsWith(".md")) {
+              continue;
+            }
             const stem = dirent.name.slice(0, -3).toLowerCase();
             const filePath = NodePath.join(dir, dirent.name);
-            const raw = await NodeFSP.readFile(filePath, "utf8");
-            const stat = await NodeFSP.stat(filePath);
+            const raw = await safeReadFileUtf8(rootDir, filePath).catch(() => null);
+            if (raw === null) continue;
+            const stat = await NodeFSP.lstat(filePath).catch(() => null);
+            if (!stat || stat.isSymbolicLink() || !stat.isFile()) continue;
             const { frontmatter, body } = splitFrontmatter(raw);
             const idOpt = decodeMemoryId(
               typeof frontmatter.id === "string" ? frontmatter.id : stem,
@@ -190,8 +208,7 @@ export const layer = Layer.effect(
         });
         yield* Effect.tryPromise({
           try: async () => {
-            await NodeFSP.mkdir(dir, { recursive: true });
-            await NodeFSP.writeFile(filePath, content, "utf8");
+            await safeWriteFileAtomic(store.harnessDir, filePath, content);
           },
           catch: (error) =>
             new HarnessError({
@@ -212,7 +229,7 @@ export const layer = Layer.effect(
         const filePath = NodePath.join(memoryDir(), `${input.id}.md`);
         yield* Effect.tryPromise({
           try: async () => {
-            await NodeFSP.rm(filePath, { force: true });
+            await safeRemoveFile(store.harnessDir, filePath);
           },
           catch: (error) =>
             new HarnessError({
@@ -229,7 +246,8 @@ export const layer = Layer.effect(
         const query = (input.query ?? "").trim().toLowerCase();
         const tagFilter = (input.tag ?? "").trim().toLowerCase();
         const limit = Math.max(1, Math.min(50, input.limit ?? 15));
-        const terms = query.split(/[^a-z0-9_-]+/u).filter(Boolean);
+        // Preserve Unicode letters/numbers (including CJK) so non-ASCII queries match accurately.
+        const terms = query.split(/[^\p{L}\p{N}_-]+/u).filter(Boolean);
 
         const filtered = entries.filter((entry) =>
           tagFilter.length === 0 ? true : entry.tags.some((t) => t.toLowerCase() === tagFilter),

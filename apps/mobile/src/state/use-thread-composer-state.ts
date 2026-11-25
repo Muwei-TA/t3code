@@ -374,6 +374,7 @@ export function useThreadComposerState(input: {
       ? (selectedDraft.interactionMode ?? selectedThread.interactionMode)
       : DEFAULT_PROVIDER_INTERACTION_MODE
     : null;
+  const modeId = selectedThread ? (selectedDraft.modeId ?? selectedThread.modeId) : undefined;
   const canSwitchThreadProvider = threadAllowsProviderSwitch({
     thread: selectedThreadShell,
     projection: selectedThreadProjection?.projection,
@@ -869,6 +870,7 @@ export function useThreadComposerState(input: {
         JSON.stringify(current.modelSelection) !== JSON.stringify(draft.modelSelection) ||
         current.runtimeMode !== draft.runtimeMode ||
         current.interactionMode !== draft.interactionMode ||
+        current.modeId !== draft.modeId ||
         current.attachments.length !== attachments.length ||
         current.attachments.some((attachment, index) => attachment.id !== attachments[index]?.id)
       )
@@ -923,6 +925,9 @@ export function useThreadComposerState(input: {
       interactionMode: providerSupportsPlanMode
         ? (draft.interactionMode ?? thread.interactionMode)
         : DEFAULT_PROVIDER_INTERACTION_MODE,
+      ...((draft.modeId ?? thread.modeId) !== undefined
+        ? { modeId: draft.modeId ?? thread.modeId }
+        : {}),
       ...(compactBeforeSend
         ? { compactBeforeSend, dispatchMode: "queue" as const }
         : followUpDispatchMode === null
@@ -1096,6 +1101,7 @@ export function useThreadComposerState(input: {
     canSwitchThreadProvider,
     runtimeMode,
     interactionMode,
+    modeId,
     activeThreadBusy,
     interruptibleRunId,
     onChangeDraftMessage,

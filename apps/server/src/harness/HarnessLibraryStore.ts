@@ -37,6 +37,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import * as ServerConfig from "../config.ts";
 import * as HarnessStore from "./HarnessStore.ts";
+import { safeWriteFileAtomic } from "./safeFileOps.ts";
 import * as PluginHost from "./PluginHost.ts";
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
@@ -458,28 +459,14 @@ const make = Effect.gen(function* () {
     targetPath: string,
     contents: string,
   ) {
-    const dir = path.dirname(targetPath);
-    yield* fs.makeDirectory(dir, { recursive: true }).pipe(
-      Effect.mapError(
-        () =>
-          new HarnessError({
-            code: "io_error",
-            detail: `Could not create directory for ${path.basename(targetPath)}.`,
-          }),
-      ),
-    );
-    const tmpPath = `${targetPath}.${NodeCrypto.randomUUID()}.tmp`;
-    yield* fs.writeFileString(tmpPath, contents).pipe(
-      Effect.andThen(fs.rename(tmpPath, targetPath)),
-      Effect.onError(() => fs.remove(tmpPath, { force: true }).pipe(Effect.ignore)),
-      Effect.mapError(
-        () =>
-          new HarnessError({
-            code: "io_error",
-            detail: `Failed to write ${path.basename(targetPath)}.`,
-          }),
-      ),
-    );
+    yield* Effect.tryPromise({
+      try: () => safeWriteFileAtomic(store.harnessDir, targetPath, contents),
+      catch: (error) =>
+        new HarnessError({
+          code: "io_error",
+          detail: `Failed to write ${path.basename(targetPath)}: ${error instanceof Error ? error.message : String(error)}`,
+        }),
+    });
   });
 
   const assertPolicyAllows = Effect.fn("HarnessLibraryStore.assertPolicyAllows")(function* () {
@@ -1249,6 +1236,23 @@ const make = Effect.gen(function* () {
         description: "Repository AGENTS.md rules",
         body: snapshot.projectAgentsMd.body,
         bytes: snapshot.projectAgentsMd.bytes,
+      });
+    }
+    if (normalized.toLowerCase().startsWith("mode:")) {
+      const modeQuery = normalized.slice("mode:".length).trim().toLowerCase();
+      if (modeQuery.length === 0) return Option.none();
+      const foundMode = snapshot.modes.find(
+        (mode) => mode.effectiveEnabled && mode.id.toLowerCase() === modeQuery,
+      );
+      if (!foundMode) return Option.none();
+      return Option.some({
+        id: `mode:${foundMode.id}`,
+        scope: foundMode.scope,
+        sourcePath: foundMode.sourcePath,
+        apply: "manual" as const,
+        description: foundMode.description ?? `Declarative mode "${foundMode.name}"`,
+        body: foundMode.body,
+        bytes: foundMode.bytes,
       });
     }
     const found = snapshot.rules.find(

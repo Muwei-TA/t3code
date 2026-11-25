@@ -31,7 +31,9 @@ import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as HarnessApprovalAuditStore from "../harness/HarnessApprovalAuditStore.ts";
 import * as HarnessHooksService from "../harness/HarnessHooksService.ts";
+import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
 
 const isProviderTurnControlError = Schema.is(ProviderTurnControlService.ProviderTurnControlError);
@@ -119,6 +121,12 @@ export const layerExecutor: Layer.Layer<
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const settings = yield* ServerSettings.ServerSettingsService;
     const harnessHooksOption = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
+    const approvalAuditOption = yield* Effect.serviceOption(
+      HarnessApprovalAuditStore.HarnessApprovalAuditStore,
+    );
+    const adapterRegistryOption = yield* Effect.serviceOption(
+      ProviderAdapterRegistry.ProviderAdapterRegistryV2,
+    );
     const startRun = (
       effect: EffectOutbox.OrchestrationEffectV2,
       runId: RunId,
@@ -515,6 +523,68 @@ export const layerExecutor: Layer.Layer<
                   : { answers: effect.request.answers }),
               })
               .pipe(
+                Effect.tap(() => {
+                  const decision = effect.request.decision;
+                  if (
+                    (decision !== "acceptForSession" && decision !== "acceptAlways") ||
+                    Option.isNone(approvalAuditOption)
+                  ) {
+                    return Effect.void;
+                  }
+                  return Effect.gen(function* () {
+                    const shell = yield* projectionStore
+                      .getThreadShell(effect.threadId)
+                      .pipe(Effect.orElseSucceed(() => null));
+                    if (shell === null) return;
+                    const records = yield* projectionStore
+                      .getThreadRecords(effect.threadId, ["turnItems"], {
+                        turnItemTypes: ["approval_request"],
+                      })
+                      .pipe(Effect.orElseSucceed(() => null));
+                    const approvalItem = records?.turnItems.find(
+                      (
+                        item,
+                      ): item is Extract<
+                        import("@t3tools/contracts").OrchestrationV2TurnItem,
+                        { readonly type: "approval_request" }
+                      > => item.type === "approval_request" && item.requestId === requestId,
+                    );
+                    const nativeAllowAlways = Option.isSome(adapterRegistryOption)
+                      ? yield* adapterRegistryOption.value.get(shell.providerInstanceId).pipe(
+                          Effect.flatMap((adapter) => adapter.getCapabilities()),
+                          Effect.map((caps) => caps.harness.nativeAllowAlways === true),
+                          Effect.orElseSucceed(() => false),
+                        )
+                      : false;
+                    const effectiveScope =
+                      decision === "acceptAlways" && nativeAllowAlways ? "always" : "session";
+                    const baseSummary =
+                      approvalItem?.prompt ??
+                      approvalItem?.reason ??
+                      `Approved request ${requestId}`;
+                    const summary =
+                      decision === "acceptAlways" && !nativeAllowAlways
+                        ? `${baseSummary} (session-scoped by provider)`
+                        : baseSummary;
+                    yield* approvalAuditOption.value.recordGrant({
+                      threadId: effect.threadId,
+                      providerInstanceId: shell.providerInstanceId,
+                      requestKind: approvalItem?.requestKind ?? "approval",
+                      scope: effectiveScope,
+                      summary,
+                      ...(approvalItem?.appName ? { appName: approvalItem.appName } : {}),
+                      workspaceRoot: shell.worktreePath ?? null,
+                    });
+                  }).pipe(
+                    Effect.catchCause((auditCause) =>
+                      Effect.logWarning("Failed to record delivered approval audit entry", {
+                        effectId: effect.id,
+                        requestId,
+                        cause: auditCause,
+                      }),
+                    ),
+                  );
+                }),
                 Effect.tapCause((cause) =>
                   willRetry || Cause.hasInterruptsOnly(cause)
                     ? Effect.void

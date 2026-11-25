@@ -67,6 +67,9 @@ import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import { DispatchModeLimit } from "./DispatchModeLimit.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as TaskFolders from "../workspace/TaskFolders.ts";
+import * as HarnessHooksService from "../harness/HarnessHooksService.ts";
+import * as HarnessLibraryStore from "../harness/HarnessLibraryStore.ts";
+import { normalizeModeSelection, preprocessTurnText } from "../harness/HarnessTurnPreprocess.ts";
 
 // The agent waits for its branch name; a rate-limited provider would hold it for minutes.
 const BRANCH_NAME_TIMEOUT = "20 seconds";
@@ -297,6 +300,8 @@ const make = Effect.gen(function* () {
   const eventSink = yield* EventSink.EventSinkV2;
   const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
   const taskFolders = yield* TaskFolders.TaskFolders;
+  const harnessLibraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+  const harnessHooksService = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
   // A project-folder launch that names no branch records the folder's checkout, as the composer does.
   const launchBranch = (strategy: ThreadLaunchWorkspaceStrategy, workspaceRoot: string) =>
     strategy.type === "root" && strategy.branch === undefined
@@ -1451,6 +1456,37 @@ const make = Effect.gen(function* () {
         );
         const initialWorktreePath =
           workspaceStrategy.type === "existing_worktree" ? workspaceStrategy.worktreePath : null;
+        const normalizedMode = Option.isNone(launchReceipt)
+          ? yield* normalizeModeSelection({
+              modeId: input.modeId,
+              modeDigest: input.modeDigest,
+              interactionMode: input.interactionMode,
+              workspaceRoot: project.workspaceRoot,
+              libraryStore: harnessLibraryStore,
+            })
+          : { interactionMode: input.interactionMode, modeDigest: input.modeDigest };
+
+        let effectiveInitialText = input.initialMessage?.text;
+        if (input.initialMessage !== undefined && Option.isNone(launchReceipt)) {
+          const preprocessed = yield* preprocessTurnText({
+            text: input.initialMessage.text,
+            threadId: candidateThreadId,
+            workspaceRoot: project.workspaceRoot,
+            modeId: input.modeId,
+            interactionMode: normalizedMode.interactionMode,
+            libraryStore: harnessLibraryStore,
+            hooksService: harnessHooksService,
+          });
+          if (preprocessed.blocked) {
+            return yield* mapError(
+              input,
+              "dispatch-message",
+              candidateThreadId,
+            )(preprocessed.blockReason ?? "Turn blocked by turn.beforeStart hook.");
+          }
+          effectiveInitialText = preprocessed.text;
+        }
+
         const initialMessage =
           input.initialMessage === undefined
             ? undefined
@@ -1460,7 +1496,7 @@ const make = Effect.gen(function* () {
                   (yield* ids.allocate
                     .message({ threadId: candidateThreadId, ordinal: 1 })
                     .pipe(Effect.mapError(mapError(input, "dispatch-message", candidateThreadId)))),
-                text: input.initialMessage.text,
+                text: effectiveInitialText ?? input.initialMessage.text,
                 ...(input.initialMessage.scheduledTaskId === undefined
                   ? {}
                   : { scheduledTaskId: input.initialMessage.scheduledTaskId }),
@@ -1491,9 +1527,11 @@ const make = Effect.gen(function* () {
                 ...(input.titleRenamed === true ? { titleRenamed: true } : {}),
                 modelSelection: input.modelSelection,
                 runtimeMode: input.runtimeMode,
-                interactionMode: input.interactionMode,
+                interactionMode: normalizedMode.interactionMode,
                 ...(input.modeId === undefined ? {} : { modeId: input.modeId }),
-                ...(input.modeDigest === undefined ? {} : { modeDigest: input.modeDigest }),
+                ...(normalizedMode.modeDigest === undefined
+                  ? {}
+                  : { modeDigest: normalizedMode.modeDigest }),
                 branch: initialBranch,
                 worktreePath: initialWorktreePath,
                 ...(input.importedNativeThread === undefined

@@ -12,10 +12,9 @@ import * as Schema from "effect/Schema";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import { rpcAuthorizationError } from "../auth/RpcAuthorization.ts";
 import * as ServerConfig from "../config.ts";
-import * as HarnessApprovalAuditStore from "../harness/HarnessApprovalAuditStore.ts";
 import * as HarnessHooksService from "../harness/HarnessHooksService.ts";
 import * as HarnessLibraryStore from "../harness/HarnessLibraryStore.ts";
-import { expandPortableCommand } from "../harness/HarnessProjector.ts";
+import { normalizeModeSelection, preprocessTurnText } from "../harness/HarnessTurnPreprocess.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 
@@ -24,69 +23,26 @@ import { isProviderSignOutPrompt } from "./CommandPolicy.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
-/** Expands leading portable `/<command>` templates on the server across Web, Mobile, MCP, and Scheduled Tasks. */
-const expandPortableSlashText = Effect.fn("ThreadMessageIntake.expandPortableSlashText")(
-  function* (input: {
-    readonly text: string;
-    readonly workspaceRoot?: string | undefined;
-    readonly projectId?: import("@t3tools/contracts").ProjectId | undefined;
-    readonly threadId?: import("@t3tools/contracts").ThreadId | undefined;
-  }) {
-    if (!input.text.trimStart().startsWith("/")) return input.text;
-    const libraryOpt = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
-    if (Option.isNone(libraryOpt)) return input.text;
-
-    let workspaceRoot = input.workspaceRoot;
-    if (workspaceRoot === undefined && input.projectId !== undefined) {
-      const projectsOpt = yield* Effect.serviceOption(ProjectStore.ProjectStoreV2);
-      if (Option.isSome(projectsOpt)) {
-        const proj = yield* projectsOpt.value
-          .get(input.projectId)
-          .pipe(Effect.orElseSucceed(() => Option.none()));
-        if (Option.isSome(proj)) {
-          workspaceRoot = proj.value.workspaceRoot;
-        }
-      }
+const resolveWorkspaceRootForThread = Effect.fn(
+  "ThreadMessageIntake.resolveWorkspaceRootForThread",
+)(function* (threadId: import("@t3tools/contracts").ThreadId) {
+  const threads = yield* ThreadManagement.ThreadManagementService;
+  const shell = yield* threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
+  if (shell === null) return { shell: null, workspaceRoot: undefined as string | undefined };
+  if (shell.worktreePath !== null) {
+    return { shell, workspaceRoot: shell.worktreePath };
+  }
+  const projectsOpt = yield* Effect.serviceOption(ProjectStore.ProjectStoreV2);
+  if (Option.isSome(projectsOpt)) {
+    const proj = yield* projectsOpt.value
+      .get(shell.projectId)
+      .pipe(Effect.orElseSucceed(() => Option.none()));
+    if (Option.isSome(proj)) {
+      return { shell, workspaceRoot: proj.value.workspaceRoot };
     }
-    if (workspaceRoot === undefined && input.threadId !== undefined) {
-      const threads = yield* ThreadManagement.ThreadManagementService;
-      const shell = yield* threads
-        .getThreadShell(input.threadId)
-        .pipe(Effect.orElseSucceed(() => null));
-      if (shell !== null) {
-        if (shell.worktreePath !== null) {
-          workspaceRoot = shell.worktreePath;
-        } else {
-          const projectsOpt = yield* Effect.serviceOption(ProjectStore.ProjectStoreV2);
-          if (Option.isSome(projectsOpt)) {
-            const proj = yield* projectsOpt.value
-              .get(shell.projectId)
-              .pipe(Effect.orElseSucceed(() => Option.none()));
-            if (Option.isSome(proj)) {
-              workspaceRoot = proj.value.workspaceRoot;
-            }
-          }
-        }
-      }
-    }
-
-    const snapshot = yield* libraryOpt.value
-      .getSnapshot(workspaceRoot)
-      .pipe(Effect.orElseSucceed(() => null));
-    if (
-      snapshot === null ||
-      !snapshot.managedPolicyAllowsHarness ||
-      snapshot.commands.length === 0
-    ) {
-      return input.text;
-    }
-    const expanded = expandPortableCommand({
-      text: input.text,
-      commands: snapshot.commands,
-    });
-    return expanded.text;
-  },
-);
+  }
+  return { shell, workspaceRoot: undefined as string | undefined };
+});
 
 // These failures precede commitCommand; generic dispatch errors can follow commits and remain ambiguous.
 function dispatchWasNotAccepted(
@@ -216,39 +172,36 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
     ) {
       return rawCommand;
     }
-    const expandedText = yield* expandPortableSlashText({
+    const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+    const hooksService = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
+    const { shell, workspaceRoot } = yield* resolveWorkspaceRootForThread(rawCommand.threadId);
+    const preprocessed = yield* preprocessTurnText({
       text: rawCommand.text,
       threadId: rawCommand.threadId,
+      workspaceRoot,
+      modeId: shell?.modeId,
+      interactionMode: shell?.interactionMode,
+      libraryStore,
+      hooksService,
     });
     if (
-      expandedText !== rawCommand.text &&
+      preprocessed.expanded &&
       !sender.managesProviders &&
-      isProviderSignOutPrompt({ text: expandedText, attachments: rawCommand.attachments ?? [] })
+      isProviderSignOutPrompt({
+        text: preprocessed.text,
+        attachments: rawCommand.attachments ?? [],
+      })
     ) {
       return yield* rpcAuthorizationError(AuthProvidersManageScope);
     }
-    const hooksOpt = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
-    let finalText = expandedText;
-    if (Option.isSome(hooksOpt)) {
-      const shell = yield* threads
-        .getThreadShell(rawCommand.threadId)
-        .pipe(Effect.orElseSucceed(() => null));
-      const beforeOutcome = yield* hooksOpt.value.runBeforeTurnStart({
-        threadId: rawCommand.threadId,
-        modeId: shell?.modeId ?? (shell?.interactionMode === "plan" ? "plan" : "build"),
-        text: expandedText,
-        workspaceRoot: shell?.worktreePath ?? undefined,
+    if (preprocessed.blocked) {
+      return yield* new AttachmentClaims.AttachmentClaimError({
+        message: preprocessed.blockReason ?? "Turn blocked by turn.beforeStart hook.",
       });
-      if (beforeOutcome.blocked) {
-        return yield* new AttachmentClaims.AttachmentClaimError({
-          message: beforeOutcome.blockReason ?? "Turn blocked by turn.beforeStart hook.",
-        });
-      }
-      if (beforeOutcome.injectedContext) {
-        finalText = `${beforeOutcome.injectedContext}\n\n${expandedText}`;
-      }
     }
-    return finalText === rawCommand.text ? rawCommand : { ...rawCommand, text: finalText };
+    return preprocessed.text === rawCommand.text
+      ? rawCommand
+      : { ...rawCommand, text: preprocessed.text };
   });
   if (command.type === "runtime-request.respond" && command.attachmentsByQuestionId) {
     const config = yield* ServerConfig.ServerConfig;
@@ -320,71 +273,31 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
       command.modeId !== undefined &&
       command.modeDigest === undefined
     ) {
-      const libOpt = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
-      if (Option.isSome(libOpt)) {
-        const resolved = yield* libOpt.value
-          .resolveMode({
-            modeId: command.modeId,
-            interactionMode: command.interactionMode,
-          })
-          .pipe(Effect.orElseSucceed(() => null));
-        if (resolved !== null) {
-          return {
-            ...command,
-            interactionMode: resolved.baseInteractionMode,
-            modeDigest: resolved.contentDigest,
-          };
-        }
+      const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+      const workspaceRoot =
+        command.type === "thread.interaction-mode.set"
+          ? (yield* resolveWorkspaceRootForThread(command.threadId)).workspaceRoot
+          : undefined;
+      const normalized = yield* normalizeModeSelection({
+        modeId: command.modeId,
+        modeDigest: command.modeDigest,
+        interactionMode: command.interactionMode,
+        workspaceRoot,
+        libraryStore,
+      });
+      if (
+        normalized.interactionMode !== command.interactionMode ||
+        normalized.modeDigest !== command.modeDigest
+      ) {
+        return {
+          ...command,
+          interactionMode: normalized.interactionMode,
+          ...(normalized.modeDigest !== undefined ? { modeDigest: normalized.modeDigest } : {}),
+        };
       }
     }
     return command;
   });
-
-  if (
-    commandWithModeDigest.type === "runtime-request.respond" &&
-    (commandWithModeDigest.decision === "acceptForSession" ||
-      commandWithModeDigest.decision === "acceptAlways")
-  ) {
-    const decision = commandWithModeDigest.decision;
-    const result = yield* threads.dispatch(commandWithModeDigest);
-    // Record native `allow_always` / session approval grants in the audit store after dispatch succeeds
-    // (never intercepts or emulates provider approval engines).
-    const auditOpt = yield* Effect.serviceOption(
-      HarnessApprovalAuditStore.HarnessApprovalAuditStore,
-    );
-    if (Option.isSome(auditOpt) && result.replayed !== true) {
-      const shell = yield* threads
-        .getThreadShell(commandWithModeDigest.threadId)
-        .pipe(Effect.orElseSucceed(() => null));
-      const matchedItem = result.storedEvents
-        .map((s) => s.event)
-        .find(
-          (ev) =>
-            ev.type === "turn-item.updated" &&
-            ev.payload.type === "approval_request" &&
-            ev.payload.requestId === commandWithModeDigest.requestId,
-        );
-      const approvalPayload =
-        matchedItem?.type === "turn-item.updated" && matchedItem.payload.type === "approval_request"
-          ? matchedItem.payload
-          : null;
-      yield* auditOpt.value
-        .recordGrant({
-          threadId: commandWithModeDigest.threadId,
-          providerInstanceId: shell?.providerInstanceId ?? ("unknown" as never),
-          requestKind: approvalPayload?.requestKind ?? "approval",
-          scope: decision === "acceptAlways" ? "always" : "session",
-          summary:
-            approvalPayload?.prompt ??
-            approvalPayload?.reason ??
-            `Approved request ${commandWithModeDigest.requestId}`,
-          ...(approvalPayload?.appName ? { appName: approvalPayload.appName } : {}),
-          workspaceRoot: shell?.worktreePath ?? null,
-        })
-        .pipe(Effect.ignore);
-    }
-    return result;
-  }
 
   if (
     commandWithModeDigest.type !== "message.dispatch" &&
@@ -464,85 +377,45 @@ export const sendToThread = Effect.fn("ThreadMessageIntake.sendToThread")(functi
   input: ThreadManagement.ThreadManagementSendInput,
 ) {
   const threads = yield* ThreadManagement.ThreadManagementService;
-  const expandedText = yield* expandPortableSlashText({
-    text: input.text,
-    threadId: input.threadId,
-  });
   const claimed = yield* AttachmentClaims.claimPendingAttachments(input);
-  return yield* threads
-    .sendToThread({ ...input, text: expandedText, attachments: claimed.attachments })
-    .pipe(
-      Effect.tap((result) => releaseUnusedClaims(claimed.claimedPaths, result.message.attachments)),
-      Effect.tapError((error) =>
-        dispatchWasNotAccepted(error)
-          ? AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths)
-          : Effect.void,
-      ),
-    );
+  return yield* threads.sendToThread({ ...input, attachments: claimed.attachments }).pipe(
+    Effect.tap((result) => releaseUnusedClaims(claimed.claimedPaths, result.message.attachments)),
+    Effect.tapError((error) =>
+      dispatchWasNotAccepted(error)
+        ? AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths)
+        : Effect.void,
+    ),
+  );
 });
 
 export const launchThread = Effect.fn("ThreadMessageIntake.launchThread")(function* (
   input: ThreadLaunch.ThreadLaunchInput,
 ) {
   const launches = yield* ThreadLaunch.ThreadLaunchService;
-  const modeResolvedInput = yield* Effect.gen(function* () {
-    if (input.modeId === undefined || input.modeDigest !== undefined) return input;
-    const libOpt = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
-    if (Option.isNone(libOpt)) return input;
-    const resolved = yield* libOpt.value
-      .resolveMode({
-        modeId: input.modeId,
-        interactionMode: input.interactionMode,
-      })
-      .pipe(Effect.orElseSucceed(() => null));
-    if (resolved === null) return input;
-    return {
-      ...input,
-      interactionMode: resolved.baseInteractionMode,
-      modeDigest: resolved.contentDigest,
-    };
-  });
-  const normalizedInput =
-    modeResolvedInput.initialMessage !== undefined
-      ? {
-          ...modeResolvedInput,
-          initialMessage: {
-            ...modeResolvedInput.initialMessage,
-            text: yield* expandPortableSlashText({
-              text: modeResolvedInput.initialMessage.text,
-              projectId: modeResolvedInput.projectId,
-            }),
-          },
-        }
-      : modeResolvedInput;
-  yield* AttachmentClaims.validateAttachmentLimits(
-    normalizedInput.initialMessage?.attachments ?? [],
-  );
-  if (
-    !normalizedInput.initialMessage?.attachments.some(AttachmentClaims.attachmentIsPendingUpload)
-  ) {
-    return yield* launches.launch(normalizedInput);
+  yield* AttachmentClaims.validateAttachmentLimits(input.initialMessage?.attachments ?? []);
+  if (!input.initialMessage?.attachments.some(AttachmentClaims.attachmentIsPendingUpload)) {
+    return yield* launches.launch(input);
   }
-  if (normalizedInput.threadId === undefined) {
+  if (input.threadId === undefined) {
     return yield* new AttachmentClaims.AttachmentClaimError({
       message: "Uploaded attachments need a thread id at launch.",
     });
   }
   const claimed = yield* AttachmentClaims.claimPendingAttachments({
-    threadId: normalizedInput.threadId,
-    attachments: normalizedInput.initialMessage.attachments,
+    threadId: input.threadId,
+    attachments: input.initialMessage.attachments,
   });
   return yield* launches
     .launch({
-      ...normalizedInput,
+      ...input,
       initialMessage: {
-        ...normalizedInput.initialMessage,
+        ...input.initialMessage,
         attachments: claimed.attachments,
-        ...(normalizedInput.initialMessage.context
+        ...(input.initialMessage.context
           ? {
               context: remapComposerContextAttachments(
-                normalizedInput.initialMessage.context,
-                normalizedInput.initialMessage.attachments,
+                input.initialMessage.context,
+                input.initialMessage.attachments,
                 claimed.attachments,
               ),
             }

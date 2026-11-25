@@ -398,7 +398,7 @@ export const CodexProviderCapabilitiesV2 = {
     systemContextMutableMidSession: true,
     maxSystemContextBytes: 3600,
     nativeToolHooks: false,
-    nativeAllowAlways: true,
+    nativeAllowAlways: false,
     planReadOnlyEnforcement: "native",
   },
 } satisfies OrchestrationV2ProviderCapabilities;

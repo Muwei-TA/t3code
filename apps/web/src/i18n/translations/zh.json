@@ -8935,7 +8935,7 @@
     },
     " 引用。"
   ],
-  "34b7938f88fa80fa": "本地信任台账（plugins-state.json、approval-rules.json）已通过 .gitignore 自动排除。",
+  "9ebe49ac612a7cd8": "仅同步声明式可移植文件（AGENTS.md、Skills、Rules、Commands、Modes 与 Memory）。本地信任台账与可执行配置仅保留在本机。",
   "1e38d5a22bb02b6b": "保存远程地址",
   "27477bc594a4d19d": "预览推送差异",
   "2e424bf0d0b332e1": "拉取",

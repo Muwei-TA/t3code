@@ -2,17 +2,18 @@ import {
   getPromptControlledTraits,
   getTraitSelectChange,
 } from "@t3tools/client-runtime/model-traits";
-import { T, useGT, useLocale, useMessages } from "gt-react-native";
+import { msg, T, useGT, useLocale, useMessages } from "gt-react-native";
 import * as Dialog from "../../components/ui/Dialog";
 import { createV5StackNavigator as createNativeStackNavigator } from "../../native/createV5StackNavigator";
 import { useSheetStackOptions } from "../layout/nested-stacks";
-import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, HarnessModeId, ProviderInstanceId } from "@t3tools/contracts";
 import {
   modelPreferencesMigrationPatch,
   resolveModelPreferences,
 } from "@t3tools/shared/serverSettings";
 import type {
   EnvironmentId,
+  HarnessModeEntry,
   ModelSelection,
   ProjectId,
   ProviderInteractionMode,
@@ -288,7 +289,53 @@ function SwitchRow(props: {
 
 type ThreadSettingsSubmenuPage =
   | { readonly kind: "descriptor"; readonly id: string }
-  | { readonly kind: "runtime" };
+  | { readonly kind: "runtime" }
+  | { readonly kind: "mode" };
+
+interface MobileModeChoice {
+  readonly id: HarnessModeId;
+  readonly name: string;
+  readonly description?: string | undefined;
+  readonly baseInteractionMode: ProviderInteractionMode;
+  readonly readonly: boolean;
+}
+
+const FALLBACK_MOBILE_MODES: ReadonlyArray<{
+  readonly id: HarnessModeId;
+  readonly name: string;
+  readonly description: ReturnType<typeof msg>;
+  readonly baseInteractionMode: ProviderInteractionMode;
+  readonly readonly: boolean;
+}> = [
+  {
+    id: HarnessModeId.make("build"),
+    name: "Build",
+    description: msg("Default implementation mode with full coding capabilities."),
+    baseInteractionMode: "default",
+    readonly: false,
+  },
+  {
+    id: HarnessModeId.make("plan"),
+    name: "Plan",
+    description: msg("Read-only planning mode with decision-complete proposed plans."),
+    baseInteractionMode: "plan",
+    readonly: true,
+  },
+  {
+    id: HarnessModeId.make("review"),
+    name: "Review",
+    description: msg("Read-only code review focused on correctness, edge cases, and regressions."),
+    baseInteractionMode: "default",
+    readonly: true,
+  },
+  {
+    id: HarnessModeId.make("creator"),
+    name: "Creator",
+    description: msg("Author portable skills, declarative modes, workflows, and plugins."),
+    baseInteractionMode: "default",
+    readonly: false,
+  },
+];
 
 type ThreadSettingsSessionProps = {
   readonly environmentId: EnvironmentId | null;
@@ -309,6 +356,10 @@ type ThreadSettingsSessionProps = {
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
   readonly interactionMode?: ProviderInteractionMode | undefined;
   readonly onUpdateInteractionMode?: ((mode: ProviderInteractionMode) => void) | undefined;
+  readonly modeId?: HarnessModeId | undefined;
+  readonly onUpdateMode?:
+    | ((modeId: HarnessModeId, interactionMode: ProviderInteractionMode) => void)
+    | undefined;
   readonly threadId?: ThreadId | null | undefined;
 };
 
@@ -335,6 +386,11 @@ type ThreadSettingsSessionValue = {
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
   readonly interactionMode: ProviderInteractionMode;
   readonly onUpdateInteractionMode?: ((mode: ProviderInteractionMode) => void) | undefined;
+  readonly modeId: HarnessModeId;
+  readonly availableModes: ReadonlyArray<MobileModeChoice>;
+  readonly onUpdateMode?:
+    | ((modeId: HarnessModeId, interactionMode: ProviderInteractionMode) => void)
+    | undefined;
   readonly threadId: ThreadId | null;
   readonly displayedDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly promptTraits: ReturnType<typeof getPromptControlledTraits>;
@@ -640,7 +696,36 @@ function ThreadSettingsSessionProvider(
     );
   };
 
+  const m = useMessages();
   const environmentId = props.environmentId;
+  const harnessLibraryQuery = useEnvironmentQuery(
+    environmentId !== null
+      ? harnessEnvironment.libraryQuery({
+          environmentId,
+          input: props.cwd ? { workspaceRoot: props.cwd } : {},
+        })
+      : null,
+  );
+  const availableModes: ReadonlyArray<MobileModeChoice> = (() => {
+    const serverModes: ReadonlyArray<HarnessModeEntry> =
+      harnessLibraryQuery.data?.modes.filter((mode) => mode.effectiveEnabled) ?? [];
+    if (serverModes.length === 0) {
+      return FALLBACK_MOBILE_MODES.map((mode) => ({
+        ...mode,
+        description: m(mode.description),
+      }));
+    }
+    return serverModes.map((mode) => ({
+      id: mode.id,
+      name: mode.name,
+      ...(mode.description ? { description: mode.description } : {}),
+      baseInteractionMode: mode.baseInteractionMode,
+      readonly: mode.readonly,
+    }));
+  })();
+  const effectiveInteractionMode = props.interactionMode ?? "default";
+  const effectiveModeId =
+    props.modeId ?? HarnessModeId.make(effectiveInteractionMode === "plan" ? "plan" : "build");
   // Like the web picker's open tab: scanning every provider would spawn a probe per provider.
   const scannedInstanceId =
     providerFilter !== null ? ProviderInstanceId.make(providerFilter) : props.providerInstanceId;
@@ -658,8 +743,11 @@ function ThreadSettingsSessionProvider(
     runtimeMode: compatibleRuntimeMode,
     runtimeModeChoices,
     onUpdateRuntimeMode: props.onUpdateRuntimeMode,
-    interactionMode: props.interactionMode ?? "default",
+    interactionMode: effectiveInteractionMode,
     onUpdateInteractionMode: props.onUpdateInteractionMode,
+    modeId: effectiveModeId,
+    availableModes,
+    onUpdateMode: props.onUpdateMode,
     threadId: props.threadId ?? null,
     displayedDescriptors,
     promptTraits,
@@ -1067,6 +1155,18 @@ function ThreadSettingsOptionsItem(props: {
         className="mx-4 overflow-hidden rounded-2xl bg-grouped-card"
         layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}
       >
+        {session.onUpdateMode ? (
+          <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
+            <DisclosureRow
+              label={gt("Mode")}
+              value={
+                session.availableModes.find((choice) => choice.id === session.modeId)?.name ??
+                session.modeId
+              }
+              onPress={() => props.onOpenSubmenu({ kind: "mode" })}
+            />
+          </Animated.View>
+        ) : null}
         {showPlanModeToggle ? (
           <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
             <SwitchRow
@@ -1076,9 +1176,16 @@ function ThreadSettingsOptionsItem(props: {
                   : gt("Plan mode")
               }
               value={session.interactionMode === "plan"}
-              onValueChange={(enabled) =>
-                session.onUpdateInteractionMode?.(enabled ? "plan" : "default")
-              }
+              onValueChange={(enabled) => {
+                if (session.onUpdateMode) {
+                  session.onUpdateMode(
+                    HarnessModeId.make(enabled ? "plan" : "build"),
+                    enabled ? "plan" : "default",
+                  );
+                } else {
+                  session.onUpdateInteractionMode?.(enabled ? "plan" : "default");
+                }
+              }}
             />
           </Animated.View>
         ) : null}
@@ -1330,58 +1437,73 @@ function ThreadSettingsChoiceContent(props: {
       : undefined;
 
   const submenuContent =
-    props.submenu.kind === "runtime"
+    props.submenu.kind === "mode"
       ? {
-          rows: session.runtimeModeChoices.map((choice) => ({
-            id: choice.mode,
-            label: m(choice.label),
-            description: choice.disabledReason ?? m(choice.description),
-            disabled: choice.disabledReason !== undefined,
-            selected: choice.mode === session.runtimeMode,
+          rows: session.availableModes.map((choice) => ({
+            id: choice.id,
+            label: choice.readonly ? `${choice.name} (${gt("read-only")})` : choice.name,
+            description: choice.description,
+            disabled: false,
+            selected: choice.id === session.modeId,
             onPress: () => {
               void Haptics.selectionAsync();
-              session.onUpdateRuntimeMode(choice.mode);
+              session.onUpdateMode?.(choice.id, choice.baseInteractionMode);
               props.onSelected();
             },
           })),
         }
-      : activeDescriptor?.type === "select"
+      : props.submenu.kind === "runtime"
         ? {
-            rows: selectableChoices(activeDescriptor).map((choice) => ({
-              id: choice.id,
-              label: choice.label,
-              description: choice.description,
-              disabled: false,
-              selected:
-                choice.id ===
-                (session.promptTraits.ultrathinkPromptControlled &&
-                activeDescriptor.id === session.promptTraits.primarySelectDescriptor?.id
-                  ? "ultrathink"
-                  : getProviderOptionCurrentValue(
-                      activeDescriptor,
-                      session.displayedModelSelection,
-                      session.reportedModelSelection,
-                    )),
+            rows: session.runtimeModeChoices.map((choice) => ({
+              id: choice.mode,
+              label: m(choice.label),
+              description: choice.disabledReason ?? m(choice.description),
+              disabled: choice.disabledReason !== undefined,
+              selected: choice.mode === session.runtimeMode,
               onPress: () => {
                 void Haptics.selectionAsync();
-                if (
-                  session.promptTraits.ultrathinkInBodyText &&
-                  activeDescriptor.id === session.promptTraits.primarySelectDescriptor?.id
-                ) {
-                  Dialog.alert(
-                    gt("Reasoning controlled by prompt"),
-                    gt(
-                      'Your prompt contains "ultrathink" in the text. Remove it to change this option.',
-                    ),
-                  );
-                  return;
-                }
-                session.applyOptionChange(activeDescriptor.id, choice.id);
+                session.onUpdateRuntimeMode(choice.mode);
                 props.onSelected();
               },
             })),
           }
-        : null;
+        : activeDescriptor?.type === "select"
+          ? {
+              rows: selectableChoices(activeDescriptor).map((choice) => ({
+                id: choice.id,
+                label: choice.label,
+                description: choice.description,
+                disabled: false,
+                selected:
+                  choice.id ===
+                  (session.promptTraits.ultrathinkPromptControlled &&
+                  activeDescriptor.id === session.promptTraits.primarySelectDescriptor?.id
+                    ? "ultrathink"
+                    : getProviderOptionCurrentValue(
+                        activeDescriptor,
+                        session.displayedModelSelection,
+                        session.reportedModelSelection,
+                      )),
+                onPress: () => {
+                  void Haptics.selectionAsync();
+                  if (
+                    session.promptTraits.ultrathinkInBodyText &&
+                    activeDescriptor.id === session.promptTraits.primarySelectDescriptor?.id
+                  ) {
+                    Dialog.alert(
+                      gt("Reasoning controlled by prompt"),
+                      gt(
+                        'Your prompt contains "ultrathink" in the text. Remove it to change this option.',
+                      ),
+                    );
+                    return;
+                  }
+                  session.applyOptionChange(activeDescriptor.id, choice.id);
+                  props.onSelected();
+                },
+              })),
+            }
+          : null;
 
   if (!submenuContent) {
     return <View className="flex-1 bg-sheet" />;
@@ -1531,11 +1653,13 @@ function ThreadSettingsModelsScreen() {
           bottomInset={searchToolbarInset}
           onOpenSubmenu={(submenu) => {
             const title =
-              submenu.kind === "runtime"
-                ? gt("Runtime", { $context: "agent permission mode setting" })
-                : (session.displayedDescriptors.find(
-                    (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
-                  )?.label ?? gt("Option"));
+              submenu.kind === "mode"
+                ? gt("Mode")
+                : submenu.kind === "runtime"
+                  ? gt("Runtime", { $context: "agent permission mode setting" })
+                  : (session.displayedDescriptors.find(
+                      (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
+                    )?.label ?? gt("Option"));
             navigation.navigate("ThreadSettingsChoice", { ...submenu, title });
           }}
         />
@@ -1680,7 +1804,14 @@ export function ExistingThreadSettingsRouteScreen({
       onUpdateRuntimeMode={(runtimeMode) => updateComposerDraftSettings(threadKey, { runtimeMode })}
       interactionMode={draftSettings.interactionMode ?? selectedThread.interactionMode}
       onUpdateInteractionMode={(interactionMode) =>
-        updateComposerDraftSettings(threadKey, { interactionMode })
+        updateComposerDraftSettings(threadKey, {
+          interactionMode,
+          modeId: HarnessModeId.make(interactionMode === "plan" ? "plan" : "build"),
+        })
+      }
+      modeId={draftSettings.modeId ?? selectedThread.modeId}
+      onUpdateMode={(modeId, interactionMode) =>
+        updateComposerDraftSettings(threadKey, { modeId, interactionMode })
       }
       threadId={selectedThread.id}
       onClose={() => navigation.goBack()}
@@ -1715,6 +1846,8 @@ export function NewTaskThreadSettingsRouteScreen() {
       onUpdateRuntimeMode={flow.setRuntimeMode}
       interactionMode={flow.interactionMode}
       onUpdateInteractionMode={flow.setInteractionMode}
+      modeId={flow.modeId}
+      onUpdateMode={(modeId, interactionMode) => flow.setMode(modeId, interactionMode)}
       onClose={() => navigation.goBack()}
     />
   );

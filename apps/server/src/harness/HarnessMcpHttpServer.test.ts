@@ -1047,6 +1047,7 @@ rl.on("line", (line) => {
           expect(blockedWrite.result?.isError).toBe(true);
 
           mutableShell.interactionMode = "default";
+          mutableShell.modeId = "build";
           const writeMem = yield* callRpc(5, "tools/call", {
             name: "harness_memory_write",
             arguments: {

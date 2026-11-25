@@ -9,6 +9,7 @@ import {
   type HarnessMcpServerView,
   type HarnessMcpSnapshot,
   type HarnessMcpToolSummary,
+  type HarnessModeEntry,
   type OrchestrationV2HarnessCapabilities,
   type ProviderInteractionMode,
   type RuntimeMode,
@@ -31,6 +32,7 @@ import {
   resolveSecretRecord,
   scrubHarnessLogText,
 } from "./HarnessSecrets.ts";
+import { isMcpServerAllowedByMode } from "./HarnessProjector.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 import {
   connectUpstream,
@@ -67,6 +69,7 @@ export interface GatewayExposedTool {
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
   readonly readOnly: boolean;
+  readonly _meta?: Record<string, unknown> | undefined;
 }
 
 export interface GatewayExposedResource {
@@ -84,12 +87,73 @@ export interface GatewaySessionContext {
   readonly workspaceRoot?: string | undefined;
   readonly interactionMode: ProviderInteractionMode;
   readonly runtimeMode: RuntimeMode;
+  readonly activeMode?: HarnessModeEntry | null | undefined;
   readonly includeProposePlan: boolean;
   readonly includeLibraryTools?: boolean | undefined;
   readonly includeCreatorTools?: boolean | undefined;
   readonly includeMemoryTools?: boolean | undefined;
   readonly deferredExposure: boolean;
   readonly harnessCapabilities?: OrchestrationV2HarnessCapabilities | undefined;
+}
+
+/**
+ * Shared authorization ceiling enforced across all `/mcp/harness` tools (upstream MCP,
+ * Memory, Creator, and SDK plugin tools) in both `tools/list` and `tools/call`.
+ */
+export function checkHarnessRuntimeToolCeiling(input: {
+  readonly toolName: string;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly runtimeMode: RuntimeMode;
+  readonly activeMode?: Pick<HarnessModeEntry, "id" | "readonly"> | null | undefined;
+  readonly readOnly: boolean;
+  readonly isBuiltInReadOnly?: boolean | undefined;
+  readonly explicitlyAllowlisted?: boolean | undefined;
+}): string | null {
+  const effectiveReadOnly = input.interactionMode === "plan" || input.activeMode?.readonly === true;
+  if (!input.readOnly && effectiveReadOnly) {
+    const modeLabel =
+      input.interactionMode !== "plan" && input.activeMode?.readonly
+        ? `read-only mode "${input.activeMode.id}"`
+        : "Plan mode";
+    return `Blocked "${input.toolName}" in ${modeLabel} because it is not marked read-only.`;
+  }
+  if (!input.readOnly && input.runtimeMode !== "full-access") {
+    return `Blocked mutating tool "${input.toolName}" because this thread runs in "${input.runtimeMode}" mode. Switch the thread to Full access mode to allow mutating harness tools.`;
+  }
+  if (
+    input.runtimeMode === "approval-required" &&
+    input.isBuiltInReadOnly !== true &&
+    input.explicitlyAllowlisted !== true
+  ) {
+    return `Blocked "${input.toolName}" in Approval-required mode: readOnlyHint annotations alone do not bypass approval. Explicitly allowlist the tool or switch the thread out of Approval-required mode.`;
+  }
+  return null;
+}
+
+/** Rewrites MCP Apps `_meta.ui.resourceUri` and legacy `_meta["ui/resourceUri"]` to canonical gateway URIs. */
+export function rewriteMcpAppMeta(
+  serverId: HarnessMcpServerId,
+  meta: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (meta === undefined) return undefined;
+  let mutated = false;
+  const next: Record<string, unknown> = { ...meta };
+  const rawUi = next.ui;
+  if (rawUi !== null && typeof rawUi === "object" && !Array.isArray(rawUi)) {
+    const uiRec = rawUi as Record<string, unknown>;
+    if (typeof uiRec.resourceUri === "string" && uiRec.resourceUri.trim().length > 0) {
+      next.ui = {
+        ...uiRec,
+        resourceUri: canonicalExposedResourceUri(serverId, uiRec.resourceUri.trim()),
+      };
+      mutated = true;
+    }
+  }
+  if (typeof next["ui/resourceUri"] === "string" && next["ui/resourceUri"].trim().length > 0) {
+    next["ui/resourceUri"] = canonicalExposedResourceUri(serverId, next["ui/resourceUri"].trim());
+    mutated = true;
+  }
+  return mutated ? next : meta;
 }
 
 export interface GatewaySessionInjection {
@@ -343,6 +407,7 @@ function buildGatewayExposedCatalog(
     );
     for (const tool of allowed) {
       const finalName = canonicalExposedToolName(server.id, tool.name);
+      const rewrittenMeta = rewriteMcpAppMeta(server.id, tool._meta);
       const exposed: GatewayExposedTool = {
         exposedName: finalName,
         serverId: server.id,
@@ -350,6 +415,7 @@ function buildGatewayExposedCatalog(
         description: tool.description ?? `${server.id}/${tool.name}`,
         inputSchema: tool.inputSchema,
         readOnly: tool.annotations?.readOnlyHint === true,
+        ...(rewrittenMeta ? { _meta: rewrittenMeta } : {}),
       };
       tools.push(exposed);
       byExposedName.set(finalName, { exposed, server, tool });
@@ -445,13 +511,14 @@ const HARNESS_RULE_READ_DEF: GatewayExposedTool = {
   serverId: null,
   upstreamName: HARNESS_RULE_READ_NAME,
   description:
-    "Read the full body of a portable harness rule (use 'user:AGENTS.md', 'project:AGENTS.md', or a rule id from rules/*.md) when a rule is manual or exceeded inline context budget.",
+    "Read the full body of a portable harness rule or overflowing mode (use 'user:AGENTS.md', 'project:AGENTS.md', 'mode:<id>', or a rule id from rules/*.md) when it is manual or exceeded inline context budget.",
   inputSchema: {
     type: "object",
     properties: {
       id: {
         type: "string",
-        description: "Rule identifier (e.g. 'user:AGENTS.md' or 'typescript-style').",
+        description:
+          "Rule or mode identifier (e.g. 'user:AGENTS.md', 'mode:review', or 'typescript-style').",
       },
     },
     required: ["id"],
@@ -618,10 +685,14 @@ export class McpGateway extends Context.Service<
     readonly resolveSessionInjection: (input: {
       readonly workspaceRoot?: string | undefined;
       readonly interactionMode: ProviderInteractionMode;
+      readonly activeMode?: HarnessModeEntry | null | undefined;
       readonly emitsProposedPlan: boolean;
       readonly supportsMcpTools: boolean;
       readonly harnessCapabilities: OrchestrationV2HarnessCapabilities;
       readonly hasLibraryGatewayTools?: boolean | undefined;
+      readonly hasCreatorTools?: boolean | undefined;
+      readonly hasMemoryTools?: boolean | undefined;
+      readonly sdkToolsDigest?: string | undefined;
       readonly libraryDigest?: string | undefined;
     }) => Effect.Effect<GatewaySessionInjection>;
     readonly listToolsForSession: (
@@ -1139,7 +1210,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       return { harnessActive: false, gatewayServersDigest: "", nativeMcpServers: [] };
     }
     const needsProposePlan =
-      input.interactionMode === "plan" && !input.emitsProposedPlan && input.supportsMcpTools;
+      (input.interactionMode === "plan" || input.activeMode?.proposePlan === true) &&
+      !input.emitsProposedPlan &&
+      input.supportsMcpTools;
 
     const nativeMcpServers: Array<HarnessNativeMcpServer> = [];
     const gatewayServerFingerprints: Array<string> = [];
@@ -1149,7 +1222,8 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         !server.effectiveEnabled ||
         !server.trusted ||
         server.needsTrustConfirmation ||
-        server.blockedByPolicyReason !== null
+        server.blockedByPolicyReason !== null ||
+        !isMcpServerAllowedByMode(server.id, input.activeMode)
       ) {
         continue;
       }
@@ -1194,15 +1268,27 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
 
     gatewayServerFingerprints.sort();
     const hasLibraryTools = input.hasLibraryGatewayTools === true && input.supportsMcpTools;
+    const hasCreatorTools = input.hasCreatorTools === true && input.supportsMcpTools;
+    const hasMemoryTools = input.hasMemoryTools === true && input.supportsMcpTools;
+    const sdkToolsDigest = input.supportsMcpTools ? (input.sdkToolsDigest ?? "") : "";
+    const activeModeSig = input.activeMode
+      ? `${input.activeMode.id}@${input.activeMode.contentDigest}:${input.activeMode.readonly ? "ro" : "rw"}:${input.activeMode.proposePlan ? "pp" : "no"}`
+      : "";
     const gatewayServersDigest = NodeCrypto.createHash("sha256")
       .update(
-        `${needsProposePlan ? "1" : "0"}\u0000${hasLibraryTools ? "1" : "0"}\u0000${input.libraryDigest ?? ""}\u0000${gatewayServerFingerprints.join("\u001f")}`,
+        `${needsProposePlan ? "1" : "0"}\u0000${hasLibraryTools ? "1" : "0"}\u0000${hasCreatorTools ? "1" : "0"}\u0000${hasMemoryTools ? "1" : "0"}\u0000${sdkToolsDigest}\u0000${activeModeSig}\u0000${input.libraryDigest ?? ""}\u0000${gatewayServerFingerprints.join("\u001f")}`,
       )
       .digest("hex")
       .slice(0, 24);
 
     return {
-      harnessActive: needsProposePlan || hasLibraryTools || gatewayServerFingerprints.length > 0,
+      harnessActive:
+        needsProposePlan ||
+        hasLibraryTools ||
+        hasCreatorTools ||
+        hasMemoryTools ||
+        sdkToolsDigest.length > 0 ||
+        gatewayServerFingerprints.length > 0,
       gatewayServersDigest,
       nativeMcpServers,
     };
@@ -1221,6 +1307,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         server.trusted &&
         !server.needsTrustConfirmation &&
         server.blockedByPolicyReason === null &&
+        isMcpServerAllowedByMode(server.id, context.activeMode) &&
         resolveServerChannel(server.config, context.harnessCapabilities) === "gateway",
     );
 
@@ -1319,16 +1406,35 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       );
     }
     if (context.includeCreatorTools) {
-      listed.push(
-        HARNESS_WRITE_SKILL_DEF,
-        HARNESS_CREATE_MODE_DEF,
-        ...(context.includeLibraryTools ? [] : [HARNESS_WORKFLOW_VALIDATE_DEF]),
-        HARNESS_PLUGIN_PACK_DEF,
-      );
+      const canWriteCreator =
+        checkHarnessRuntimeToolCeiling({
+          toolName: HARNESS_WRITE_SKILL_NAME,
+          interactionMode: context.interactionMode,
+          runtimeMode: context.runtimeMode,
+          activeMode: context.activeMode,
+          readOnly: false,
+        }) === null;
+      if (canWriteCreator) {
+        listed.push(HARNESS_WRITE_SKILL_DEF, HARNESS_CREATE_MODE_DEF);
+      }
+      if (!context.includeLibraryTools) {
+        listed.push(HARNESS_WORKFLOW_VALIDATE_DEF);
+      }
+      if (canWriteCreator) {
+        listed.push(HARNESS_PLUGIN_PACK_DEF);
+      }
     }
     if (context.includeMemoryTools) {
       listed.push(HARNESS_MEMORY_SEARCH_DEF, HARNESS_MEMORY_READ_DEF);
-      if (context.interactionMode !== "plan") {
+      if (
+        checkHarnessRuntimeToolCeiling({
+          toolName: HARNESS_MEMORY_WRITE_NAME,
+          interactionMode: context.interactionMode,
+          runtimeMode: context.runtimeMode,
+          activeMode: context.activeMode,
+          readOnly: false,
+        }) === null
+      ) {
         listed.push(HARNESS_MEMORY_WRITE_DEF);
       }
     }
@@ -1424,6 +1530,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         server.trusted &&
         !server.needsTrustConfirmation &&
         server.blockedByPolicyReason === null &&
+        isMcpServerAllowedByMode(server.id, context.activeMode) &&
         resolveServerChannel(server.config, context.harnessCapabilities) === "gateway",
     );
 
@@ -1452,6 +1559,13 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
           code: "invalid_config",
           serverId: primary.id,
           detail: `MCP server "${primary.id}" is disabled.`,
+        });
+      }
+      if (!isMcpServerAllowedByMode(primary.id, context.activeMode)) {
+        return yield* new HarnessError({
+          code: "policy_denied",
+          serverId: primary.id,
+          detail: `MCP server "${primary.id}" is disabled by active mode "${context.activeMode?.id ?? ""}".`,
         });
       }
       return yield* new HarnessError({
@@ -1526,14 +1640,21 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       };
     }
 
-    // 2. Plan mode enforces read-only gating on gateway-hosted MCP tools.
-    if (context.interactionMode === "plan" && !isReadOnlyAnnotated) {
+    // 2. Plan mode and read-only declarative modes enforce read-only gating on gateway-hosted MCP tools.
+    if (
+      (context.interactionMode === "plan" || context.activeMode?.readonly === true) &&
+      !isReadOnlyAnnotated
+    ) {
+      const isCustomReadOnlyMode =
+        context.interactionMode !== "plan" && context.activeMode?.readonly === true;
       return {
         isError: true,
         content: [
           {
             type: "text",
-            text: `Blocked "${toolName}" in Plan mode because it is not marked read-only. Switch back to Default mode to run mutating tools.`,
+            text: isCustomReadOnlyMode
+              ? `Blocked "${toolName}" in read-only mode "${context.activeMode!.id}" because it is not marked read-only.`
+              : `Blocked "${toolName}" in Plan mode because it is not marked read-only. Switch back to Default mode to run mutating tools.`,
           },
         ],
       };
@@ -1552,30 +1673,19 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       };
     }
 
-    // 4. Supervised runtime modes enforce ceiling:
-    //    - Mutating tools require `full-access` even under `auto-all`.
-    //    - In `approval-required`, upstream `readOnlyHint` alone never bypasses approval unless
-    //      the owner explicitly pinned the tool in `allowedTools`.
-    if (!isReadOnlyAnnotated && context.runtimeMode !== "full-access") {
+    // 4. Supervised runtime modes enforce ceiling via shared helper:
+    const ceilingError = checkHarnessRuntimeToolCeiling({
+      toolName,
+      interactionMode: context.interactionMode,
+      runtimeMode: context.runtimeMode,
+      activeMode: context.activeMode,
+      readOnly: isReadOnlyAnnotated,
+      explicitlyAllowlisted: isExplicitlyAllowlisted,
+    });
+    if (ceilingError !== null) {
       return {
         isError: true,
-        content: [
-          {
-            type: "text",
-            text: `Blocked mutating tool "${toolName}" because this thread runs in "${context.runtimeMode}" mode. Switch the thread to Full access mode to allow mutating gateway tools.`,
-          },
-        ],
-      };
-    }
-    if (context.runtimeMode === "approval-required" && !isExplicitlyAllowlisted) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: `Blocked "${toolName}" in Approval-required mode: upstream readOnlyHint annotations alone do not bypass approval. Add "${upstreamToolName}" to the server's Allowed tools list or switch the thread out of Approval-required mode.`,
-          },
-        ],
+        content: [{ type: "text", text: ceilingError }],
       };
     }
 
@@ -1622,7 +1732,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     }
 
     pooled.lastUsedMs = yield* Clock.currentTimeMillis;
-    return yield* pooled.connection
+    const callRes = yield* pooled.connection
       .callTool(upstreamToolName, args)
       .pipe(
         Effect.tapError(() =>
@@ -1631,6 +1741,10 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
             : Effect.void,
         ),
       );
+    const rewrittenResultMeta = rewriteMcpAppMeta(serverId, callRes._meta);
+    return rewrittenResultMeta !== callRes._meta
+      ? { ...callRes, ...(rewrittenResultMeta ? { _meta: rewrittenResultMeta } : {}) }
+      : callRes;
   });
 
   const listResourcesForSession: McpGateway["Service"]["listResourcesForSession"] = Effect.fn(
@@ -1646,6 +1760,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         server.trusted &&
         !server.needsTrustConfirmation &&
         server.blockedByPolicyReason === null &&
+        isMcpServerAllowedByMode(server.id, context.activeMode) &&
         resolveServerChannel(server.config, context.harnessCapabilities) === "gateway",
     );
 
@@ -1710,6 +1825,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         candidate.trusted &&
         !candidate.needsTrustConfirmation &&
         candidate.blockedByPolicyReason === null &&
+        isMcpServerAllowedByMode(candidate.id, context.activeMode) &&
         resolveServerChannel(candidate.config, context.harnessCapabilities) === "gateway",
     );
     if (server === undefined) {

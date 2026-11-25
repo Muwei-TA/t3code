@@ -141,9 +141,11 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.harnessHookRemove]: AuthSettingsWriteScope,
   [WS_METHODS.harnessHookSetEnabled]: AuthSettingsWriteScope,
   [WS_METHODS.harnessHookTest]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessWorkflowValidate]: AuthOrchestrationReadScope,
   [WS_METHODS.harnessMemoryUpsert]: AuthSettingsWriteScope,
   [WS_METHODS.harnessMemoryRemove]: AuthSettingsWriteScope,
   [WS_METHODS.harnessSyncConfigure]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSyncPreviewPush]: AuthOrchestrationReadScope,
   [WS_METHODS.harnessSyncPush]: AuthSourceControlWriteScope,
   [WS_METHODS.harnessSyncPull]: AuthSourceControlWriteScope,
 } as const;

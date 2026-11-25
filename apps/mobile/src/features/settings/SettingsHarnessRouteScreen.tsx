@@ -8,6 +8,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
+  AuthSourceControlWriteScope,
   AuthTerminalOperateScope,
   HarnessMcpServerId,
   type HarnessMcpImportCandidate,
@@ -110,6 +111,10 @@ export function SettingsHarnessRouteScreen() {
   );
   const diagnosticsReadEnvs = useEnvironmentsWithScope(selectedTargets, AuthDiagnosticsReadScope);
   const providersManageEnvs = useEnvironmentsWithScope(selectedTargets, AuthProvidersManageScope);
+  const sourceControlWriteEnvs = useEnvironmentsWithScope(
+    selectedTargets,
+    AuthSourceControlWriteScope,
+  );
   const insets = useSafeAreaInsets();
 
   return (
@@ -134,6 +139,7 @@ export function SettingsHarnessRouteScreen() {
               canOperateOrchestration={orchestrationOperateEnvs.has(environment.environmentId)}
               canReadDiagnostics={diagnosticsReadEnvs.has(environment.environmentId)}
               canManageProviders={providersManageEnvs.has(environment.environmentId)}
+              canWriteSourceControl={sourceControlWriteEnvs.has(environment.environmentId)}
             />
           ))
         )}
@@ -149,6 +155,7 @@ function EnvironmentHarnessSection({
   canOperateOrchestration,
   canReadDiagnostics,
   canManageProviders,
+  canWriteSourceControl,
 }: {
   readonly environment: SettingsTarget;
   readonly canWriteSettings: boolean;
@@ -156,6 +163,7 @@ function EnvironmentHarnessSection({
   readonly canOperateOrchestration: boolean;
   readonly canReadDiagnostics: boolean;
   readonly canManageProviders: boolean;
+  readonly canWriteSourceControl: boolean;
 }) {
   const gt = useGT();
   const environmentId = environment.environmentId;
@@ -764,6 +772,7 @@ function EnvironmentHarnessSection({
                 environmentId={environmentId}
                 targetHost={targetHost}
                 canWriteSettings={canWriteSettings}
+                canWriteSourceControl={canWriteSourceControl}
               />
             ) : activeTab !== "mcp" ? (
               <SettingsHarnessLibraryPanel

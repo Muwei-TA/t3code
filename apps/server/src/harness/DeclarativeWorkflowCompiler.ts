@@ -8,12 +8,28 @@ import {
   PositiveInt,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { parse as parseYaml } from "yaml";
+
+import { stop, workflow, type WorkflowDefinition } from "../workflows/workflow.ts";
+import { agent, type AgentOptions, type AgentThread } from "../workflows/workflowAgent.ts";
 
 const decodeModeId = Schema.decodeUnknownOption(HarnessModeId);
 const STEP_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 const WORKFLOW_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._ -]{0,80}$/;
+
+const DeclarativeWorkflowPayload = Schema.Struct({
+  project: Schema.optional(Schema.String),
+  thread: Schema.optional(
+    Schema.Struct({
+      threadId: Schema.String,
+      environment: Schema.optional(Schema.String),
+    }),
+  ),
+  input: Schema.optional(Schema.String),
+});
+type DeclarativeWorkflowPayloadType = typeof DeclarativeWorkflowPayload.Type;
 
 function renderCompiledWorkflowPreview(input: {
   readonly name: string;
@@ -26,24 +42,68 @@ function renderCompiledWorkflowPreview(input: {
   const stepLines = input.executionOrder.flatMap((stepId) => {
     const step = byId.get(stepId);
     if (!step) return [];
-    const modeArg = step.modeId ? `, modeId: ${JSON.stringify(step.modeId)}` : "";
-    const stepFn = step.kind === "child" ? "ctx.agent.delegate" : "ctx.agent.runInThread";
+    const optParts: Array<string> = [`brief: ${JSON.stringify(step.prompt)}`];
+    if (step.kind === "in-thread") {
+      optParts.push(
+        `...(currentThread ? { thread: currentThread } : { project: payload.project })`,
+      );
+    } else {
+      optParts.push(`project: payload.project`);
+      optParts.push(`title: ${JSON.stringify(`${input.name}: ${step.name ?? step.id}`)}`);
+    }
+    if (step.modeId === "plan") {
+      optParts.push(`interactionMode: "plan"`);
+    }
+    if (step.timeoutSeconds !== undefined) {
+      optParts.push(`timeout: ${JSON.stringify(`${step.timeoutSeconds} seconds`)}`);
+    }
+    const opts = `{ ${optParts.join(", ")} }`;
+    const header = `    // Step ${step.id} (${step.kind}, onFailure: ${step.onFailure}${step.dependsOn.length > 0 ? `, after: ${step.dependsOn.join(", ")}` : ""})`;
+    if (step.onFailure === "pause") {
+      const assign = step.kind === "in-thread" ? "const res = " : "";
+      return [
+        header,
+        `    ${assign}yield* T3.agent(${JSON.stringify(step.id)}, ${opts});`,
+        ...(step.kind === "in-thread" ? ["    currentThread = res.thread;"] : []),
+      ];
+    }
+    if (step.onFailure === "fail") {
+      return [
+        header,
+        `    const res_${step.id.replace(/[^a-zA-Z0-9_]/gu, "_")} = yield* T3.agent.try(${JSON.stringify(step.id)}, ${opts});`,
+        `    if (res_${step.id.replace(/[^a-zA-Z0-9_]/gu, "_")}.outcome === "failed") return yield* T3.stop(res_${step.id.replace(/[^a-zA-Z0-9_]/gu, "_")}.reason);`,
+        ...(step.kind === "in-thread"
+          ? [`    currentThread = res_${step.id.replace(/[^a-zA-Z0-9_]/gu, "_")}.thread;`]
+          : []),
+      ];
+    }
     return [
-      `    // Step ${step.id} (${step.kind}${step.dependsOn.length > 0 ? `, after: ${step.dependsOn.join(", ")}` : ""})`,
-      `    await ctx.step(${JSON.stringify(step.id)}, () => ${stepFn}({ prompt: ${JSON.stringify(step.prompt)}${modeArg} }));`,
+      header,
+      `    const res_${step.id.replace(/[^a-zA-Z0-9_]/gu, "_")} = yield* T3.agent.try(${JSON.stringify(step.id)}, ${opts});`,
+      ...(step.kind === "in-thread"
+        ? [
+            `    if (res_${step.id.replace(/[^a-zA-Z0-9_]/gu, "_")}.outcome === "done") currentThread = res_${step.id.replace(/[^a-zA-Z0-9_]/gu, "_")}.thread;`,
+          ]
+        : []),
     ];
   });
   const docComment = input.description ? `// ${input.description}\n` : "";
   return [
-    `${docComment}import { T3 } from "@t3tools/workflows";`,
-    "",
-    `export default T3.workflow({`,
-    `  name: ${JSON.stringify(input.name)},`,
-    `  version: ${input.version},`,
-    `  async run(ctx) {`,
-    ...stepLines,
+    `${docComment}// Compiled T3 Workflow preview (matches the 3-argument T3.workflow runtime API)`,
+    `export default T3.workflow(`,
+    `  ${JSON.stringify(input.name)},`,
+    `  {`,
+    `    version: ${input.version},`,
+    `    payload: Schema.Struct({`,
+    `      project: Schema.optional(Schema.String),`,
+    `      input: Schema.optional(Schema.String),`,
+    `    }),`,
     `  },`,
-    `});`,
+    `  Effect.fn(function* (payload) {`,
+    `    let currentThread = undefined;`,
+    ...stepLines,
+    `  }),`,
+    `);`,
     "",
   ].join("\n");
 }
@@ -359,4 +419,121 @@ export function compileAndValidateDeclarativeWorkflow(
         }
       : {}),
   };
+}
+
+export type CompiledDeclarativeWorkflowResult =
+  | {
+      readonly ok: true;
+      readonly definition: WorkflowDefinition;
+      readonly validation: HarnessWorkflowValidateResult;
+    }
+  | {
+      readonly ok: false;
+      readonly validation: HarnessWorkflowValidateResult;
+    };
+
+/**
+ * Compiles a validated declarative YAML workflow into a live `WorkflowDefinition`
+ * executable by `WorkflowEngine` / `WorkflowRuntime` (supporting `in-thread`, `child`,
+ * `timeoutSeconds`, and `onFailure`: `"fail"` | `"continue"` | `"pause"`).
+ */
+export function compileDeclarativeWorkflowToDefinition(
+  yamlText: string,
+  knownModeIds?: ReadonlySet<string>,
+): CompiledDeclarativeWorkflowResult {
+  const validation = compileAndValidateDeclarativeWorkflow(yamlText, knownModeIds);
+  if (!validation.valid || !validation.name || validation.version === undefined) {
+    return { ok: false, validation };
+  }
+
+  const workflowName = validation.name;
+  const workflowVersion = validation.version;
+  const stepById = new Map(validation.steps.map((step) => [step.id, step]));
+  const orderedSteps = validation.executionOrder
+    .map((id) => stepById.get(id))
+    .filter((step): step is HarnessWorkflowStepSpec => step !== undefined);
+
+  const definition = workflow(
+    workflowName,
+    {
+      version: workflowVersion,
+      payload: DeclarativeWorkflowPayload,
+    },
+    Effect.fn("DeclarativeWorkflow.run")(function* (payload: DeclarativeWorkflowPayloadType) {
+      let currentThread: AgentThread | undefined = payload.thread
+        ? {
+            threadId: payload.thread.threadId,
+            ...(payload.thread.environment !== undefined
+              ? { environment: payload.thread.environment }
+              : {}),
+          }
+        : undefined;
+      const outputs: Record<
+        string,
+        { readonly outcome: "done" | "failed"; readonly value?: string; readonly reason?: string }
+      > = {};
+
+      for (const step of orderedSteps) {
+        const depContext = step.dependsOn
+          .map((depId) => {
+            const depOut = outputs[depId];
+            if (!depOut) return null;
+            return depOut.outcome === "done"
+              ? `[Previous step "${depId}" output]\n${depOut.value ?? ""}`
+              : `[Previous step "${depId}" failed]\n${depOut.reason ?? "unknown error"}`;
+          })
+          .filter((entry): entry is string => entry !== null)
+          .join("\n\n");
+
+        const briefParts = [
+          ...(step.modeId ? [`[Workflow step mode: ${step.modeId}]`] : []),
+          ...(payload.input ? [`[Workflow input]\n${payload.input}`] : []),
+          ...(depContext ? [depContext] : []),
+          step.prompt,
+        ];
+        const brief = briefParts.join("\n\n");
+
+        const stepOptions: AgentOptions<string, string> = {
+          brief,
+          ...(step.kind === "in-thread" && currentThread !== undefined
+            ? { thread: currentThread }
+            : {
+                ...(payload.project !== undefined ? { project: payload.project } : {}),
+                ...(step.kind === "child"
+                  ? { title: `${workflowName}: ${step.name ?? step.id}` }
+                  : {}),
+                ...(step.modeId === "plan" ? { interactionMode: "plan" as const } : {}),
+              }),
+          ...(step.timeoutSeconds !== undefined
+            ? { timeout: `${step.timeoutSeconds} seconds` as const }
+            : {}),
+        };
+
+        if (step.onFailure === "pause") {
+          const result = yield* agent(step.id, stepOptions);
+          if (step.kind === "in-thread") {
+            currentThread = result.thread;
+          }
+          outputs[step.id] = { outcome: "done", value: result.value };
+          continue;
+        }
+
+        const attemptResult = yield* agent.try(step.id, stepOptions);
+        if (attemptResult.outcome === "done") {
+          if (step.kind === "in-thread") {
+            currentThread = attemptResult.thread;
+          }
+          outputs[step.id] = { outcome: "done", value: attemptResult.value };
+        } else if (step.onFailure === "fail") {
+          return yield* stop(`Step "${step.id}" failed: ${attemptResult.reason}`);
+        } else {
+          outputs[step.id] = { outcome: "failed", reason: attemptResult.reason };
+        }
+      }
+
+      return { workflow: workflowName, outputs };
+    }),
+  );
+
+  return { ok: true, definition, validation };
 }

@@ -59,8 +59,10 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as HarnessLibraryStore from "../harness/HarnessLibraryStore.ts";
+import * as HarnessMemoryStore from "../harness/HarnessMemoryStore.ts";
 import { type NativeDiscoveredSkill, projectHarnessContext } from "../harness/HarnessProjector.ts";
 import * as McpGateway from "../harness/McpGateway.ts";
+import * as PluginHost from "../harness/PluginHost.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
@@ -487,6 +489,8 @@ export const layerWithOptions = (
       const harnessLibraryStore = yield* Effect.serviceOption(
         HarnessLibraryStore.HarnessLibraryStore,
       );
+      const harnessMemoryStore = yield* Effect.serviceOption(HarnessMemoryStore.HarnessMemoryStore);
+      const pluginHost = yield* Effect.serviceOption(PluginHost.PluginHost);
       const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
       const projectStore = yield* Effect.serviceOption(ProjectStore.ProjectStoreV2);
       /** Unreadable settings must preserve explicit browser-access opt-outs. */
@@ -736,18 +740,35 @@ export const layerWithOptions = (
                   .map((r) => `${r.id}@${r.contentDigest}`)
                   .join(",")}`
               : "";
+          const sdkToolsDigest = Option.isSome(pluginHost)
+            ? pluginHost.value
+                .listActiveSdkTools()
+                .map((tool) => `${tool.exposedName}:${tool.readOnly ? "ro" : "rw"}`)
+                .toSorted()
+                .join(",")
+            : "";
+          const effectiveInteractionMode = Option.isSome(threadRecord)
+            ? threadRecord.value.interactionMode
+            : "default";
+          const hasCreatorTools =
+            effectiveInteractionMode !== "plan" &&
+            activeMode?.readonly !== true &&
+            (activeMode?.id === "creator" ||
+              (Option.isSome(threadRecord) && threadRecord.value.modeId === "creator"));
           const harnessInjection =
             Option.isSome(mcpGateway) && Option.isSome(adapterCapabilities)
               ? yield* mcpGateway.value
                   .resolveSessionInjection({
                     workspaceRoot,
-                    interactionMode: Option.isSome(threadRecord)
-                      ? threadRecord.value.interactionMode
-                      : "default",
+                    interactionMode: effectiveInteractionMode,
+                    activeMode,
                     emitsProposedPlan: adapterCapabilities.value.planning.emitsProposedPlan,
                     supportsMcpTools: adapterCapabilities.value.tools.supportsMcpTools,
                     harnessCapabilities: adapterCapabilities.value.harness,
                     hasLibraryGatewayTools: projectedLibrary?.needsGatewayTools === true,
+                    hasCreatorTools,
+                    hasMemoryTools: Option.isSome(harnessMemoryStore),
+                    sdkToolsDigest,
                     libraryDigest,
                   })
                   .pipe(

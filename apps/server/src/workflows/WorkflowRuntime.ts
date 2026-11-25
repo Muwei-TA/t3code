@@ -32,6 +32,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { compileDeclarativeWorkflowToDefinition } from "../harness/DeclarativeWorkflowCompiler.ts";
 import { engineTag, text, type WorkflowDefinition } from "./workflow.ts";
 import type * as WorkflowEngine from "./WorkflowEngine.ts";
 import * as WorkflowAgentThreads from "./WorkflowAgentThreads.ts";
@@ -49,9 +50,9 @@ const HELD_RETRY = "15 seconds";
 const LIST_RETRY = "30 seconds";
 // A leading dot is how a file is kept out: a draft being checked, an editor's swap file.
 // One name in the folder, never a path: the name is also the key a save and a removal go by.
-const DEFINITION_FILE = /^[A-Za-z0-9_][\w.-]*\.(ts|mts|js|mjs)$/;
+const DEFINITION_FILE = /^[A-Za-z0-9_][\w.-]*\.(ts|mts|js|mjs|yaml|yml)$/;
 const NAMING =
-  "Name the file with letters, digits, dashes, underscores and dots, ending in .ts: for example release.ts.";
+  "Name the file with letters, digits, dashes, underscores and dots, ending in .ts or .yaml: for example release.ts or release.yaml.";
 
 export class WorkflowDefinitionsLoadError extends Schema.TaggedError<WorkflowDefinitionsLoadError>()(
   "WorkflowDefinitionsLoadError",
@@ -190,6 +191,23 @@ export const loadDefinitions = Effect.fn("WorkflowRuntime.loadDefinitions")(func
 ) {
   const path = yield* Path.Path;
   const file = path.resolve(module);
+  if (file.endsWith(".yaml") || file.endsWith(".yml")) {
+    const yamlText = yield* Effect.tryPromise({
+      try: () => NodeFS.promises.readFile(file, "utf8"),
+      catch: (cause) => new WorkflowDefinitionsLoadError({ module, cause }),
+    });
+    const compiled = compileDeclarativeWorkflowToDefinition(yamlText);
+    if (!compiled.ok) {
+      const detail = compiled.validation.issues
+        .map((issue) => `${issue.path}: ${issue.message}`)
+        .join("; ");
+      return yield* new WorkflowDefinitionsLoadError({
+        module,
+        cause: detail || "Declarative YAML workflow validation failed.",
+      });
+    }
+    return [compiled.definition];
+  }
   const url = NodeURL.pathToFileURL(file).href + (load === 0 ? "" : `?${load}`);
   const definitions = yield* Effect.tryPromise({
     try: () => {

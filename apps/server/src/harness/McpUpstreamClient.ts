@@ -40,12 +40,14 @@ export interface UpstreamMcpTool {
   readonly description?: string | undefined;
   readonly inputSchema: Record<string, unknown>;
   readonly annotations?: { readonly readOnlyHint?: boolean | undefined } | undefined;
+  readonly _meta?: Record<string, unknown> | undefined;
 }
 
 export interface UpstreamMcpCallResult {
   readonly content: ReadonlyArray<Record<string, unknown>>;
   readonly structuredContent?: unknown;
   readonly isError?: boolean | undefined;
+  readonly _meta?: Record<string, unknown> | undefined;
 }
 
 export interface UpstreamMcpResource {
@@ -138,11 +140,16 @@ function parseToolsFromResult(result: unknown): ReadonlyArray<UpstreamMcpTool> {
       rawAnnotations !== null &&
       typeof rawAnnotations === "object" &&
       Reflect.get(rawAnnotations, "readOnlyHint") === true;
+    const meta =
+      rec._meta !== null && typeof rec._meta === "object" && !Array.isArray(rec._meta)
+        ? (rec._meta as Record<string, unknown>)
+        : undefined;
     tools.push({
       name: rec.name,
       description: typeof rec.description === "string" ? rec.description : undefined,
       inputSchema,
       ...(readOnlyHint ? { annotations: { readOnlyHint: true } } : {}),
+      ...(meta ? { _meta: meta } : {}),
     });
   }
   return tools;
@@ -159,10 +166,15 @@ function parseCallResult(result: unknown): UpstreamMcpCallResult {
           item !== null && typeof item === "object" && !Array.isArray(item),
       )
     : [];
+  const meta =
+    rec._meta !== null && typeof rec._meta === "object" && !Array.isArray(rec._meta)
+      ? (rec._meta as Record<string, unknown>)
+      : undefined;
   return {
     content: content.length > 0 ? content : [{ type: "text", text: "" }],
     ...(rec.structuredContent !== undefined ? { structuredContent: rec.structuredContent } : {}),
     ...(rec.isError === true ? { isError: true } : {}),
+    ...(meta ? { _meta: meta } : {}),
   };
 }
 

@@ -35,9 +35,10 @@ steps:
     expect(result.version).toBe(2);
     expect(result.executionOrder).toEqual(["plan", "implement", "review"]);
     expect(result.issues).toEqual([]);
-    expect(result.compiledPreview).toContain("T3.workflow({");
-    expect(result.compiledPreview).toContain("ctx.agent.runInThread");
-    expect(result.compiledPreview).toContain("ctx.agent.delegate");
+    expect(result.compiledPreview).toContain('T3.workflow(\n  "pr-release-pipeline"');
+    expect(result.compiledPreview).toContain("T3.agent.try");
+    expect(result.compiledPreview).toContain('T3.agent("implement"');
+    expect(result.compiledPreview).toContain("T3.stop");
   });
 
   it("detects dependency cycles and unknown dependencies", () => {

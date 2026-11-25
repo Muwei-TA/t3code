@@ -257,6 +257,21 @@ export interface ToolHookOutcome {
   readonly results: ReadonlyArray<HarnessHookExecutionResult>;
 }
 
+export interface PluginHookCustomRunnerResult {
+  readonly ok: boolean;
+  readonly timedOut: boolean;
+  readonly durationMs: number;
+  readonly stdout: string;
+  readonly error?: string | undefined;
+}
+
+export type PluginHookCustomRunner = (input: {
+  readonly hook: HarnessHookDefinition;
+  readonly event: HarnessHookEvent;
+  readonly payload: Record<string, unknown>;
+  readonly timeoutMs: number;
+}) => Promise<PluginHookCustomRunnerResult>;
+
 export interface HarnessHooksServiceShape {
   readonly list: () => Effect.Effect<HarnessHooksSnapshot, HarnessError>;
   readonly upsertUserHook: (
@@ -275,6 +290,7 @@ export interface HarnessHooksServiceShape {
   readonly registerPluginHooks: (
     pluginId: HarnessPluginId,
     hooks: ReadonlyArray<HarnessHookDefinition>,
+    customRunners?: ReadonlyMap<string, PluginHookCustomRunner>,
   ) => Effect.Effect<void, never, Scope.Scope>;
   readonly runBeforeTurnStart: (payload: {
     readonly threadId: string;
@@ -314,6 +330,10 @@ export const layer = Layer.effect(
     const path = yield* Path.Path;
     const store = yield* HarnessStore.HarnessStore;
     const pluginHooksByPluginId = new Map<HarnessPluginId, ReadonlyArray<HarnessHookDefinition>>();
+    const pluginCustomRunnersByPluginId = new Map<
+      HarnessPluginId,
+      ReadonlyMap<string, PluginHookCustomRunner>
+    >();
 
     const hooksFilePath = () => path.join(store.harnessDir, HOOKS_FILE_NAME);
 
@@ -409,7 +429,11 @@ export const layer = Layer.effect(
           error: "Portable harness hooks are disabled by managed policy.",
         };
       }
-      if (hook.target.type === "command" && !policy.allowsStdio) {
+      const customRunner =
+        hook.source === "plugin" && hook.pluginId !== undefined
+          ? pluginCustomRunnersByPluginId.get(hook.pluginId)?.get(hook.id)
+          : undefined;
+      if ((hook.target.type === "command" || customRunner !== undefined) && !policy.allowsStdio) {
         return {
           hookId: hook.id,
           event,
@@ -426,17 +450,20 @@ export const layer = Layer.effect(
 
       const timeoutMs = clampTimeoutMs(hook.timeoutMs);
       const now = yield* DateTime.now;
-      const payloadJson = encodeJson({
+      const fullPayload: Record<string, unknown> = {
         hookId: hook.id,
         event,
         timestamp: DateTime.formatIso(now),
         ...payload,
-      });
+      };
+      const payloadJson = encodeJson(fullPayload);
 
       const outcome = yield* Effect.promise(() =>
-        hook.target.type === "command"
-          ? runCommandHook(hook, payloadJson, timeoutMs)
-          : runHttpHook(hook, payloadJson, timeoutMs),
+        customRunner !== undefined
+          ? customRunner({ hook, event, payload: fullPayload, timeoutMs })
+          : hook.target.type === "command"
+            ? runCommandHook(hook, payloadJson, timeoutMs)
+            : runHttpHook(hook, payloadJson, timeoutMs),
       );
 
       if (!outcome.ok) {
@@ -564,16 +591,20 @@ export const layer = Layer.effect(
       }),
 
       registerPluginHooks: Effect.fn("HarnessHooksService.registerPluginHooks")(
-        function* (pluginId, hooks) {
+        function* (pluginId, hooks, customRunners) {
           yield* Effect.acquireRelease(
             Effect.sync(() => {
               if (hooks.length > 0) {
                 pluginHooksByPluginId.set(pluginId, hooks);
               }
+              if (customRunners && customRunners.size > 0) {
+                pluginCustomRunnersByPluginId.set(pluginId, customRunners);
+              }
             }),
             () =>
               Effect.sync(() => {
                 pluginHooksByPluginId.delete(pluginId);
+                pluginCustomRunnersByPluginId.delete(pluginId);
               }),
           );
         },

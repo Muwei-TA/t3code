@@ -8879,7 +8879,7 @@
     },
     " references."
   ],
-  "34b7938f88fa80fa": "Local trust ledgers (plugins-state.json, approval-rules.json) are excluded via .gitignore.",
+  "9ebe49ac612a7cd8": "Only declarative portable files (AGENTS.md, skills, rules, commands, modes, and memory) sync. Local trust ledgers and executable configs stay local.",
   "1e38d5a22bb02b6b": "Save Remote",
   "27477bc594a4d19d": "Preview Push Diff",
   "2e424bf0d0b332e1": "Pull",

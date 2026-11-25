@@ -535,6 +535,7 @@ function ThreadRouteContent(
         modelSelection: composer.modelSelection ?? selectedThread.modelSelection,
         runtimeMode: composer.runtimeMode ?? selectedThread.runtimeMode,
         interactionMode: composer.interactionMode ?? selectedThread.interactionMode,
+        ...(composer.modeId !== undefined ? { modeId: composer.modeId } : {}),
       }
     : null;
 
@@ -711,6 +712,7 @@ function ThreadRouteContent(
       queueHeld: composer.queueHeld,
       runtimeMode: composer.runtimeMode ?? selectedThread.runtimeMode,
       interactionMode: composer.interactionMode ?? selectedThread.interactionMode,
+      ...(composer.modeId !== undefined ? { modeId: composer.modeId } : {}),
       modelSelection: composer.modelSelection,
       messageId: MessageId.make(uuidv4()),
       createdAt: new Date().toISOString(),

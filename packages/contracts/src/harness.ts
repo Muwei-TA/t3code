@@ -1211,6 +1211,7 @@ export type HarnessSyncConfigureInput = typeof HarnessSyncConfigureInput.Type;
 export const HarnessSyncPreviewPushResult = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   remoteUrl: Schema.NullOr(Schema.String),
+  previewTreeDigest: Schema.NullOr(Schema.String),
   files: Schema.Array(HarnessSyncDiffFile),
   secretFindings: Schema.Array(HarnessSyncSecretFinding),
   canPush: Schema.Boolean,
@@ -1220,6 +1221,9 @@ export type HarnessSyncPreviewPushResult = typeof HarnessSyncPreviewPushResult.T
 
 export const HarnessSyncPushInput = Schema.Struct({
   commitMessage: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+  expectedRemoteUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  expectedBranch: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  expectedTreeDigest: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
 });
 export type HarnessSyncPushInput = typeof HarnessSyncPushInput.Type;
 
@@ -1235,6 +1239,7 @@ export type HarnessSyncPushResult = typeof HarnessSyncPushResult.Type;
 export const HarnessSyncPullResult = Schema.Struct({
   pulled: Schema.Boolean,
   updatedFiles: Schema.Array(Schema.String),
+  skippedFiles: Schema.optionalKey(Schema.Array(Schema.String)),
   summary: Schema.String,
 });
 export type HarnessSyncPullResult = typeof HarnessSyncPullResult.Type;

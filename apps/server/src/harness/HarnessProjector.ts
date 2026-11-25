@@ -513,71 +513,124 @@ export function projectHarnessContext(input: {
     });
   }
 
-  // Pack whole blocks into segments without EVER truncating a block.
-  const acceptedBlocks: Array<{ readonly text: string; readonly bytes: number }> = [];
-  let remainingBudget = totalBudget;
-
-  // Reserve room for fixed scaffold only if gateway tools will be exposed.
+  // Pack whole blocks into segments without EVER truncating a block AND guaranteeing
+  // emitted total bytes (including fixed scaffold and `\n\n` inter-block separators) <= totalBudget.
   const preliminaryNeedsGateway =
     input.supportsMcpTools && (gatewaySkills.length > 0 || hasOnDemandOrDegradedRules);
   const scaffoldText = T3_CODE_HARNESS_SCAFFOLD_INSTRUCTIONS;
   const scaffoldByteSize = utf8Bytes(scaffoldText);
 
-  // First pass: check each candidate block against both total budget AND per-segment cap.
-  let hasDegradedBlock = false;
-  for (const candidate of candidateBlocks) {
-    const blockBytes = utf8Bytes(candidate.blockText);
-    const fitsSegment = blockBytes <= maxSegmentBytes;
-    const fitsTotal = blockBytes <= remainingBudget;
-    if (fitsSegment && fitsTotal) {
-      acceptedBlocks.push({ text: candidate.blockText, bytes: blockBytes });
-      remainingBudget -= blockBytes;
-      if (candidate.kind === "agents_md" || candidate.kind === "rule") {
-        ruleItems.push({
-          id: candidate.id,
-          scope: candidate.scope,
-          apply: candidate.apply,
-          status: "inlined",
-          bytes: NonNegativeInt.make(blockBytes),
-        });
-      }
-    } else {
-      hasDegradedBlock = true;
-      const reason = !fitsSegment
-        ? `Block (${blockBytes} B) exceeds provider per-entry cap (${maxSegmentBytes} B); degraded whole-block to on-demand tool read without truncation.`
-        : `Block (${blockBytes} B) exceeds remaining harness context budget (${remainingBudget} B / ${totalBudget} B); degraded whole-block to on-demand tool read without truncation.`;
-      if (candidate.kind === "mode") {
-        degradedItems.push({ kind: "mode", id: candidate.id, reason });
-      } else if (candidate.kind === "agents_md" || candidate.kind === "rule") {
-        hasOnDemandOrDegradedRules = true;
-        ruleItems.push({
-          id: candidate.id,
-          scope: candidate.scope,
-          apply: candidate.apply,
-          status: "degraded",
-          bytes: NonNegativeInt.make(candidate.rawBytes),
-          reason,
-        });
-        degradedItems.push({ kind: "rule", id: candidate.id, reason });
+  const packWithScaffold = (includeScaffold: boolean) => {
+    const accepted: Array<{ readonly text: string; readonly bytes: number }> = [];
+    const packedRuleItems: Array<ThreadContextRuleItem> = [...ruleItems];
+    const packedDegradedItems: Array<ThreadContextDegradedItem> = [...degradedItems];
+    let hasDegraded = false;
+    let extraOnDemandRules = false;
+    let remainingBudget = totalBudget;
+    let currentSegmentBytes = 0;
+    let currentSegmentParts = 0;
+    let usedScaffoldBytes = 0;
+
+    if (
+      includeScaffold &&
+      scaffoldByteSize <= maxSegmentBytes &&
+      scaffoldByteSize <= remainingBudget
+    ) {
+      remainingBudget -= scaffoldByteSize;
+      currentSegmentBytes = scaffoldByteSize;
+      currentSegmentParts = 1;
+      usedScaffoldBytes = scaffoldByteSize;
+    }
+
+    for (const candidate of candidateBlocks) {
+      const blockBytes = utf8Bytes(candidate.blockText);
+      const fitsSegment = blockBytes <= maxSegmentBytes;
+      const mergesIntoCurrent =
+        currentSegmentParts > 0 && currentSegmentBytes + 2 + blockBytes <= maxSegmentBytes;
+      const incrementalBytes = mergesIntoCurrent ? 2 + blockBytes : blockBytes;
+      const fitsTotal = incrementalBytes <= remainingBudget;
+
+      if (fitsSegment && fitsTotal) {
+        accepted.push({ text: candidate.blockText, bytes: blockBytes });
+        remainingBudget -= incrementalBytes;
+        if (mergesIntoCurrent) {
+          currentSegmentBytes += 2 + blockBytes;
+          currentSegmentParts += 1;
+        } else {
+          currentSegmentBytes = blockBytes;
+          currentSegmentParts = 1;
+        }
+        if (candidate.kind === "agents_md" || candidate.kind === "rule") {
+          packedRuleItems.push({
+            id: candidate.id,
+            scope: candidate.scope,
+            apply: candidate.apply,
+            status: "inlined",
+            bytes: NonNegativeInt.make(blockBytes),
+          });
+        }
       } else {
-        degradedItems.push({ kind: "skill", id: candidate.id, reason });
+        hasDegraded = true;
+        const readHint =
+          candidate.kind === "mode"
+            ? `Read on demand via harness_rule_read(id: "mode:${candidate.id}") without truncation.`
+            : "Degraded whole-block to on-demand tool read without truncation.";
+        const reason = !fitsSegment
+          ? `Block (${blockBytes} B) exceeds provider per-entry cap (${maxSegmentBytes} B); ${readHint}`
+          : `Block (${blockBytes} B) exceeds remaining harness context budget (${remainingBudget} B / ${totalBudget} B); ${readHint}`;
+        if (candidate.kind === "mode") {
+          packedDegradedItems.push({ kind: "mode", id: candidate.id, reason });
+        } else if (candidate.kind === "agents_md" || candidate.kind === "rule") {
+          extraOnDemandRules = true;
+          packedRuleItems.push({
+            id: candidate.id,
+            scope: candidate.scope,
+            apply: candidate.apply,
+            status: "degraded",
+            bytes: NonNegativeInt.make(candidate.rawBytes),
+            reason,
+          });
+          packedDegradedItems.push({ kind: "rule", id: candidate.id, reason });
+        } else {
+          packedDegradedItems.push({ kind: "skill", id: candidate.id, reason });
+        }
       }
     }
-  }
 
-  const needsGatewayTools =
+    return {
+      accepted,
+      packedRuleItems,
+      packedDegradedItems,
+      hasDegraded,
+      extraOnDemandRules,
+      usedScaffoldBytes,
+    };
+  };
+
+  let packed = packWithScaffold(preliminaryNeedsGateway);
+  let needsGatewayTools =
     input.supportsMcpTools &&
-    (preliminaryNeedsGateway || hasOnDemandOrDegradedRules || hasDegradedBlock);
+    (preliminaryNeedsGateway ||
+      hasOnDemandOrDegradedRules ||
+      packed.extraOnDemandRules ||
+      packed.hasDegraded);
+  // If degrading a block newly requires the gateway scaffold, re-pack reserving the scaffold bytes inside totalBudget.
+  if (needsGatewayTools && !preliminaryNeedsGateway) {
+    packed = packWithScaffold(true);
+    needsGatewayTools =
+      input.supportsMcpTools &&
+      (hasOnDemandOrDegradedRules || packed.extraOnDemandRules || packed.hasDegraded);
+  }
 
   const rawBlocks: Array<{ readonly text: string; readonly bytes: number }> = [];
-  let scaffoldBytes = 0;
-  if (needsGatewayTools && scaffoldByteSize <= maxSegmentBytes) {
+  const scaffoldBytes = packed.usedScaffoldBytes;
+  if (scaffoldBytes > 0) {
     rawBlocks.push({ text: scaffoldText, bytes: scaffoldByteSize });
-    scaffoldBytes = scaffoldByteSize;
   }
-  rawBlocks.push(...acceptedBlocks);
+  rawBlocks.push(...packed.accepted);
 
-  // Merge adjacent blocks into bounded segments where EVERY segment is guaranteed <= maxSegmentBytes.
+  // Merge adjacent blocks into bounded segments where EVERY segment is guaranteed <= maxSegmentBytes
+  // and total emitted bytes <= totalBudget.
   const segments: Array<HarnessContextSegment> = [];
   let currentParts: Array<string> = [];
   let currentBytes = 0;
@@ -609,8 +662,8 @@ export function projectHarnessContext(input: {
   return {
     segments,
     skills: skillItems,
-    rules: ruleItems,
-    degradedItems,
+    rules: packed.packedRuleItems,
+    degradedItems: packed.packedDegradedItems,
     contextBudgetBytes: NonNegativeInt.make(totalBudget),
     contextUsedBytes: NonNegativeInt.make(contextUsedBytes),
     scaffoldBytes: NonNegativeInt.make(scaffoldBytes),

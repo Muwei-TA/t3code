@@ -43,10 +43,12 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import { parse as parseYaml } from "yaml";
 
 import * as HarnessHooksService from "./HarnessHooksService.ts";
 import * as HarnessStore from "./HarnessStore.ts";
+import { assertContainedNoSymlinks, safeReadFileUtf8, safeWriteFileAtomic } from "./safeFileOps.ts";
 
 const PLUGINS_DIR_NAME = "plugins";
 const PLUGINS_STATE_FILE = "plugins-state.json";
@@ -201,12 +203,20 @@ export interface PluginSdkToolCallResult {
 interface OutOfProcessSdkRuntime {
   readonly tools: ReadonlyArray<PluginSdkExposedTool>;
   readonly modes: ReadonlyArray<HarnessModeEntry>;
+  readonly hooks: ReadonlyArray<HarnessHookDefinition>;
+  readonly sdkHookIdByDefId: ReadonlyMap<string, string>;
   readonly callTool: (input: {
     readonly name: string;
     readonly arguments: Readonly<Record<string, unknown>>;
     readonly workspaceRoot?: string | undefined;
     readonly threadId?: string | undefined;
   }) => Promise<PluginSdkToolCallResult>;
+  readonly runHook: (input: {
+    readonly hookId: string;
+    readonly payload: Record<string, unknown>;
+    readonly timeoutMs: number;
+  }) => Promise<HarnessHooksService.PluginHookCustomRunnerResult>;
+  readonly isExited: () => boolean;
   readonly close: () => void;
 }
 
@@ -219,16 +229,22 @@ async function spawnOutOfProcessSdkPlugin(
   pluginDir: string,
   entrypointRel: string,
   platform: NodeJS.Platform,
+  onUnexpectedExit?: (detail: string) => void,
 ): Promise<OutOfProcessSdkRuntime> {
-  const entrypointAbs = NodePath.resolve(pluginDir, entrypointRel);
+  const { resolvedTarget: entrypointAbs } = await assertContainedNoSymlinks(
+    pluginDir,
+    NodePath.resolve(pluginDir, entrypointRel),
+  );
   const child = NodeChildProcess.spawn(process.execPath, [entrypointAbs], {
     cwd: pluginDir,
     stdio: ["pipe", "pipe", "pipe"],
     detached: platform !== "win32",
   });
 
-  let closed = false;
+  let exited = false;
+  let cleanedUp = false;
   let nextId = 1;
+  const stderrLines: Array<string> = [];
   const pending = new Map<
     number,
     {
@@ -236,6 +252,17 @@ async function spawnOutOfProcessSdkPlugin(
       readonly reject: (err: Error) => void;
     }
   >();
+
+  // Drain stderr continuously into a bounded ring buffer so child pipes never block.
+  const stderrRl = child.stderr ? NodeReadline.createInterface({ input: child.stderr }) : null;
+  stderrRl?.on("line", (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    stderrLines.push(trimmed.slice(0, 500));
+    if (stderrLines.length > 50) {
+      stderrLines.shift();
+    }
+  });
 
   const rl = child.stdout ? NodeReadline.createInterface({ input: child.stdout }) : null;
   rl?.on("line", (line) => {
@@ -259,25 +286,28 @@ async function spawnOutOfProcessSdkPlugin(
   });
 
   const killChild = () => {
-    if (closed) return;
-    closed = true;
+    if (cleanedUp) return;
+    cleanedUp = true;
     rl?.close();
+    stderrRl?.close();
     for (const [id, waiter] of pending) {
       waiter.reject(new Error(`Plugin "${pluginId}" process closed.`));
       pending.delete(id);
     }
-    try {
-      if (child.stdin && !child.stdin.destroyed) {
-        child.stdin.write(
-          `${JSON.stringify({ jsonrpc: "2.0", id: nextId++, method: "shutdown", params: {} })}\n`,
-        );
-        child.stdin.end();
+    if (!exited) {
+      try {
+        if (child.stdin && !child.stdin.destroyed) {
+          child.stdin.write(
+            `${JSON.stringify({ jsonrpc: "2.0", id: nextId++, method: "shutdown", params: {} })}\n`,
+          );
+          child.stdin.end();
+        }
+      } catch {
+        // Ignore write error during teardown.
       }
-    } catch {
-      // Ignore write error during teardown.
     }
     const pid = child.pid;
-    if (pid !== undefined) {
+    if (pid !== undefined && !exited) {
       if (platform !== "win32") {
         try {
           process.kill(-pid, "SIGTERM");
@@ -306,11 +336,18 @@ async function spawnOutOfProcessSdkPlugin(
     }
   };
 
-  child.on("exit", () => {
-    closed = true;
+  child.on("exit", (code, signal) => {
+    exited = true;
+    rl?.close();
+    stderrRl?.close();
+    const tail = stderrLines.length > 0 ? ` (${stderrLines[stderrLines.length - 1]})` : "";
+    const detail = `Plugin "${pluginId}" exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"})${tail}.`;
     for (const [id, waiter] of pending) {
-      waiter.reject(new Error(`Plugin "${pluginId}" exited unexpectedly.`));
+      waiter.reject(new Error(detail));
       pending.delete(id);
+    }
+    if (!cleanedUp) {
+      onUnexpectedExit?.(detail);
     }
   });
 
@@ -320,7 +357,7 @@ async function spawnOutOfProcessSdkPlugin(
     timeoutMs: number,
   ): Promise<Record<string, unknown>> =>
     new Promise((resolve, reject) => {
-      if (closed || !child.stdin || child.stdin.destroyed) {
+      if (exited || cleanedUp || !child.stdin || child.stdin.destroyed) {
         reject(new Error(`Plugin "${pluginId}" is not running.`));
         return;
       }
@@ -412,9 +449,46 @@ async function spawnOutOfProcessSdkPlugin(
     });
   }
 
+  const rawHooks = Array.isArray(descriptor.hooks) ? descriptor.hooks : [];
+  const hooks: Array<HarnessHookDefinition> = [];
+  const sdkHookIdByDefId = new Map<string, string>();
+  for (const raw of rawHooks) {
+    if (raw === null || typeof raw !== "object") continue;
+    const rec = raw as Record<string, unknown>;
+    const rawSdkHookId = typeof rec.id === "string" ? rec.id.trim() : "";
+    if (!rawSdkHookId) continue;
+    const eventOpt = decodeHookEvent(rec.event);
+    if (eventOpt._tag === "None") continue;
+    const defIdOpt = decodeHookId(`${pluginId}.${rawSdkHookId}`);
+    if (defIdOpt._tag === "None") continue;
+    const timeoutRaw =
+      typeof rec.timeoutMs === "number" && Number.isFinite(rec.timeoutMs) && rec.timeoutMs >= 100
+        ? PositiveInt.make(Math.min(Math.trunc(rec.timeoutMs), 10_000))
+        : undefined;
+    hooks.push({
+      id: defIdOpt.value,
+      event: eventOpt.value,
+      enabled: true,
+      ...(typeof rec.matcher === "string" && rec.matcher.trim().length > 0
+        ? { matcher: rec.matcher.trim() }
+        : {}),
+      ...(timeoutRaw !== undefined ? { timeoutMs: timeoutRaw } : {}),
+      ...(typeof rec.failClosed === "boolean" ? { failClosed: rec.failClosed } : {}),
+      target: {
+        type: "command",
+        command: TrimmedNonEmptyString.make(`sdk:${pluginId}:${rawSdkHookId}`),
+      },
+      source: "plugin",
+      pluginId,
+    });
+    sdkHookIdByDefId.set(defIdOpt.value, rawSdkHookId);
+  }
+
   return {
     tools,
     modes,
+    hooks,
+    sdkHookIdByDefId,
     callTool: async (callInput) => {
       const msg = await request(
         "tools/call",
@@ -453,6 +527,44 @@ async function spawnOutOfProcessSdkPlugin(
         ...(res.isError === true ? { isError: true } : {}),
       };
     },
+    runHook: async ({ hookId, payload, timeoutMs }) => {
+      const startedAt = performance.now();
+      try {
+        const msg = await request("hooks/run", { hookId, payload }, timeoutMs);
+        const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
+        if (msg.error !== undefined && typeof msg.error === "object" && msg.error !== null) {
+          const errMessage = Reflect.get(msg.error, "message");
+          return {
+            ok: false,
+            timedOut: false,
+            durationMs,
+            stdout: "",
+            error: typeof errMessage === "string" ? errMessage : "SDK hook execution failed.",
+          };
+        }
+        const res =
+          msg.result !== null && typeof msg.result === "object"
+            ? (msg.result as Record<string, unknown>)
+            : {};
+        return {
+          ok: true,
+          timedOut: false,
+          durationMs,
+          stdout: JSON.stringify(res),
+        };
+      } catch (error) {
+        const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          ok: false,
+          timedOut: message.includes("timed out"),
+          durationMs,
+          stdout: "",
+          error: message,
+        };
+      }
+    },
+    isExited: () => exited || cleanedUp,
     close: killChild,
   };
 }
@@ -807,6 +919,16 @@ export interface PluginPackResult {
 
 export interface PluginHostShape {
   readonly list: () => Effect.Effect<HarnessPluginsSnapshot, HarnessError>;
+  readonly inspectExecutableRisk: (
+    input:
+      | {
+          readonly kind: "sourcePath";
+          readonly sourcePath: string;
+          readonly id?: HarnessPluginId | undefined;
+        }
+      | { readonly kind: "installedId"; readonly id: HarnessPluginId }
+      | { readonly kind: "allInstalled" },
+  ) => Effect.Effect<{ readonly requiresTerminalOperate: boolean }, HarnessError>;
   readonly install: (
     input: HarnessPluginInstallInput,
   ) => Effect.Effect<HarnessPluginsSnapshot, HarnessError>;
@@ -852,6 +974,7 @@ export const layer = Layer.effect(
     const activeContributions = new Map<HarnessPluginId, PluginActiveContribution>();
     const activeSdkRuntimes = new Map<HarnessPluginId, OutOfProcessSdkRuntime>();
     const activationErrors = new Map<HarnessPluginId, string>();
+    const mutex = Semaphore.makeUnsafe(1);
 
     // Ensure every active plugin Scope is closed cleanly when the PluginHost layer shuts down.
     yield* Effect.addFinalizer(() =>
@@ -906,28 +1029,14 @@ export const layer = Layer.effect(
     });
 
     const writeState = Effect.fn("PluginHost.writeState")(function* (state: PluginsPersistedState) {
-      const dir = store.harnessDir;
-      yield* fs.makeDirectory(dir, { recursive: true }).pipe(
-        Effect.mapError(
-          (error) =>
-            new HarnessError({
-              code: "io_error",
-              detail: `Failed to create harness directory: ${error.message}`,
-            }),
-        ),
-      );
-      const target = stateFilePath();
-      const tmp = `${target}.${NodeCrypto.randomBytes(6).toString("hex")}.tmp`;
-      yield* fs.writeFileString(tmp, encodePrettyJson(state)).pipe(
-        Effect.andThen(fs.rename(tmp, target)),
-        Effect.mapError(
-          (error) =>
-            new HarnessError({
-              code: "io_error",
-              detail: `Failed to write plugins-state.json: ${error.message}`,
-            }),
-        ),
-      );
+      yield* Effect.tryPromise({
+        try: () => safeWriteFileAtomic(store.harnessDir, stateFilePath(), encodePrettyJson(state)),
+        catch: (error) =>
+          new HarnessError({
+            code: "io_error",
+            detail: `Failed to write plugins-state.json: ${error instanceof Error ? error.message : String(error)}`,
+          }),
+      });
     });
 
     const deactivatePlugin = Effect.fn("PluginHost.deactivatePlugin")(function* (
@@ -950,6 +1059,8 @@ export const layer = Layer.effect(
       const pluginScope = yield* Scope.make();
       const activationResult = yield* Effect.gen(function* () {
         let sdkModes: ReadonlyArray<HarnessModeEntry> = [];
+        let sdkHooks: ReadonlyArray<HarnessHookDefinition> = [];
+        const customHookRunners = new Map<string, HarnessHooksService.PluginHookCustomRunner>();
         if (bundle.entrypoint) {
           const runtime = yield* Effect.acquireRelease(
             Effect.tryPromise({
@@ -959,6 +1070,9 @@ export const layer = Layer.effect(
                   bundle.sourcePath,
                   bundle.entrypoint!,
                   platform,
+                  (detail) => {
+                    activationErrors.set(bundle.id, detail);
+                  },
                 ),
               catch: (error) =>
                 new HarnessError({
@@ -968,22 +1082,37 @@ export const layer = Layer.effect(
             }),
             (rt) =>
               Effect.sync(() => {
-                activeSdkRuntimes.delete(bundle.id);
+                if (activeSdkRuntimes.get(bundle.id) === rt) {
+                  activeSdkRuntimes.delete(bundle.id);
+                }
                 rt.close();
               }),
           );
           activeSdkRuntimes.set(bundle.id, runtime);
           sdkModes = runtime.modes;
+          sdkHooks = runtime.hooks;
+          for (const sdkHook of runtime.hooks) {
+            const rawSdkHookId = runtime.sdkHookIdByDefId.get(sdkHook.id);
+            if (!rawSdkHookId) continue;
+            customHookRunners.set(sdkHook.id, ({ payload, timeoutMs }) =>
+              runtime.runHook({ hookId: rawSdkHookId, payload, timeoutMs }),
+            );
+          }
         }
+        const combinedHooks = [...bundle.hooks, ...sdkHooks];
         const contribution: PluginActiveContribution = {
           pluginId: bundle.id,
           skills: bundle.skills,
           rules: bundle.rules,
           commands: bundle.commands,
           modes: [...bundle.modes, ...sdkModes],
-          hooks: bundle.hooks,
+          hooks: combinedHooks,
         };
-        yield* hooksService.registerPluginHooks(bundle.id, bundle.hooks);
+        yield* hooksService.registerPluginHooks(
+          bundle.id,
+          combinedHooks,
+          customHookRunners.size > 0 ? customHookRunners : undefined,
+        );
         yield* Effect.acquireRelease(
           Effect.sync(() => {
             activeContributions.set(bundle.id, contribution);
@@ -1004,9 +1133,11 @@ export const layer = Layer.effect(
       activeScopes.set(bundle.id, pluginScope);
     });
 
-    const reconcileAndSnapshot = Effect.fn("PluginHost.reconcileAndSnapshot")(function* (
-      forceReloadId?: HarnessPluginId,
-    ) {
+    const discoverAndSnapshot = Effect.fn("PluginHost.discoverAndSnapshot")(function* (options: {
+      readonly reconcile: boolean;
+      readonly forceReloadId?: HarnessPluginId | undefined;
+      readonly forceReloadAll?: boolean | undefined;
+    }) {
       const policy = yield* readPolicy();
       const root = pluginsDir();
       const state = yield* readState();
@@ -1039,10 +1170,12 @@ export const layer = Layer.effect(
         }
       }
 
-      // Close scopes for any plugin that disappeared from disk.
-      for (const activeId of Array.from(activeScopes.keys())) {
-        if (!discovered.has(activeId)) {
-          yield* deactivatePlugin(activeId);
+      if (options.reconcile) {
+        // Close scopes for any plugin that disappeared from disk.
+        for (const activeId of Array.from(activeScopes.keys())) {
+          if (!discovered.has(activeId)) {
+            yield* deactivatePlugin(activeId);
+          }
         }
       }
 
@@ -1054,7 +1187,9 @@ export const layer = Layer.effect(
         const enabled = state.enabled[pluginId] ?? false;
 
         if (!entry.bundle) {
-          yield* deactivatePlugin(pluginId);
+          if (options.reconcile) {
+            yield* deactivatePlugin(pluginId);
+          }
           views.push({
             id: pluginId,
             name: pluginId,
@@ -1096,20 +1231,36 @@ export const layer = Layer.effect(
           (!bundle.hasStdioMcp || policy.allowsStdio) &&
           (!bundle.entrypoint || policy.allowsStdio);
 
-        if (shouldBeActive) {
-          const alreadyActive = activeScopes.has(pluginId);
-          if (!alreadyActive || forceReloadId === pluginId || forceReloadId === undefined) {
-            yield* activatePlugin(bundle);
+        if (options.reconcile) {
+          if (shouldBeActive) {
+            const existingRuntime = activeSdkRuntimes.get(pluginId);
+            const alreadyActive =
+              activeScopes.has(pluginId) &&
+              (existingRuntime === undefined || !existingRuntime.isExited());
+            if (
+              !alreadyActive ||
+              options.forceReloadAll === true ||
+              options.forceReloadId === pluginId
+            ) {
+              yield* activatePlugin(bundle);
+            }
+          } else {
+            yield* deactivatePlugin(pluginId);
           }
-        } else {
-          yield* deactivatePlugin(pluginId);
         }
 
         const sdkRuntime = activeSdkRuntimes.get(pluginId);
+        const runtimeAlive = sdkRuntime !== undefined && !sdkRuntime.isExited();
         const activeModeIds = Array.from(
           new Set([
             ...bundle.modes.map((m) => m.id),
-            ...(sdkRuntime ? sdkRuntime.modes.map((m) => m.id) : []),
+            ...(runtimeAlive ? sdkRuntime.modes.map((m) => m.id) : []),
+          ]),
+        );
+        const activeHookIds = Array.from(
+          new Set([
+            ...bundle.hooks.map((h) => h.id),
+            ...(runtimeAlive ? sdkRuntime.hooks.map((h) => h.id) : []),
           ]),
         );
 
@@ -1125,18 +1276,18 @@ export const layer = Layer.effect(
           trustedDigest,
           trustStatus,
           enabled,
-          active: activeScopes.has(pluginId),
-          hasCommandHooks: bundle.hasCommandHooks,
+          active: activeScopes.has(pluginId) && (sdkRuntime === undefined || runtimeAlive),
+          hasCommandHooks: bundle.hasCommandHooks || (runtimeAlive && sdkRuntime.hooks.length > 0),
           hasStdioMcp: bundle.hasStdioMcp,
           skillIds: bundle.skills.map((s) => s.id),
           ruleIds: bundle.rules.map((r) => r.id),
           commandIds: bundle.commands.map((c) => c.id),
           modeIds: activeModeIds,
-          hookIds: bundle.hooks.map((h) => h.id),
+          hookIds: activeHookIds,
           mcpServerIds: bundle.mcpServerIds,
           workflowFiles: bundle.workflowFiles,
           ...(bundle.entrypoint ? { entrypoint: bundle.entrypoint } : {}),
-          ...(sdkRuntime ? { toolNames: sdkRuntime.tools.map((t) => t.exposedName) } : {}),
+          ...(runtimeAlive ? { toolNames: sdkRuntime.tools.map((t) => t.exposedName) } : {}),
           lastError: activationErrors.get(pluginId) ?? null,
         });
       }
@@ -1150,184 +1301,268 @@ export const layer = Layer.effect(
     });
 
     // Initial reconciliation on startup (activates already-trusted + enabled plugins).
-    yield* reconcileAndSnapshot();
+    yield* mutex.withPermits(1)(discoverAndSnapshot({ reconcile: true }));
+
+    const bundleRequiresTerminalOperate = (bundle: ParsedPluginBundle): boolean =>
+      bundle.entrypoint !== undefined || bundle.hasCommandHooks || bundle.hasStdioMcp;
 
     return PluginHost.of({
+      // Strictly read-only snapshot: never spawns, stops, or restarts plugin child processes.
       list: Effect.fn("PluginHost.list")(function* () {
-        return yield* reconcileAndSnapshot();
+        return yield* mutex.withPermits(1)(discoverAndSnapshot({ reconcile: false }));
+      }),
+
+      inspectExecutableRisk: Effect.fn("PluginHost.inspectExecutableRisk")(function* (input) {
+        if (input.kind === "sourcePath") {
+          const sourceDir = NodePath.resolve(input.sourcePath);
+          const fallbackId = input.id ?? NodePath.basename(sourceDir);
+          const parsed = yield* Effect.tryPromise({
+            try: () => parsePluginDirectory(sourceDir, fallbackId),
+            catch: (error) =>
+              new HarnessError({
+                code: "invalid_config",
+                detail: error instanceof Error ? error.message : String(error),
+              }),
+          });
+          return { requiresTerminalOperate: bundleRequiresTerminalOperate(parsed) };
+        }
+        if (input.kind === "installedId") {
+          const dirPath = NodePath.join(pluginsDir(), input.id);
+          const parsed = yield* Effect.tryPromise({
+            try: () => parsePluginDirectory(dirPath, input.id),
+            catch: (error) =>
+              new HarnessError({
+                code: "not_found",
+                detail: error instanceof Error ? error.message : String(error),
+              }),
+          });
+          return { requiresTerminalOperate: bundleRequiresTerminalOperate(parsed) };
+        }
+        const root = pluginsDir();
+        const dirExists = yield* fs.exists(root).pipe(Effect.orElseSucceed(() => false));
+        if (!dirExists) return { requiresTerminalOperate: false };
+        const entries = yield* Effect.promise(() =>
+          NodeFSP.readdir(root, { withFileTypes: true }).catch(() => []),
+        );
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const parsed = yield* Effect.tryPromise({
+            try: () => parsePluginDirectory(NodePath.join(root, entry.name), entry.name),
+            catch: () => null,
+          }).pipe(Effect.orElseSucceed(() => null));
+          if (parsed && bundleRequiresTerminalOperate(parsed)) {
+            return { requiresTerminalOperate: true };
+          }
+        }
+        return { requiresTerminalOperate: false };
       }),
 
       install: Effect.fn("PluginHost.install")(function* (input) {
-        const policy = yield* readPolicy();
-        if (!policy.allowsHarness) {
-          return yield* new HarnessError({
-            code: "policy_denied",
-            detail: "Portable harness plugins are disabled by managed policy.",
-          });
-        }
-        const sourceDir = NodePath.resolve(input.sourcePath);
-        const fallbackId = input.id ?? NodePath.basename(sourceDir);
-        const parsed = yield* Effect.tryPromise({
-          try: () => parsePluginDirectory(sourceDir, fallbackId),
-          catch: (error) =>
-            new HarnessError({
-              code: "invalid_config",
-              detail: error instanceof Error ? error.message : String(error),
-            }),
-        });
-        const targetId = input.id ?? parsed.id;
-        const destDir = NodePath.join(pluginsDir(), targetId);
-        yield* Effect.tryPromise({
-          try: () => copyContainedDirectory(sourceDir, destDir),
-          catch: (error) =>
-            new HarnessError({
-              code: "io_error",
-              detail: `Failed to copy plugin into ${destDir}: ${error instanceof Error ? error.message : String(error)}`,
-            }),
-        });
+        return yield* mutex.withPermits(1)(
+          Effect.gen(function* () {
+            const policy = yield* readPolicy();
+            if (!policy.allowsHarness) {
+              return yield* new HarnessError({
+                code: "policy_denied",
+                detail: "Portable harness plugins are disabled by managed policy.",
+              });
+            }
+            const sourceDir = NodePath.resolve(input.sourcePath);
+            const fallbackId = input.id ?? NodePath.basename(sourceDir);
+            const parsed = yield* Effect.tryPromise({
+              try: () => parsePluginDirectory(sourceDir, fallbackId),
+              catch: (error) =>
+                new HarnessError({
+                  code: "invalid_config",
+                  detail: error instanceof Error ? error.message : String(error),
+                }),
+            });
+            const targetId = input.id ?? parsed.id;
+            const root = pluginsDir();
+            const destDir = NodePath.join(root, targetId);
+            yield* Effect.tryPromise({
+              try: async () => {
+                await assertContainedNoSymlinks(root, destDir, { createRoot: true });
+                await copyContainedDirectory(sourceDir, destDir);
+              },
+              catch: (error) =>
+                new HarnessError({
+                  code: "io_error",
+                  detail: `Failed to copy plugin into ${destDir}: ${error instanceof Error ? error.message : String(error)}`,
+                }),
+            });
 
-        const state = yield* readState();
-        const nextTrusted = { ...state.trustedDigests };
-        const nextEnabled = { ...state.enabled };
-        if (input.trustOnInstall === true) {
-          nextTrusted[targetId] = parsed.contentDigest;
-          nextEnabled[targetId] = true;
-        } else {
-          delete nextTrusted[targetId];
-          nextEnabled[targetId] = false;
-        }
-        yield* writeState({ version: 1, trustedDigests: nextTrusted, enabled: nextEnabled });
-        return yield* reconcileAndSnapshot(targetId);
+            const state = yield* readState();
+            const nextTrusted = { ...state.trustedDigests };
+            const nextEnabled = { ...state.enabled };
+            if (input.trustOnInstall === true) {
+              nextTrusted[targetId] = parsed.contentDigest;
+              nextEnabled[targetId] = true;
+            } else {
+              delete nextTrusted[targetId];
+              nextEnabled[targetId] = false;
+            }
+            yield* writeState({ version: 1, trustedDigests: nextTrusted, enabled: nextEnabled });
+            return yield* discoverAndSnapshot({ reconcile: true, forceReloadId: targetId });
+          }),
+        );
       }),
 
       trust: Effect.fn("PluginHost.trust")(function* (input) {
-        const policy = yield* readPolicy();
-        if (!policy.allowsHarness) {
-          return yield* new HarnessError({
-            code: "policy_denied",
-            detail: "Portable harness plugins are disabled by managed policy.",
-          });
-        }
-        const dirPath = NodePath.join(pluginsDir(), input.id);
-        const parsed = yield* Effect.tryPromise({
-          try: () => parsePluginDirectory(dirPath, input.id),
-          catch: (error) =>
-            new HarnessError({
-              code: "not_found",
-              detail: error instanceof Error ? error.message : String(error),
-            }),
-        });
-        if (parsed.contentDigest !== input.expectedDigest) {
-          return yield* new HarnessError({
-            code: "untrusted",
-            detail: `Plugin "${input.id}" digest changed on disk (expected ${input.expectedDigest.slice(0, 12)}, found ${parsed.contentDigest.slice(0, 12)}). Review again before trusting.`,
-          });
-        }
-        const state = yield* readState();
-        yield* writeState({
-          version: 1,
-          trustedDigests: { ...state.trustedDigests, [input.id]: parsed.contentDigest },
-          enabled: { ...state.enabled, [input.id]: true },
-        });
-        return yield* reconcileAndSnapshot(input.id);
+        return yield* mutex.withPermits(1)(
+          Effect.gen(function* () {
+            const policy = yield* readPolicy();
+            if (!policy.allowsHarness) {
+              return yield* new HarnessError({
+                code: "policy_denied",
+                detail: "Portable harness plugins are disabled by managed policy.",
+              });
+            }
+            const dirPath = NodePath.join(pluginsDir(), input.id);
+            const parsed = yield* Effect.tryPromise({
+              try: () => parsePluginDirectory(dirPath, input.id),
+              catch: (error) =>
+                new HarnessError({
+                  code: "not_found",
+                  detail: error instanceof Error ? error.message : String(error),
+                }),
+            });
+            if (parsed.contentDigest !== input.expectedDigest) {
+              return yield* new HarnessError({
+                code: "untrusted",
+                detail: `Plugin "${input.id}" digest changed on disk (expected ${input.expectedDigest.slice(0, 12)}, found ${parsed.contentDigest.slice(0, 12)}). Review again before trusting.`,
+              });
+            }
+            const state = yield* readState();
+            yield* writeState({
+              version: 1,
+              trustedDigests: { ...state.trustedDigests, [input.id]: parsed.contentDigest },
+              enabled: { ...state.enabled, [input.id]: true },
+            });
+            return yield* discoverAndSnapshot({ reconcile: true, forceReloadId: input.id });
+          }),
+        );
       }),
 
       setEnabled: Effect.fn("PluginHost.setEnabled")(function* (input) {
-        const state = yield* readState();
-        yield* writeState({
-          version: 1,
-          trustedDigests: state.trustedDigests,
-          enabled: { ...state.enabled, [input.id]: input.enabled },
-        });
-        return yield* reconcileAndSnapshot(input.id);
+        return yield* mutex.withPermits(1)(
+          Effect.gen(function* () {
+            const state = yield* readState();
+            yield* writeState({
+              version: 1,
+              trustedDigests: state.trustedDigests,
+              enabled: { ...state.enabled, [input.id]: input.enabled },
+            });
+            return yield* discoverAndSnapshot({ reconcile: true, forceReloadId: input.id });
+          }),
+        );
       }),
 
       remove: Effect.fn("PluginHost.remove")(function* (input) {
-        yield* deactivatePlugin(input.id);
-        const dirPath = NodePath.join(pluginsDir(), input.id);
-        yield* Effect.tryPromise({
-          try: () => NodeFSP.rm(dirPath, { recursive: true, force: true }),
-          catch: (error) =>
-            new HarnessError({
-              code: "io_error",
-              detail: `Failed to remove plugin directory: ${error instanceof Error ? error.message : String(error)}`,
-            }),
-        });
-        const state = yield* readState();
-        const nextTrusted = { ...state.trustedDigests };
-        const nextEnabled = { ...state.enabled };
-        delete nextTrusted[input.id];
-        delete nextEnabled[input.id];
-        yield* writeState({ version: 1, trustedDigests: nextTrusted, enabled: nextEnabled });
-        return yield* reconcileAndSnapshot();
+        return yield* mutex.withPermits(1)(
+          Effect.gen(function* () {
+            yield* deactivatePlugin(input.id);
+            const root = pluginsDir();
+            const dirPath = NodePath.join(root, input.id);
+            yield* Effect.tryPromise({
+              try: async () => {
+                await assertContainedNoSymlinks(root, dirPath);
+                await NodeFSP.rm(dirPath, { recursive: true, force: true });
+              },
+              catch: (error) =>
+                new HarnessError({
+                  code: "io_error",
+                  detail: `Failed to remove plugin directory: ${error instanceof Error ? error.message : String(error)}`,
+                }),
+            });
+            const state = yield* readState();
+            const nextTrusted = { ...state.trustedDigests };
+            const nextEnabled = { ...state.enabled };
+            delete nextTrusted[input.id];
+            delete nextEnabled[input.id];
+            yield* writeState({ version: 1, trustedDigests: nextTrusted, enabled: nextEnabled });
+            return yield* discoverAndSnapshot({ reconcile: true });
+          }),
+        );
       }),
 
       reload: Effect.fn("PluginHost.reload")(function* (input) {
-        return yield* reconcileAndSnapshot(input?.id);
+        return yield* mutex.withPermits(1)(
+          discoverAndSnapshot({
+            reconcile: true,
+            ...(input?.id ? { forceReloadId: input.id } : { forceReloadAll: true }),
+          }),
+        );
       }),
 
       packPlugin: Effect.fn("PluginHost.packPlugin")(function* (input) {
-        const policy = yield* readPolicy();
-        if (!policy.allowsHarness) {
-          return yield* new HarnessError({
-            code: "policy_denied",
-            detail: "Portable harness plugins are disabled by managed policy.",
-          });
-        }
-        const root = pluginsDir();
-        const pluginDir = NodePath.join(root, input.id);
-        yield* Effect.tryPromise({
-          try: async () => {
-            await NodeFSP.mkdir(pluginDir, { recursive: true });
+        return yield* mutex.withPermits(1)(
+          Effect.gen(function* () {
+            const policy = yield* readPolicy();
+            if (!policy.allowsHarness) {
+              return yield* new HarnessError({
+                code: "policy_denied",
+                detail: "Portable harness plugins are disabled by managed policy.",
+              });
+            }
+            const root = pluginsDir();
+            const pluginDir = NodePath.join(root, input.id);
             const manifestPath = NodePath.join(pluginDir, "t3-plugin.json");
-            const existingRaw = await NodeFSP.readFile(manifestPath, "utf8").catch(() => null);
-            const existingObj = existingRaw ? tryParseJsonObject(existingRaw) : null;
-            const nextManifest = {
-              ...existingObj,
+            yield* Effect.tryPromise({
+              try: async () => {
+                await assertContainedNoSymlinks(root, pluginDir, { createRoot: true });
+                const existingRaw = await safeReadFileUtf8(root, manifestPath).catch(() => null);
+                const existingObj = existingRaw ? tryParseJsonObject(existingRaw) : null;
+                const nextManifest = {
+                  ...existingObj,
+                  id: input.id,
+                  name: input.name,
+                  version: input.version,
+                  ...(input.description ? { description: input.description } : {}),
+                  ...(input.author ? { author: input.author } : {}),
+                };
+                await safeWriteFileAtomic(root, manifestPath, encodePrettyJson(nextManifest));
+              },
+              catch: (error) =>
+                new HarnessError({
+                  code: "io_error",
+                  detail: `Failed to pack plugin "${input.id}": ${error instanceof Error ? error.message : String(error)}`,
+                }),
+            });
+            const files = yield* Effect.tryPromise({
+              try: () => walkContainedFiles(pluginDir),
+              catch: (error) =>
+                new HarnessError({
+                  code: "invalid_config",
+                  detail: error instanceof Error ? error.message : String(error),
+                }),
+            });
+            const parsed = yield* Effect.tryPromise({
+              try: () => parsePluginDirectory(pluginDir, input.id),
+              catch: (error) =>
+                new HarnessError({
+                  code: "invalid_config",
+                  detail: error instanceof Error ? error.message : String(error),
+                }),
+            });
+            // Reconcile without trusting — owner must explicitly review and trust the packed plugin.
+            yield* discoverAndSnapshot({ reconcile: true, forceReloadId: input.id });
+            return {
               id: input.id,
-              name: input.name,
-              version: input.version,
-              ...(input.description ? { description: input.description } : {}),
-              ...(input.author ? { author: input.author } : {}),
-            };
-            await NodeFSP.writeFile(manifestPath, encodePrettyJson(nextManifest), "utf8");
-          },
-          catch: (error) =>
-            new HarnessError({
-              code: "io_error",
-              detail: `Failed to pack plugin "${input.id}": ${error instanceof Error ? error.message : String(error)}`,
-            }),
-        });
-        const files = yield* Effect.tryPromise({
-          try: () => walkContainedFiles(pluginDir),
-          catch: (error) =>
-            new HarnessError({
-              code: "invalid_config",
-              detail: error instanceof Error ? error.message : String(error),
-            }),
-        });
-        const parsed = yield* Effect.tryPromise({
-          try: () => parsePluginDirectory(pluginDir, input.id),
-          catch: (error) =>
-            new HarnessError({
-              code: "invalid_config",
-              detail: error instanceof Error ? error.message : String(error),
-            }),
-        });
-        // Reconcile without trusting — owner must explicitly review and trust the packed plugin.
-        yield* reconcileAndSnapshot(input.id);
-        return {
-          id: input.id,
-          pluginDir,
-          manifestPath: NodePath.join(pluginDir, "t3-plugin.json"),
-          contentDigest: parsed.contentDigest,
-          fileCount: files.length,
-        } satisfies PluginPackResult;
+              pluginDir,
+              manifestPath,
+              contentDigest: parsed.contentDigest,
+              fileCount: files.length,
+            } satisfies PluginPackResult;
+          }),
+        );
       }),
 
       getActiveContributions: () => Array.from(activeContributions.values()),
       listActiveSdkTools: () =>
-        Array.from(activeSdkRuntimes.values()).flatMap((runtime) => runtime.tools),
+        Array.from(activeSdkRuntimes.values())
+          .filter((runtime) => !runtime.isExited())
+          .flatMap((runtime) => runtime.tools),
       callActiveSdkTool: Effect.fn("PluginHost.callActiveSdkTool")(function* (input) {
         for (const runtime of activeSdkRuntimes.values()) {
           const tool = runtime.tools.find(

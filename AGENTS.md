@@ -158,9 +158,9 @@ Read the matching doc before changing code in that area; code review enforces th
 
 ## Multi-model collaboration (project workflow)
 
-This fork uses a fixed three-model collaboration workflow documented in [.agents/MULTI_AGENT_WORKFLOW.md](.agents/MULTI_AGENT_WORKFLOW.md). Follow it alongside the repository rules above:
+This fork uses a three-model collaboration workflow documented in [.agents/MULTI_AGENT_WORKFLOW.md](.agents/MULTI_AGENT_WORKFLOW.md). Follow it alongside the repository rules above:
 
-- **Lead & sole implementer — Gemini 4 Neon (`gemini-4-neon`)**: Owns requirement breakdown, independent Plan A, cross-plan synthesis (互补择优), all code/test implementation, local verification, and user reporting.
-- **Technical advisor — Claude Opus 5.5 (`claude-opus-5-5`)**: Produces independent Plan B for comparison before implementation. Does **not** do routine implementation—consult only for hard technical blockers or after two stuck attempts. Strictly read-only.
-- **Code review, testing & QA acceptance — GPT-6.2-sol (`gpt-6.2-sol`)**: Independent reviewer and acceptance gate after implementation (read-only P0/P1/P2 findings, test coverage review, and round-by-round re-verification).
-- **Mandatory planning gate**: For each user requirement, Gemini 4 Neon and Claude Opus 5.5 draft independent plans (without modifying files), then the lead compares them dimension-by-dimension to synthesize a best-of-both proposal for user confirmation before editing code.
+- **Lead, autonomous reviewer & acceptance gate — Gemini 4 Neon (`gemini-4-neon`)**: Owns requirement breakdown, planning, autonomous code review (P0/P1/P2 findings & optimization briefs), final verification, acceptance sign-off, and user reporting.
+- **Technical advisor — Claude Opus 5.5 (`claude-opus-5-5`)**: Consulted for independent second-opinion plans when needed or for hard technical blockers. Strictly read-only.
+- **Modifier & optimizer — GPT-6.2-sol (`gpt-6.2-sol`)**: Executes code fixes, optimizations, and regression tests based on Gemini's autonomous review briefs, always in **normal mode (never fast mode)**.
+- **Serial write discipline**: Never edit workspace files concurrently while GPT-6.2-sol is running an optimization pass; review the full diff and run local verification before accepting.

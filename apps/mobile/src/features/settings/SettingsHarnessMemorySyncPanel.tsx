@@ -30,11 +30,13 @@ export function SettingsHarnessMemorySyncPanel({
   environmentId,
   targetHost,
   canWriteSettings,
+  canWriteSourceControl,
 }: {
   readonly activeTab: "memory" | "sync";
   readonly environmentId: EnvironmentId;
   readonly targetHost: string;
   readonly canWriteSettings: boolean;
+  readonly canWriteSourceControl: boolean;
 }) {
   if (activeTab === "memory") {
     return (
@@ -50,6 +52,7 @@ export function SettingsHarnessMemorySyncPanel({
       environmentId={environmentId}
       targetHost={targetHost}
       canWriteSettings={canWriteSettings}
+      canWriteSourceControl={canWriteSourceControl}
     />
   );
 }
@@ -247,11 +250,14 @@ function MobileSyncPanel({
   environmentId,
   targetHost,
   canWriteSettings,
+  canWriteSourceControl,
 }: {
   readonly environmentId: EnvironmentId;
   readonly targetHost: string;
   readonly canWriteSettings: boolean;
+  readonly canWriteSourceControl: boolean;
 }) {
+  const canSyncRemote = canWriteSettings && canWriteSourceControl;
   const gt = useGT();
   const statusQuery = useEnvironmentQuery(
     harnessEnvironment.syncStatusQuery({ environmentId, input: {} }),
@@ -349,7 +355,7 @@ function MobileSyncPanel({
         <Button
           label={gt("Pull")}
           tone="secondary"
-          disabled={!canWriteSettings || !status?.initialized || busy}
+          disabled={!canSyncRemote || !status?.initialized || busy}
           onPress={() => {
             void (async () => {
               setBusy(true);
@@ -383,11 +389,29 @@ function MobileSyncPanel({
           <Button
             label={gt("Commit & Push")}
             tone="primary"
-            disabled={!canWriteSettings || !preview.canPush || busy}
+            disabled={
+              !canSyncRemote ||
+              !preview.canPush ||
+              !preview.remoteUrl ||
+              !preview.branch ||
+              !preview.previewTreeDigest ||
+              busy
+            }
             onPress={() => {
+              if (!preview.remoteUrl || !preview.branch || !preview.previewTreeDigest) return;
+              const expectedRemoteUrl = TrimmedNonEmptyString.make(preview.remoteUrl);
+              const expectedBranch = TrimmedNonEmptyString.make(preview.branch);
+              const expectedTreeDigest = TrimmedNonEmptyString.make(preview.previewTreeDigest);
               void (async () => {
                 setBusy(true);
-                const res = await pushSync({ environmentId, input: {} });
+                const res = await pushSync({
+                  environmentId,
+                  input: {
+                    expectedRemoteUrl,
+                    expectedBranch,
+                    expectedTreeDigest,
+                  },
+                });
                 setBusy(false);
                 if (res._tag === "Success") {
                   setPreview(null);

@@ -4072,17 +4072,64 @@ export const layerWsRpc = (
         [WS_METHODS.harnessPluginInstall]: (input) =>
           Option.match(pluginHostOption, {
             onNone: () => harnessUnavailable("PluginHost"),
-            onSome: (host) => authorizeEffect(AuthSettingsWriteScope, host.install(input)),
+            onSome: (host) =>
+              authorizeEffect(
+                AuthSettingsWriteScope,
+                Effect.gen(function* () {
+                  if (input.trustOnInstall === true) {
+                    const risk = yield* host.inspectExecutableRisk({
+                      kind: "sourcePath",
+                      sourcePath: input.sourcePath,
+                      id: input.id,
+                    });
+                    if (risk.requiresTerminalOperate) {
+                      return yield* authorizeEffect(AuthTerminalOperateScope, host.install(input));
+                    }
+                  }
+                  return yield* host.install(input);
+                }),
+              ),
           }),
         [WS_METHODS.harnessPluginTrust]: (input) =>
           Option.match(pluginHostOption, {
             onNone: () => harnessUnavailable("PluginHost"),
-            onSome: (host) => authorizeEffect(AuthSettingsWriteScope, host.trust(input)),
+            onSome: (host) =>
+              authorizeEffect(
+                AuthSettingsWriteScope,
+                Effect.gen(function* () {
+                  const risk = yield* host.inspectExecutableRisk({
+                    kind: "installedId",
+                    id: input.id,
+                  });
+                  if (risk.requiresTerminalOperate) {
+                    return yield* authorizeEffect(AuthTerminalOperateScope, host.trust(input));
+                  }
+                  return yield* host.trust(input);
+                }),
+              ),
           }),
         [WS_METHODS.harnessPluginSetEnabled]: (input) =>
           Option.match(pluginHostOption, {
             onNone: () => harnessUnavailable("PluginHost"),
-            onSome: (host) => authorizeEffect(AuthSettingsWriteScope, host.setEnabled(input)),
+            onSome: (host) =>
+              authorizeEffect(
+                AuthSettingsWriteScope,
+                Effect.gen(function* () {
+                  if (input.enabled) {
+                    const risk = yield* host.inspectExecutableRisk({
+                      kind: "installedId",
+                      id: input.id,
+                    });
+                    if (risk.requiresTerminalOperate) {
+                      return yield* authorizeEffect(
+                        AuthTerminalOperateScope,
+                        host.setEnabled(input),
+                      );
+                    }
+                  }
+                  return yield* host.setEnabled(input);
+                }),
+              ),
           }),
         [WS_METHODS.harnessPluginRemove]: (input) =>
           Option.match(pluginHostOption, {
@@ -4092,7 +4139,19 @@ export const layerWsRpc = (
         [WS_METHODS.harnessPluginReload]: (input) =>
           Option.match(pluginHostOption, {
             onNone: () => harnessUnavailable("PluginHost"),
-            onSome: (host) => authorizeEffect(AuthSettingsWriteScope, host.reload(input)),
+            onSome: (host) =>
+              authorizeEffect(
+                AuthSettingsWriteScope,
+                Effect.gen(function* () {
+                  const risk = yield* host.inspectExecutableRisk(
+                    input?.id ? { kind: "installedId", id: input.id } : { kind: "allInstalled" },
+                  );
+                  if (risk.requiresTerminalOperate) {
+                    return yield* authorizeEffect(AuthTerminalOperateScope, host.reload(input));
+                  }
+                  return yield* host.reload(input);
+                }),
+              ),
           }),
         [WS_METHODS.harnessHooksList]: () =>
           Option.match(harnessHooksOption, {

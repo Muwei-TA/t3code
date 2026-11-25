@@ -74,6 +74,10 @@ import { contextBoundaryOrdinal } from "./contextBoundary.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { ThreadWorktreeRestore } from "../workspace/restoreMissingWorktree.ts";
+import * as HarnessHooksService from "../harness/HarnessHooksService.ts";
+import * as HarnessLibraryStore from "../harness/HarnessLibraryStore.ts";
+import { preprocessTurnText } from "../harness/HarnessTurnPreprocess.ts";
+import * as ProjectStore from "./ProjectStore.ts";
 import { checkOutput, outputRequestProblem } from "./runOutput.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
@@ -648,6 +652,9 @@ const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
   const worktreeRestore = yield* ThreadWorktreeRestore;
+  const projectStore = yield* Effect.serviceOption(ProjectStore.ProjectStoreV2);
+  const harnessLibraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+  const harnessHooksService = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
 
   const assertProviderInstanceEnabled: ThreadManagementServiceShape["assertProviderInstanceEnabled"] =
     (input) =>
@@ -967,6 +974,36 @@ const make = Effect.gen(function* () {
         );
     }
 
+    let effectiveText = input.text;
+    if (!(yield* hasReceipt(input.commandId))) {
+      let workspaceRoot = target.thread.worktreePath ?? undefined;
+      if (workspaceRoot === undefined && Option.isSome(projectStore)) {
+        const proj = yield* projectStore.value
+          .get(target.thread.projectId)
+          .pipe(Effect.orElseSucceed(() => Option.none()));
+        if (Option.isSome(proj)) {
+          workspaceRoot = proj.value.workspaceRoot;
+        }
+      }
+      const preprocessed = yield* preprocessTurnText({
+        text: input.text,
+        threadId: input.threadId,
+        workspaceRoot,
+        modeId: target.thread.modeId,
+        interactionMode: target.thread.interactionMode,
+        libraryStore: harnessLibraryStore,
+        hooksService: harnessHooksService,
+      });
+      if (preprocessed.blocked) {
+        return yield* new Orchestrator.OrchestratorCommandRejectedError({
+          commandId: input.commandId,
+          commandType: "message.dispatch",
+          cause: preprocessed.blockReason ?? "Turn blocked by turn.beforeStart hook.",
+        });
+      }
+      effectiveText = preprocessed.text;
+    }
+
     const dispatched = yield* dispatch({
       type: "message.dispatch",
       commandId: input.commandId,
@@ -975,7 +1012,7 @@ const make = Effect.gen(function* () {
       ...(input.scheduledTaskId === undefined ? {} : { scheduledTaskId: input.scheduledTaskId }),
       ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
       ...(input.linkedSender === undefined ? {} : { linkedSender: input.linkedSender }),
-      text: input.text,
+      text: effectiveText,
       attachments: input.attachments,
       ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
       ...(input.freshContext ? { freshContext: true } : {}),

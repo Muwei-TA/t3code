@@ -31,6 +31,7 @@ import {
 } from "./HarnessLibraryStore.ts";
 import { configContainsSecretPlaceholder, redactHarnessServerConfig } from "./HarnessSecrets.ts";
 import * as HarnessStore from "./HarnessStore.ts";
+import { safeWriteFileAtomic } from "./safeFileOps.ts";
 
 const ALL_SECTIONS: ReadonlyArray<HarnessExportSection> = ["mcp", "skills", "rules", "commands"];
 const MAX_SNIPPET_CHARS = 800;
@@ -224,27 +225,14 @@ const make = Effect.gen(function* () {
     targetPath: string,
     contents: string,
   ) {
-    yield* fs.makeDirectory(path.dirname(targetPath), { recursive: true }).pipe(
-      Effect.mapError(
-        () =>
-          new HarnessError({
-            code: "io_error",
-            detail: `Could not create directory for ${targetPath}.`,
-          }),
-      ),
-    );
-    const tmpPath = `${targetPath}.${NodeCrypto.randomUUID()}.tmp`;
-    yield* fs.writeFileString(tmpPath, contents).pipe(
-      Effect.andThen(fs.rename(tmpPath, targetPath)),
-      Effect.onError(() => fs.remove(tmpPath, { force: true }).pipe(Effect.ignore)),
-      Effect.mapError(
-        () =>
-          new HarnessError({
-            code: "io_error",
-            detail: `Failed to write exported file ${targetPath}.`,
-          }),
-      ),
-    );
+    yield* Effect.tryPromise({
+      try: () => safeWriteFileAtomic(homeDir, targetPath, contents),
+      catch: (error) =>
+        new HarnessError({
+          code: "io_error",
+          detail: `Failed to write exported file ${targetPath}: ${error instanceof Error ? error.message : String(error)}`,
+        }),
+    });
   });
 
   const buildExportPlan = Effect.fn("HarnessExporter.buildExportPlan")(function* (input: {
@@ -307,14 +295,15 @@ const make = Effect.gen(function* () {
           const targetPath = path.join(homeDir, ".codex", "config.toml");
           const existing = Option.getOrNull(yield* readFileOpt(targetPath));
           const merged = mergeCodexConfigToml(existing ?? "", exportableServers);
-          const mergedPreview = mergeCodexConfigToml(existing ?? "", redactedServers);
+          // Preview only the redacted T3-managed export block so existing host config credentials can never leak.
+          const redactedDeltaPreview = mergeCodexConfigToml("", redactedServers);
           addPlannedFile(
             targetPath,
             existing,
             "mcp",
             "mcpServers",
             merged,
-            mergedPreview,
+            redactedDeltaPreview,
             hasSecrets,
           );
         } else {
@@ -324,7 +313,8 @@ const make = Effect.gen(function* () {
               : path.join(homeDir, ".cursor", "mcp.json");
           const existing = Option.getOrNull(yield* readFileOpt(targetPath));
           const merged = mergeJsonMcpFile(existing, exportableServers);
-          const mergedPreview = mergeJsonMcpFile(existing, redactedServers);
+          // Preview only the redacted T3-exported mcpServers entries, never existing host entries/secrets.
+          const redactedDeltaPreview = mergeJsonMcpFile(null, redactedServers);
           if (merged.warning) {
             warnings.push(`${targetPath}: ${merged.warning}`);
           } else {
@@ -334,7 +324,7 @@ const make = Effect.gen(function* () {
               "mcp",
               "mcpServers",
               merged.content,
-              mergedPreview.content,
+              redactedDeltaPreview.content,
               hasSecrets,
             );
           }
