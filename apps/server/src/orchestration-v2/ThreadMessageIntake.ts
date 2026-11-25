@@ -13,6 +13,7 @@ import { resolveAttachmentPath } from "../attachmentStore.ts";
 import { rpcAuthorizationError } from "../auth/RpcAuthorization.ts";
 import * as ServerConfig from "../config.ts";
 import * as HarnessApprovalAuditStore from "../harness/HarnessApprovalAuditStore.ts";
+import * as HarnessHooksService from "../harness/HarnessHooksService.ts";
 import * as HarnessLibraryStore from "../harness/HarnessLibraryStore.ts";
 import { expandPortableCommand } from "../harness/HarnessProjector.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -226,7 +227,28 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
     ) {
       return yield* rpcAuthorizationError(AuthProvidersManageScope);
     }
-    return expandedText === rawCommand.text ? rawCommand : { ...rawCommand, text: expandedText };
+    const hooksOpt = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
+    let finalText = expandedText;
+    if (Option.isSome(hooksOpt)) {
+      const shell = yield* threads
+        .getThreadShell(rawCommand.threadId)
+        .pipe(Effect.orElseSucceed(() => null));
+      const beforeOutcome = yield* hooksOpt.value.runBeforeTurnStart({
+        threadId: rawCommand.threadId,
+        modeId: shell?.modeId ?? (shell?.interactionMode === "plan" ? "plan" : "build"),
+        text: expandedText,
+        workspaceRoot: shell?.worktreePath ?? undefined,
+      });
+      if (beforeOutcome.blocked) {
+        return yield* new AttachmentClaims.AttachmentClaimError({
+          message: beforeOutcome.blockReason ?? "Turn blocked by turn.beforeStart hook.",
+        });
+      }
+      if (beforeOutcome.injectedContext) {
+        finalText = `${beforeOutcome.injectedContext}\n\n${expandedText}`;
+      }
+    }
+    return finalText === rawCommand.text ? rawCommand : { ...rawCommand, text: finalText };
   });
   if (command.type === "runtime-request.respond" && command.attachmentsByQuestionId) {
     const config = yield* ServerConfig.ServerConfig;
@@ -368,8 +390,20 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
     commandWithModeDigest.type !== "message.dispatch" &&
     (commandWithModeDigest.type !== "queued-run.edit" ||
       commandWithModeDigest.attachments === undefined)
-  )
-    return yield* threads.dispatch(commandWithModeDigest);
+  ) {
+    const dispatched = yield* threads.dispatch(commandWithModeDigest);
+    if (commandWithModeDigest.type === "thread.create" && dispatched.replayed !== true) {
+      const hooksOpt = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
+      if (Option.isSome(hooksOpt)) {
+        yield* hooksOpt.value.emitLifecycleEvent("thread.created", {
+          threadId: commandWithModeDigest.threadId,
+          projectId: commandWithModeDigest.projectId,
+          ...(commandWithModeDigest.modeId ? { modeId: commandWithModeDigest.modeId } : {}),
+        });
+      }
+    }
+    return dispatched;
+  }
   // An accepted edit's retry replays its receipt even if a later cleanup removed its files.
   if (
     commandWithModeDigest.type === "queued-run.edit" &&

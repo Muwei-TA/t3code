@@ -1,0 +1,678 @@
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalFetch:off -- Spawns user-configured command and HTTP hooks with explicit abort/kill deadlines.
+import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
+import {
+  HarnessError,
+  HarnessHookDefinition,
+  type HarnessHookEvent,
+  type HarnessHookExecutionResult,
+  type HarnessHookRemoveInput,
+  type HarnessHookSetEnabledInput,
+  type HarnessHooksSnapshot,
+  type HarnessHookTestInput,
+  type HarnessHookUpsertInput,
+  type HarnessPluginId,
+  NonNegativeInt,
+  PositiveInt,
+} from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
+
+import * as HarnessStore from "./HarnessStore.ts";
+
+const DEFAULT_HOOK_TIMEOUT_MS = 3_000;
+const MIN_HOOK_TIMEOUT_MS = 100;
+const MAX_HOOK_TIMEOUT_MS = 10_000;
+const MAX_HOOK_STDOUT_BYTES = 32 * 1024;
+const HOOKS_FILE_NAME = "hooks.json";
+
+const HooksConfigFileSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  hooks: Schema.Array(HarnessHookDefinition),
+});
+
+const decodeHooksConfigFile = Schema.decodeUnknownOption(HooksConfigFileSchema);
+
+function clampTimeoutMs(timeoutMs: number | undefined): number {
+  const raw = timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS;
+  return Math.min(Math.max(Math.trunc(raw), MIN_HOOK_TIMEOUT_MS), MAX_HOOK_TIMEOUT_MS);
+}
+
+function encodeJson(value: unknown): string {
+  return JSON.stringify(value);
+}
+
+function encodePrettyJson(value: unknown): string {
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+function tryParseJsonRecord(text: string): Record<string, unknown> | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Glob-like matcher (`*` wildcard) without regex ReDoS risk. */
+function matchesHookMatcher(matcher: string | undefined, subject: string): boolean {
+  if (!matcher || matcher.trim().length === 0 || matcher.trim() === "*") {
+    return true;
+  }
+  const pattern = matcher.trim();
+  if (!pattern.includes("*")) {
+    return subject === pattern || subject.includes(pattern);
+  }
+  const parts = pattern.split("*").filter((part) => part.length > 0);
+  if (parts.length === 0) return true;
+  let cursor = 0;
+  const anchoredStart = !pattern.startsWith("*");
+  const anchoredEnd = !pattern.endsWith("*");
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index]!;
+    const found = subject.indexOf(part, cursor);
+    if (found < 0) return false;
+    if (index === 0 && anchoredStart && found !== 0) return false;
+    cursor = found + part.length;
+  }
+  if (anchoredEnd) {
+    const last = parts[parts.length - 1]!;
+    return subject.endsWith(last);
+  }
+  return true;
+}
+
+interface RawHookRunOutcome {
+  readonly ok: boolean;
+  readonly timedOut: boolean;
+  readonly durationMs: number;
+  readonly stdout: string;
+  readonly error?: string | undefined;
+}
+
+async function runCommandHook(
+  hook: HarnessHookDefinition,
+  payloadJson: string,
+  timeoutMs: number,
+): Promise<RawHookRunOutcome> {
+  const target = hook.target;
+  if (target.type !== "command") {
+    return { ok: false, timedOut: false, durationMs: 0, stdout: "", error: "Not a command hook." };
+  }
+  const startedAt = performance.now();
+  return new Promise<RawHookRunOutcome>((resolve) => {
+    let settled = false;
+    let timedOut = false;
+    let stdout = "";
+    let stderr = "";
+    let child: NodeChildProcess.ChildProcess | null = null;
+
+    const finish = (outcome: Omit<RawHookRunOutcome, "durationMs">) => {
+      if (settled) return;
+      settled = true;
+      resolve({ ...outcome, durationMs: Math.max(0, Math.round(performance.now() - startedAt)) });
+    };
+
+    try {
+      child = NodeChildProcess.spawn(target.command, target.args ? [...target.args] : [], {
+        cwd: target.cwd,
+        env: target.env ? { ...process.env, ...target.env } : process.env,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      finish({
+        ok: false,
+        timedOut: false,
+        stdout: "",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        child?.kill("SIGKILL");
+      } catch {
+        // Ignore already-exited child.
+      }
+      finish({
+        ok: false,
+        timedOut: true,
+        stdout,
+        error: `Hook "${hook.id}" timed out after ${timeoutMs}ms.`,
+      });
+    }, timeoutMs);
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (Buffer.byteLength(stdout, "utf8") < MAX_HOOK_STDOUT_BYTES) {
+        stdout += chunk.toString("utf8");
+      }
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (Buffer.byteLength(stderr, "utf8") < MAX_HOOK_STDOUT_BYTES) {
+        stderr += chunk.toString("utf8");
+      }
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      finish({
+        ok: false,
+        timedOut,
+        stdout,
+        error: error.message,
+      });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        finish({ ok: true, timedOut: false, stdout });
+      } else {
+        finish({
+          ok: false,
+          timedOut,
+          stdout,
+          error: stderr.trim() || `Hook exited with status ${code ?? "unknown"}.`,
+        });
+      }
+    });
+
+    try {
+      child.stdin?.end(payloadJson);
+    } catch {
+      // Ignore closed stdin.
+    }
+  });
+}
+
+async function runHttpHook(
+  hook: HarnessHookDefinition,
+  payloadJson: string,
+  timeoutMs: number,
+): Promise<RawHookRunOutcome> {
+  if (hook.target.type !== "http") {
+    return { ok: false, timedOut: false, durationMs: 0, stdout: "", error: "Not an HTTP hook." };
+  }
+  const startedAt = performance.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(hook.target.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...hook.target.headers,
+      },
+      body: payloadJson,
+      signal: controller.signal,
+    });
+    const text = (await response.text()).slice(0, MAX_HOOK_STDOUT_BYTES);
+    clearTimeout(timer);
+    return {
+      ok: response.ok,
+      timedOut: false,
+      durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      stdout: text,
+      ...(response.ok ? {} : { error: `HTTP ${response.status} ${response.statusText}`.trim() }),
+    };
+  } catch (error) {
+    clearTimeout(timer);
+    const isAbort = error instanceof Error && error.name === "AbortError";
+    return {
+      ok: false,
+      timedOut: isAbort,
+      durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      stdout: "",
+      error: isAbort
+        ? `Hook "${hook.id}" timed out after ${timeoutMs}ms.`
+        : error instanceof Error
+          ? error.message
+          : String(error),
+    };
+  }
+}
+
+export interface BeforeTurnStartHookOutcome {
+  readonly blocked: boolean;
+  readonly blockReason?: string | undefined;
+  readonly injectedContext?: string | undefined;
+  readonly results: ReadonlyArray<HarnessHookExecutionResult>;
+}
+
+export interface ToolHookOutcome {
+  readonly blocked: boolean;
+  readonly blockReason?: string | undefined;
+  readonly results: ReadonlyArray<HarnessHookExecutionResult>;
+}
+
+export interface HarnessHooksServiceShape {
+  readonly list: () => Effect.Effect<HarnessHooksSnapshot, HarnessError>;
+  readonly upsertUserHook: (
+    input: HarnessHookUpsertInput,
+  ) => Effect.Effect<HarnessHooksSnapshot, HarnessError>;
+  readonly removeUserHook: (
+    input: HarnessHookRemoveInput,
+  ) => Effect.Effect<HarnessHooksSnapshot, HarnessError>;
+  readonly setUserHookEnabled: (
+    input: HarnessHookSetEnabledInput,
+  ) => Effect.Effect<HarnessHooksSnapshot, HarnessError>;
+  readonly testHook: (
+    input: HarnessHookTestInput,
+  ) => Effect.Effect<HarnessHookExecutionResult, HarnessError>;
+  /** Scoped registration for active trusted plugins: closing the Scope removes all plugin hooks. */
+  readonly registerPluginHooks: (
+    pluginId: HarnessPluginId,
+    hooks: ReadonlyArray<HarnessHookDefinition>,
+  ) => Effect.Effect<void, never, Scope.Scope>;
+  readonly runBeforeTurnStart: (payload: {
+    readonly threadId: string;
+    readonly modeId?: string | undefined;
+    readonly text: string;
+    readonly workspaceRoot?: string | undefined;
+  }) => Effect.Effect<BeforeTurnStartHookOutcome>;
+  readonly runToolHook: (
+    phase: "PreToolUse" | "PostToolUse",
+    payload: {
+      readonly threadId: string;
+      readonly toolName: string;
+      readonly arguments: Record<string, unknown>;
+      readonly workspaceRoot?: string | undefined;
+      readonly isError?: boolean | undefined;
+    },
+  ) => Effect.Effect<ToolHookOutcome>;
+  /** Non-blocking lifecycle hook fan-out (never called inside pure decider or SQLite transactions). */
+  readonly emitLifecycleEvent: (
+    event: Extract<
+      HarnessHookEvent,
+      "thread.created" | "turn.completed" | "run.settled" | "checkpoint.created"
+    >,
+    payload: Record<string, unknown>,
+  ) => Effect.Effect<void>;
+}
+
+export class HarnessHooksService extends Context.Service<
+  HarnessHooksService,
+  HarnessHooksServiceShape
+>()("t3/harness/HarnessHooksService") {}
+
+export const layer = Layer.effect(
+  HarnessHooksService,
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const store = yield* HarnessStore.HarnessStore;
+    const pluginHooksByPluginId = new Map<HarnessPluginId, ReadonlyArray<HarnessHookDefinition>>();
+
+    const hooksFilePath = () => path.join(store.harnessDir, HOOKS_FILE_NAME);
+
+    const readPolicy = Effect.fn("HarnessHooksService.readPolicy")(function* () {
+      const resolved = yield* store.resolveWorkspace();
+      return {
+        allowsHarness: resolved.managedPolicyAllowsHarness,
+        allowsStdio: resolved.managedPolicyAllowsStdio,
+      };
+    });
+
+    const readUserHooks = Effect.fn("HarnessHooksService.readUserHooks")(function* () {
+      const filePath = hooksFilePath();
+      const exists = yield* fs.exists(filePath).pipe(Effect.orElseSucceed(() => false));
+      if (!exists) return [] as ReadonlyArray<HarnessHookDefinition>;
+      const raw = yield* fs.readFileString(filePath).pipe(
+        Effect.mapError(
+          (error) =>
+            new HarnessError({
+              code: "io_error",
+              detail: `Failed to read hooks.json: ${error.message}`,
+            }),
+        ),
+      );
+      const parsedRecord = tryParseJsonRecord(raw);
+      if (!parsedRecord) return [] as ReadonlyArray<HarnessHookDefinition>;
+      const decoded = decodeHooksConfigFile(parsedRecord);
+      if (decoded._tag === "None") return [] as ReadonlyArray<HarnessHookDefinition>;
+      return decoded.value.hooks.filter((hook) => hook.source === "user");
+    });
+
+    const writeUserHooks = Effect.fn("HarnessHooksService.writeUserHooks")(function* (
+      hooks: ReadonlyArray<HarnessHookDefinition>,
+    ) {
+      const dir = store.harnessDir;
+      yield* fs.makeDirectory(dir, { recursive: true }).pipe(
+        Effect.mapError(
+          (error) =>
+            new HarnessError({
+              code: "io_error",
+              detail: `Failed to create harness directory: ${error.message}`,
+            }),
+        ),
+      );
+      const target = hooksFilePath();
+      const tmp = `${target}.${NodeCrypto.randomBytes(6).toString("hex")}.tmp`;
+      const content = encodePrettyJson({ version: 1, hooks });
+      yield* fs.writeFileString(tmp, content).pipe(
+        Effect.andThen(fs.rename(tmp, target)),
+        Effect.mapError(
+          (error) =>
+            new HarnessError({
+              code: "io_error",
+              detail: `Failed to write hooks.json: ${error.message}`,
+            }),
+        ),
+      );
+    });
+
+    const allHooks = Effect.fn("HarnessHooksService.allHooks")(function* () {
+      const userHooks = yield* readUserHooks().pipe(Effect.orElseSucceed(() => []));
+      const pluginHooks: Array<HarnessHookDefinition> = [];
+      for (const list of pluginHooksByPluginId.values()) {
+        pluginHooks.push(...list);
+      }
+      return [...userHooks, ...pluginHooks];
+    });
+
+    const buildSnapshot = Effect.fn("HarnessHooksService.buildSnapshot")(function* () {
+      const policy = yield* readPolicy();
+      const hooks = yield* allHooks();
+      return {
+        hooksPath: hooksFilePath(),
+        hooks,
+        managedPolicyAllowsHarness: policy.allowsHarness,
+      } satisfies HarnessHooksSnapshot;
+    });
+
+    const executeOneHook = Effect.fn("HarnessHooksService.executeOneHook")(function* (
+      hook: HarnessHookDefinition,
+      event: HarnessHookEvent,
+      payload: Record<string, unknown>,
+    ): Effect.fn.Return<HarnessHookExecutionResult> {
+      const policy = yield* readPolicy();
+      if (!policy.allowsHarness) {
+        return {
+          hookId: hook.id,
+          event,
+          ok: false,
+          blocked: false,
+          durationMs: NonNegativeInt.make(0),
+          timedOut: false,
+          error: "Portable harness hooks are disabled by managed policy.",
+        };
+      }
+      if (hook.target.type === "command" && !policy.allowsStdio) {
+        return {
+          hookId: hook.id,
+          event,
+          ok: false,
+          blocked: Boolean(hook.failClosed),
+          ...(hook.failClosed
+            ? { blockReason: `Command hook "${hook.id}" blocked by managed stdio policy.` }
+            : {}),
+          durationMs: NonNegativeInt.make(0),
+          timedOut: false,
+          error: "Command hooks are disabled by managed policy.",
+        };
+      }
+
+      const timeoutMs = clampTimeoutMs(hook.timeoutMs);
+      const now = yield* DateTime.now;
+      const payloadJson = encodeJson({
+        hookId: hook.id,
+        event,
+        timestamp: DateTime.formatIso(now),
+        ...payload,
+      });
+
+      const outcome = yield* Effect.promise(() =>
+        hook.target.type === "command"
+          ? runCommandHook(hook, payloadJson, timeoutMs)
+          : runHttpHook(hook, payloadJson, timeoutMs),
+      );
+
+      if (!outcome.ok) {
+        const failClosedBlocked = Boolean(hook.failClosed);
+        return {
+          hookId: hook.id,
+          event,
+          ok: false,
+          blocked: failClosedBlocked,
+          ...(failClosedBlocked
+            ? { blockReason: outcome.error ?? `Hook "${hook.id}" failed (fail-closed).` }
+            : {}),
+          durationMs: NonNegativeInt.make(outcome.durationMs),
+          timedOut: outcome.timedOut,
+          ...(outcome.stdout.trim() ? { stdout: outcome.stdout.trim() } : {}),
+          ...(outcome.error ? { error: outcome.error } : {}),
+        } satisfies HarnessHookExecutionResult;
+      }
+
+      const parsed = tryParseJsonRecord(outcome.stdout);
+      const blocked = parsed?.block === true || parsed?.allow === false;
+      const blockReason =
+        typeof parsed?.reason === "string" && parsed.reason.trim().length > 0
+          ? parsed.reason.trim()
+          : blocked
+            ? `Blocked by hook "${hook.id}".`
+            : undefined;
+      const injectedContext =
+        typeof parsed?.injectContext === "string" && parsed.injectContext.trim().length > 0
+          ? parsed.injectContext.trim()
+          : undefined;
+
+      return {
+        hookId: hook.id,
+        event,
+        ok: true,
+        blocked,
+        ...(blockReason ? { blockReason } : {}),
+        ...(injectedContext ? { injectedContext } : {}),
+        durationMs: NonNegativeInt.make(outcome.durationMs),
+        timedOut: false,
+        ...(outcome.stdout.trim() ? { stdout: outcome.stdout.trim() } : {}),
+      } satisfies HarnessHookExecutionResult;
+    });
+
+    return HarnessHooksService.of({
+      list: Effect.fn("HarnessHooksService.list")(function* () {
+        return yield* buildSnapshot();
+      }),
+
+      upsertUserHook: Effect.fn("HarnessHooksService.upsertUserHook")(function* (input) {
+        const policy = yield* readPolicy();
+        if (!policy.allowsHarness) {
+          return yield* new HarnessError({
+            code: "policy_denied",
+            detail: "Portable harness hooks are disabled by managed policy.",
+          });
+        }
+        if (input.target.type === "command" && !policy.allowsStdio) {
+          return yield* new HarnessError({
+            code: "policy_denied",
+            detail: "Command hooks are disabled by managed policy.",
+          });
+        }
+        if (input.target.type === "http" && !/^https?:\/\//i.test(input.target.url)) {
+          return yield* new HarnessError({
+            code: "invalid_config",
+            detail: "HTTP hook URL must start with http:// or https://.",
+          });
+        }
+        const existing = yield* readUserHooks();
+        const nextHook: HarnessHookDefinition = {
+          id: input.id,
+          event: input.event,
+          enabled: input.enabled ?? true,
+          ...(input.matcher ? { matcher: input.matcher } : {}),
+          ...(input.timeoutMs !== undefined
+            ? { timeoutMs: PositiveInt.make(clampTimeoutMs(input.timeoutMs)) }
+            : {}),
+          ...(input.failClosed !== undefined ? { failClosed: input.failClosed } : {}),
+          target: input.target,
+          ...(input.description ? { description: input.description } : {}),
+          source: "user",
+        };
+        const nextHooks = [...existing.filter((h) => h.id !== input.id), nextHook].toSorted(
+          (a, b) => a.id.localeCompare(b.id),
+        );
+        yield* writeUserHooks(nextHooks);
+        return yield* buildSnapshot();
+      }),
+
+      removeUserHook: Effect.fn("HarnessHooksService.removeUserHook")(function* (input) {
+        const existing = yield* readUserHooks();
+        const nextHooks = existing.filter((h) => h.id !== input.id);
+        yield* writeUserHooks(nextHooks);
+        return yield* buildSnapshot();
+      }),
+
+      setUserHookEnabled: Effect.fn("HarnessHooksService.setUserHookEnabled")(function* (input) {
+        const existing = yield* readUserHooks();
+        const found = existing.find((h) => h.id === input.id);
+        if (!found) {
+          return yield* new HarnessError({
+            code: "not_found",
+            detail: `Hook "${input.id}" was not found.`,
+          });
+        }
+        const nextHooks = existing.map((h) =>
+          h.id === input.id ? { ...h, enabled: input.enabled } : h,
+        );
+        yield* writeUserHooks(nextHooks);
+        return yield* buildSnapshot();
+      }),
+
+      testHook: Effect.fn("HarnessHooksService.testHook")(function* (input) {
+        const hooks = yield* allHooks();
+        const hook = hooks.find((candidate) => candidate.id === input.id);
+        if (!hook) {
+          return yield* new HarnessError({
+            code: "not_found",
+            detail: `Hook "${input.id}" was not found.`,
+          });
+        }
+        return yield* executeOneHook(hook, hook.event, input.samplePayload ?? { dryRun: true });
+      }),
+
+      registerPluginHooks: Effect.fn("HarnessHooksService.registerPluginHooks")(
+        function* (pluginId, hooks) {
+          yield* Effect.acquireRelease(
+            Effect.sync(() => {
+              if (hooks.length > 0) {
+                pluginHooksByPluginId.set(pluginId, hooks);
+              }
+            }),
+            () =>
+              Effect.sync(() => {
+                pluginHooksByPluginId.delete(pluginId);
+              }),
+          );
+        },
+      ),
+
+      runBeforeTurnStart: Effect.fn("HarnessHooksService.runBeforeTurnStart")(function* (payload) {
+        const hooks = (yield* allHooks()).filter(
+          (hook) =>
+            hook.enabled &&
+            hook.event === "turn.beforeStart" &&
+            matchesHookMatcher(hook.matcher, payload.modeId ?? "build"),
+        );
+        if (hooks.length === 0) {
+          return { blocked: false, results: [] } satisfies BeforeTurnStartHookOutcome;
+        }
+        const results: Array<HarnessHookExecutionResult> = [];
+        const injectedParts: Array<string> = [];
+        for (const hook of hooks) {
+          const result = yield* executeOneHook(hook, "turn.beforeStart", payload);
+          results.push(result);
+          if (!result.ok) {
+            yield* Effect.logWarning("harness.hook.turn-before-start.failed", {
+              hookId: hook.id,
+              timedOut: result.timedOut,
+              error: result.error,
+              failClosed: Boolean(hook.failClosed),
+            });
+          }
+          if (result.blocked) {
+            return {
+              blocked: true,
+              blockReason: result.blockReason ?? `Turn blocked by hook "${hook.id}".`,
+              results,
+            } satisfies BeforeTurnStartHookOutcome;
+          }
+          if (result.injectedContext) {
+            injectedParts.push(result.injectedContext);
+          }
+        }
+        return {
+          blocked: false,
+          ...(injectedParts.length > 0 ? { injectedContext: injectedParts.join("\n\n") } : {}),
+          results,
+        } satisfies BeforeTurnStartHookOutcome;
+      }),
+
+      runToolHook: Effect.fn("HarnessHooksService.runToolHook")(function* (phase, payload) {
+        const hooks = (yield* allHooks()).filter(
+          (hook) =>
+            hook.enabled &&
+            hook.event === phase &&
+            matchesHookMatcher(hook.matcher, payload.toolName),
+        );
+        if (hooks.length === 0) {
+          return { blocked: false, results: [] } satisfies ToolHookOutcome;
+        }
+        if (phase === "PostToolUse") {
+          // PostToolUse runs asynchronously so tool responses never stall on audit hooks.
+          yield* Effect.forkDetach(
+            Effect.forEach(hooks, (hook) => executeOneHook(hook, "PostToolUse", payload), {
+              concurrency: 4,
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("harness.hook.post-tool-use.failed", { cause }),
+              ),
+            ),
+          );
+          return { blocked: false, results: [] } satisfies ToolHookOutcome;
+        }
+        const results: Array<HarnessHookExecutionResult> = [];
+        for (const hook of hooks) {
+          const result = yield* executeOneHook(hook, "PreToolUse", payload);
+          results.push(result);
+          if (result.blocked) {
+            return {
+              blocked: true,
+              blockReason: result.blockReason ?? `Tool call blocked by hook "${hook.id}".`,
+              results,
+            } satisfies ToolHookOutcome;
+          }
+        }
+        return { blocked: false, results } satisfies ToolHookOutcome;
+      }),
+
+      emitLifecycleEvent: Effect.fn("HarnessHooksService.emitLifecycleEvent")(
+        function* (event, payload) {
+          const hooks = (yield* allHooks()).filter((hook) => hook.enabled && hook.event === event);
+          if (hooks.length === 0) return;
+          yield* Effect.forkDetach(
+            Effect.forEach(hooks, (hook) => executeOneHook(hook, event, payload), {
+              concurrency: 4,
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("harness.hook.lifecycle.failed", { event, cause }),
+              ),
+            ),
+          );
+        },
+      ),
+    });
+  }),
+);

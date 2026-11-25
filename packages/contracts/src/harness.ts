@@ -912,6 +912,224 @@ export const HarnessThreadContextManifestInput = Schema.Struct({
 });
 export type HarnessThreadContextManifestInput = typeof HarnessThreadContextManifestInput.Type;
 
+export const HarnessPluginId = TrimmedNonEmptyString.check(
+  Schema.isPattern(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/),
+).pipe(Schema.brand("HarnessPluginId"));
+export type HarnessPluginId = typeof HarnessPluginId.Type;
+
+export const HarnessPluginFormat = Schema.Literals(["t3-plugin", "claude-plugin"]);
+export type HarnessPluginFormat = typeof HarnessPluginFormat.Type;
+
+export const HarnessPluginTrustStatus = Schema.Literals(["trusted", "untrusted", "digest_changed"]);
+export type HarnessPluginTrustStatus = typeof HarnessPluginTrustStatus.Type;
+
+export const HarnessPluginView = Schema.Struct({
+  id: HarnessPluginId,
+  name: Schema.String,
+  version: Schema.String,
+  description: Schema.optionalKey(Schema.String),
+  author: Schema.optionalKey(Schema.String),
+  format: HarnessPluginFormat,
+  sourcePath: Schema.String,
+  contentDigest: Schema.String,
+  trustedDigest: Schema.NullOr(Schema.String),
+  trustStatus: HarnessPluginTrustStatus,
+  enabled: Schema.Boolean,
+  active: Schema.Boolean,
+  hasCommandHooks: Schema.Boolean,
+  hasStdioMcp: Schema.Boolean,
+  skillIds: Schema.Array(Schema.String),
+  ruleIds: Schema.Array(Schema.String),
+  commandIds: Schema.Array(Schema.String),
+  modeIds: Schema.Array(Schema.String),
+  hookIds: Schema.Array(Schema.String),
+  mcpServerIds: Schema.Array(Schema.String),
+  workflowFiles: Schema.Array(Schema.String),
+  lastError: Schema.NullOr(Schema.String),
+});
+export type HarnessPluginView = typeof HarnessPluginView.Type;
+
+export const HarnessPluginsSnapshot = Schema.Struct({
+  pluginsDir: Schema.String,
+  plugins: Schema.Array(HarnessPluginView),
+  managedPolicyAllowsHarness: Schema.Boolean,
+  managedPolicyOrganization: Schema.NullOr(Schema.String),
+});
+export type HarnessPluginsSnapshot = typeof HarnessPluginsSnapshot.Type;
+
+export const HarnessPluginInstallInput = Schema.Struct({
+  sourcePath: TrimmedNonEmptyString.check(Schema.isMaxLength(2048)),
+  id: Schema.optionalKey(HarnessPluginId),
+  trustOnInstall: Schema.optionalKey(Schema.Boolean),
+});
+export type HarnessPluginInstallInput = typeof HarnessPluginInstallInput.Type;
+
+export const HarnessPluginTrustInput = Schema.Struct({
+  id: HarnessPluginId,
+  expectedDigest: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+});
+export type HarnessPluginTrustInput = typeof HarnessPluginTrustInput.Type;
+
+export const HarnessPluginSetEnabledInput = Schema.Struct({
+  id: HarnessPluginId,
+  enabled: Schema.Boolean,
+});
+export type HarnessPluginSetEnabledInput = typeof HarnessPluginSetEnabledInput.Type;
+
+export const HarnessPluginRemoveInput = Schema.Struct({
+  id: HarnessPluginId,
+});
+export type HarnessPluginRemoveInput = typeof HarnessPluginRemoveInput.Type;
+
+export const HarnessPluginReloadInput = Schema.Struct({
+  id: Schema.optionalKey(HarnessPluginId),
+});
+export type HarnessPluginReloadInput = typeof HarnessPluginReloadInput.Type;
+
+export const HarnessHookId = TrimmedNonEmptyString.check(
+  Schema.isPattern(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/),
+).pipe(Schema.brand("HarnessHookId"));
+export type HarnessHookId = typeof HarnessHookId.Type;
+
+export const HarnessHookEvent = Schema.Literals([
+  "turn.beforeStart",
+  "thread.created",
+  "turn.completed",
+  "run.settled",
+  "checkpoint.created",
+  "PreToolUse",
+  "PostToolUse",
+]);
+export type HarnessHookEvent = typeof HarnessHookEvent.Type;
+
+export const HarnessHookCommandTarget = Schema.Struct({
+  type: Schema.Literal("command"),
+  command: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  args: Schema.optionalKey(Schema.Array(Schema.String.check(Schema.isMaxLength(1024)))),
+  cwd: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(2048))),
+  env: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+});
+export type HarnessHookCommandTarget = typeof HarnessHookCommandTarget.Type;
+
+export const HarnessHookHttpTarget = Schema.Struct({
+  type: Schema.Literal("http"),
+  url: TrimmedNonEmptyString.check(Schema.isMaxLength(2048)),
+  headers: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+});
+export type HarnessHookHttpTarget = typeof HarnessHookHttpTarget.Type;
+
+export const HarnessHookTarget = Schema.Union([HarnessHookCommandTarget, HarnessHookHttpTarget]);
+export type HarnessHookTarget = typeof HarnessHookTarget.Type;
+
+export const HarnessHookSource = Schema.Literals(["user", "plugin"]);
+export type HarnessHookSource = typeof HarnessHookSource.Type;
+
+export const HarnessHookDefinition = Schema.Struct({
+  id: HarnessHookId,
+  event: HarnessHookEvent,
+  enabled: Schema.Boolean,
+  matcher: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+  timeoutMs: Schema.optionalKey(PositiveInt),
+  failClosed: Schema.optionalKey(Schema.Boolean),
+  target: HarnessHookTarget,
+  description: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+  source: HarnessHookSource,
+  pluginId: Schema.optionalKey(HarnessPluginId),
+});
+export type HarnessHookDefinition = typeof HarnessHookDefinition.Type;
+
+export const HarnessHooksSnapshot = Schema.Struct({
+  hooksPath: Schema.String,
+  hooks: Schema.Array(HarnessHookDefinition),
+  managedPolicyAllowsHarness: Schema.Boolean,
+});
+export type HarnessHooksSnapshot = typeof HarnessHooksSnapshot.Type;
+
+export const HarnessHookUpsertInput = Schema.Struct({
+  id: HarnessHookId,
+  event: HarnessHookEvent,
+  enabled: Schema.optionalKey(Schema.Boolean),
+  matcher: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+  timeoutMs: Schema.optionalKey(PositiveInt),
+  failClosed: Schema.optionalKey(Schema.Boolean),
+  target: HarnessHookTarget,
+  description: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+});
+export type HarnessHookUpsertInput = typeof HarnessHookUpsertInput.Type;
+
+export const HarnessHookRemoveInput = Schema.Struct({
+  id: HarnessHookId,
+});
+export type HarnessHookRemoveInput = typeof HarnessHookRemoveInput.Type;
+
+export const HarnessHookSetEnabledInput = Schema.Struct({
+  id: HarnessHookId,
+  enabled: Schema.Boolean,
+});
+export type HarnessHookSetEnabledInput = typeof HarnessHookSetEnabledInput.Type;
+
+export const HarnessHookTestInput = Schema.Struct({
+  id: HarnessHookId,
+  samplePayload: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+});
+export type HarnessHookTestInput = typeof HarnessHookTestInput.Type;
+
+export const HarnessHookExecutionResult = Schema.Struct({
+  hookId: HarnessHookId,
+  event: HarnessHookEvent,
+  ok: Schema.Boolean,
+  blocked: Schema.Boolean,
+  blockReason: Schema.optionalKey(Schema.String),
+  injectedContext: Schema.optionalKey(Schema.String),
+  durationMs: NonNegativeInt,
+  timedOut: Schema.Boolean,
+  stdout: Schema.optionalKey(Schema.String),
+  error: Schema.optionalKey(Schema.String),
+});
+export type HarnessHookExecutionResult = typeof HarnessHookExecutionResult.Type;
+
+export const HarnessWorkflowStepKind = Schema.Literals(["in-thread", "child"]);
+export type HarnessWorkflowStepKind = typeof HarnessWorkflowStepKind.Type;
+
+export const HarnessWorkflowStepFailurePolicy = Schema.Literals(["fail", "continue", "pause"]);
+export type HarnessWorkflowStepFailurePolicy = typeof HarnessWorkflowStepFailurePolicy.Type;
+
+export const HarnessWorkflowStepSpec = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: Schema.optionalKey(Schema.String),
+  kind: HarnessWorkflowStepKind,
+  prompt: Schema.String,
+  modeId: Schema.optionalKey(HarnessModeId),
+  dependsOn: Schema.Array(TrimmedNonEmptyString),
+  timeoutSeconds: Schema.optionalKey(PositiveInt),
+  onFailure: HarnessWorkflowStepFailurePolicy,
+});
+export type HarnessWorkflowStepSpec = typeof HarnessWorkflowStepSpec.Type;
+
+export const HarnessWorkflowValidationIssue = Schema.Struct({
+  severity: Schema.Literals(["error", "warning"]),
+  path: Schema.String,
+  message: Schema.String,
+});
+export type HarnessWorkflowValidationIssue = typeof HarnessWorkflowValidationIssue.Type;
+
+export const HarnessWorkflowValidateInput = Schema.Struct({
+  yaml: Schema.String.check(Schema.isMaxLength(262_144)),
+});
+export type HarnessWorkflowValidateInput = typeof HarnessWorkflowValidateInput.Type;
+
+export const HarnessWorkflowValidateResult = Schema.Struct({
+  valid: Schema.Boolean,
+  name: Schema.optionalKey(Schema.String),
+  version: Schema.optionalKey(PositiveInt),
+  description: Schema.optionalKey(Schema.String),
+  steps: Schema.Array(HarnessWorkflowStepSpec),
+  executionOrder: Schema.Array(Schema.String),
+  issues: Schema.Array(HarnessWorkflowValidationIssue),
+  compiledPreview: Schema.optionalKey(Schema.String),
+});
+export type HarnessWorkflowValidateResult = typeof HarnessWorkflowValidateResult.Type;
+
 export const HarnessErrorCode = Schema.Literals([
   "policy_denied",
   "invalid_config",

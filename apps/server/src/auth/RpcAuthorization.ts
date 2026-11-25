@@ -256,6 +256,18 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.harnessModeSetEnabled]: AuthSettingsWriteScope,
   [WS_METHODS.harnessApprovalRulesList]: AuthOrchestrationReadScope,
   [WS_METHODS.harnessApprovalRuleRevoke]: AuthOrchestrationOperateScope,
+  [WS_METHODS.harnessPluginsList]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessPluginInstall]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessPluginTrust]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessPluginSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessPluginRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessPluginReload]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessHooksList]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessHookUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessHookRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessHookSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessHookTest]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessWorkflowValidate]: AuthOrchestrationReadScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {

@@ -96,6 +96,8 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as HarnessStore from "./harness/HarnessStore.ts";
 import * as HarnessApprovalAuditStore from "./harness/HarnessApprovalAuditStore.ts";
+import * as HarnessHooksService from "./harness/HarnessHooksService.ts";
+import * as PluginHost from "./harness/PluginHost.ts";
 import * as HarnessLibraryStore from "./harness/HarnessLibraryStore.ts";
 import * as HarnessImporter from "./harness/HarnessImporter.ts";
 import * as HarnessLibraryImporter from "./harness/HarnessLibraryImporter.ts";
@@ -857,25 +859,21 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   ),
   Layer.provideMerge(ServerSecretStore.layer),
   Layer.provideMerge(
-    Layer.mergeAll(
-      HarnessStore.layer,
-      HarnessApprovalAuditStore.layer.pipe(Layer.provide(HarnessStore.layer)),
-      HarnessLibraryStore.layer.pipe(Layer.provide(HarnessStore.layer)),
-      HarnessImporter.layer.pipe(Layer.provide(HarnessStore.layer)),
-      HarnessLibraryImporter.layer.pipe(
-        Layer.provide(HarnessLibraryStore.layer),
-        Layer.provide(HarnessStore.layer),
+    Layer.mergeAll(HarnessLibraryImporter.layer, HarnessExporter.layer).pipe(
+      Layer.provideMerge(HarnessLibraryStore.layer),
+      Layer.provideMerge(PluginHost.layer),
+      Layer.provideMerge(
+        Layer.mergeAll(
+          HarnessApprovalAuditStore.layer,
+          HarnessHooksService.layer,
+          HarnessImporter.layer,
+          McpGateway.layer.pipe(
+            Layer.provide(SecretResolver.layer.pipe(Layer.provide(layerServerSettings))),
+            Layer.provide(ServerSecretStore.layer),
+          ),
+        ),
       ),
-      HarnessExporter.layer.pipe(
-        Layer.provide(HarnessLibraryStore.layer),
-        Layer.provide(HarnessStore.layer),
-      ),
-      McpGateway.layer.pipe(
-        Layer.provide(HarnessStore.layer),
-        Layer.provide(SecretResolver.layer.pipe(Layer.provide(layerServerSettings))),
-        Layer.provide(ServerSecretStore.layer),
-      ),
-    ).pipe(
+      Layer.provideMerge(HarnessStore.layer),
       Layer.provide(ManagedPolicy.layer),
       Layer.provide(T3ProjectFileLoader.layer),
       Layer.provide(layerWorkspace),

@@ -1509,11 +1509,11 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "harness-mcp",
-    title: msg("Portable MCP servers, modes, skills, rules, commands & approvals"),
+    title: msg("Portable MCP servers, modes, skills, rules, commands, plugins, hooks & approvals"),
     to: "/settings/harness",
     searchTerms: [
       msg(
-        "harness mcp gateway stdio http sse modes build plan review creator approvals allow always revoke skills rules agents.md commands slash import export codex claude cursor antigravity",
+        "harness mcp gateway stdio http sse modes build plan review creator plugins claude-plugin hooks pretooluse posttooluse approvals allow always revoke skills rules agents.md commands slash import export codex claude cursor antigravity",
       ),
     ],
   },

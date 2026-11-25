@@ -154,5 +154,65 @@ export function createHarnessEnvironmentAtoms<R, E>(
       label: "environment-command:harness:approval-rules:revoke",
       tag: WS_METHODS.harnessApprovalRuleRevoke,
     }),
+    pluginsQuery: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:harness:plugins:list",
+      tag: WS_METHODS.harnessPluginsList,
+      staleTimeMs: 5_000,
+      idleTtlMs: 60_000,
+    }),
+    listPlugins: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:plugins:list",
+      tag: WS_METHODS.harnessPluginsList,
+    }),
+    installPlugin: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:plugins:install",
+      tag: WS_METHODS.harnessPluginInstall,
+    }),
+    trustPlugin: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:plugins:trust",
+      tag: WS_METHODS.harnessPluginTrust,
+    }),
+    setPluginEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:plugins:set-enabled",
+      tag: WS_METHODS.harnessPluginSetEnabled,
+    }),
+    removePlugin: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:plugins:remove",
+      tag: WS_METHODS.harnessPluginRemove,
+    }),
+    reloadPlugins: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:plugins:reload",
+      tag: WS_METHODS.harnessPluginReload,
+    }),
+    hooksQuery: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:harness:hooks:list",
+      tag: WS_METHODS.harnessHooksList,
+      staleTimeMs: 5_000,
+      idleTtlMs: 60_000,
+    }),
+    listHooks: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:hooks:list",
+      tag: WS_METHODS.harnessHooksList,
+    }),
+    upsertHook: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:hooks:upsert",
+      tag: WS_METHODS.harnessHookUpsert,
+    }),
+    removeHook: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:hooks:remove",
+      tag: WS_METHODS.harnessHookRemove,
+    }),
+    setHookEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:hooks:set-enabled",
+      tag: WS_METHODS.harnessHookSetEnabled,
+    }),
+    testHook: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:hooks:test",
+      tag: WS_METHODS.harnessHookTest,
+    }),
+    validateWorkflow: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:workflow:validate",
+      tag: WS_METHODS.harnessWorkflowValidate,
+    }),
   };
 }

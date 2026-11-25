@@ -1,10 +1,22 @@
 // @effect-diagnostics globalJsonInEffect:off -- Dynamic MCP JSON-RPC 2.0 router relays opaque upstream tool schemas and call payloads.
-import { CommandId, DEFAULT_HARNESS_CAPABILITIES, HarnessError } from "@t3tools/contracts";
+import {
+  CommandId,
+  DEFAULT_HARNESS_CAPABILITIES,
+  HarnessError,
+  HarnessMcpServerId,
+  HarnessModeId,
+  HarnessPluginId,
+  HarnessRuleId,
+  HarnessSkillId,
+  TrimmedNonEmptyString,
+} from "@t3tools/contracts";
 import { MCP_TOOL_EXPOSURE_HEADER } from "@t3tools/provider-core/server/mcpSession";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import packageJson from "../../package.json" with { type: "json" };
@@ -16,8 +28,17 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import { compileAndValidateDeclarativeWorkflow } from "./DeclarativeWorkflowCompiler.ts";
+import * as HarnessHooksService from "./HarnessHooksService.ts";
 import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import * as McpGateway from "./McpGateway.ts";
+import * as PluginHost from "./PluginHost.ts";
+
+const decodeSkillId = Schema.decodeUnknownOption(HarnessSkillId);
+const decodeRuleId = Schema.decodeUnknownOption(HarnessRuleId);
+const decodeMcpServerId = Schema.decodeUnknownOption(HarnessMcpServerId);
+const decodeModeId = Schema.decodeUnknownOption(HarnessModeId);
+const decodePluginId = Schema.decodeUnknownOption(HarnessPluginId);
 
 const SUPPORTED_PROTOCOL_VERSION = "2025-06-18";
 
@@ -74,6 +95,8 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
   readonly registry: McpSessionRegistry.McpSessionRegistry["Service"];
   readonly gateway: McpGateway.McpGateway["Service"];
   readonly libraryStore: Option.Option<HarnessLibraryStore.HarnessLibraryStore["Service"]>;
+  readonly hooksService: Option.Option<HarnessHooksService.HarnessHooksService["Service"]>;
+  readonly pluginHost: Option.Option<PluginHost.PluginHost["Service"]>;
   readonly projections: ProjectionStore.ProjectionStoreV2["Service"];
   readonly projects: ProjectStore.ProjectStoreV2["Service"];
   readonly adapterRegistry: ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"];
@@ -90,6 +113,8 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     registry,
     gateway,
     libraryStore,
+    hooksService,
+    pluginHost,
     projections,
     projects,
     adapterRegistry,
@@ -199,6 +224,11 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
         librarySnapshot.rules.some((rule) => rule.effectiveEnabled) ||
         (librarySnapshot.userAgentsMd.exists &&
           librarySnapshot.userAgentsMd.body.trim().length > 0));
+    const includeCreatorTools =
+      snapshot.managedPolicyAllowsHarness &&
+      supportsMcpTools &&
+      shell.interactionMode !== "plan" &&
+      shell.modeId === "creator";
     const context: McpGateway.GatewaySessionContext = {
       providerSessionId: scope.thread.providerSessionId,
       workspaceRoot,
@@ -210,6 +240,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
         !emitsProposedPlan &&
         supportsMcpTools,
       includeLibraryTools,
+      includeCreatorTools,
       deferredExposure,
       harnessCapabilities,
     };
@@ -282,6 +313,300 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
               text: "Portable harness extensions are disabled by this environment's managed policy.",
             },
           ],
+        },
+        sessionId,
+      );
+    }
+
+    if (Option.isSome(hooksService)) {
+      const preOutcome = yield* hooksService.value.runToolHook("PreToolUse", {
+        threadId: scope.thread.threadId,
+        toolName,
+        arguments: toolArgs,
+        workspaceRoot: state.context.workspaceRoot,
+      });
+      if (preOutcome.blocked) {
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: preOutcome.blockReason ?? `Tool "${toolName}" blocked by PreToolUse hook.`,
+              },
+            ],
+          },
+          sessionId,
+        );
+      }
+    }
+
+    const emitPostToolHook = (isError: boolean) =>
+      Option.isSome(hooksService)
+        ? hooksService.value.runToolHook("PostToolUse", {
+            threadId: scope.thread.threadId,
+            toolName,
+            arguments: toolArgs,
+            workspaceRoot: state.context.workspaceRoot,
+            isError,
+          })
+        : Effect.void;
+
+    if (toolName === McpGateway.HARNESS_WORKFLOW_VALIDATE_NAME) {
+      const yaml = typeof toolArgs.yaml === "string" ? toolArgs.yaml : "";
+      const knownModes = state.librarySnapshot
+        ? new Set(state.librarySnapshot.modes.map((m) => m.id))
+        : undefined;
+      const validation = compileAndValidateDeclarativeWorkflow(yaml, knownModes);
+      yield* emitPostToolHook(!validation.valid);
+      return jsonRpcSuccess(
+        rpc.id,
+        {
+          isError: !validation.valid,
+          content: [
+            {
+              type: "text",
+              text: validation.valid
+                ? `Valid workflow "${validation.name ?? "unnamed"}" (execution order: ${validation.executionOrder.join(" -> ")}).\n\n${validation.compiledPreview ?? ""}`
+                : `Workflow validation failed:\n${validation.issues.map((i) => `- [${i.severity}] ${i.path}: ${i.message}`).join("\n")}`,
+            },
+          ],
+          structuredContent: validation,
+        },
+        sessionId,
+      );
+    }
+
+    if (toolName === McpGateway.HARNESS_WRITE_SKILL_NAME) {
+      if (!state.context.includeCreatorTools || Option.isNone(libraryStore)) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [
+              { type: "text", text: "harness_write_skill is only available in Creator mode." },
+            ],
+          },
+          sessionId,
+        );
+      }
+      const rawId = typeof toolArgs.id === "string" ? toolArgs.id.trim() : "";
+      const body = typeof toolArgs.body === "string" ? toolArgs.body : "";
+      const idOpt = decodeSkillId(rawId);
+      if (idOpt._tag === "None" || body.trim().length === 0) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "harness_write_skill requires a valid skill id and non-empty markdown body.",
+              },
+            ],
+          },
+          sessionId,
+        );
+      }
+      const saved = yield* libraryStore.value
+        .upsertUserSkill({
+          id: idOpt.value,
+          ...(typeof toolArgs.name === "string" && toolArgs.name.trim()
+            ? { name: TrimmedNonEmptyString.make(toolArgs.name.trim()) }
+            : {}),
+          ...(typeof toolArgs.description === "string" && toolArgs.description.trim()
+            ? { description: toolArgs.description.trim() }
+            : {}),
+          body,
+          ...(state.context.workspaceRoot
+            ? { workspaceRoot: TrimmedNonEmptyString.make(state.context.workspaceRoot) }
+            : {}),
+        })
+        .pipe(Effect.result);
+      if (Result.isFailure(saved)) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          { isError: true, content: [{ type: "text", text: saved.failure.detail }] },
+          sessionId,
+        );
+      }
+      yield* emitPostToolHook(false);
+      return jsonRpcSuccess(
+        rpc.id,
+        {
+          content: [
+            {
+              type: "text",
+              text: `Saved portable skill "${idOpt.value}" under ~/.t3/harness/skills/${idOpt.value}/SKILL.md.`,
+            },
+          ],
+        },
+        sessionId,
+      );
+    }
+
+    if (toolName === McpGateway.HARNESS_CREATE_MODE_NAME) {
+      if (!state.context.includeCreatorTools || Option.isNone(libraryStore)) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [
+              { type: "text", text: "harness_create_mode is only available in Creator mode." },
+            ],
+          },
+          sessionId,
+        );
+      }
+      const rawId = typeof toolArgs.id === "string" ? toolArgs.id.trim() : "";
+      const body = typeof toolArgs.body === "string" ? toolArgs.body : "";
+      const idOpt = decodeModeId(rawId);
+      if (idOpt._tag === "None" || body.trim().length === 0) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "harness_create_mode requires a valid mode id and non-empty markdown body.",
+              },
+            ],
+          },
+          sessionId,
+        );
+      }
+      const decodeList = <T>(
+        value: unknown,
+        decode: (v: unknown) => Option.Option<T>,
+      ): ReadonlyArray<T> | undefined => {
+        if (!Array.isArray(value)) return undefined;
+        const out: Array<T> = [];
+        for (const item of value) {
+          const decoded = decode(item);
+          if (Option.isSome(decoded)) out.push(decoded.value);
+        }
+        return out.length > 0 ? out : undefined;
+      };
+      const allowedMcpServers = decodeList(toolArgs.allowedMcpServers, decodeMcpServerId);
+      const includedRules = decodeList(toolArgs.includedRules, decodeRuleId);
+      const includedSkills = decodeList(toolArgs.includedSkills, decodeSkillId);
+      const saved = yield* libraryStore.value
+        .upsertUserMode({
+          id: idOpt.value,
+          ...(typeof toolArgs.name === "string" && toolArgs.name.trim()
+            ? { name: TrimmedNonEmptyString.make(toolArgs.name.trim()) }
+            : {}),
+          ...(typeof toolArgs.description === "string" && toolArgs.description.trim()
+            ? { description: toolArgs.description.trim() }
+            : {}),
+          baseInteractionMode: toolArgs.baseInteractionMode === "plan" ? "plan" : "default",
+          ...(typeof toolArgs.readonly === "boolean" ? { readonly: toolArgs.readonly } : {}),
+          ...(typeof toolArgs.proposePlan === "boolean"
+            ? { proposePlan: toolArgs.proposePlan }
+            : {}),
+          ...(allowedMcpServers ? { allowedMcpServers } : {}),
+          ...(includedRules ? { includedRules } : {}),
+          ...(includedSkills ? { includedSkills } : {}),
+          body,
+          ...(state.context.workspaceRoot
+            ? { workspaceRoot: TrimmedNonEmptyString.make(state.context.workspaceRoot) }
+            : {}),
+        })
+        .pipe(Effect.result);
+      if (Result.isFailure(saved)) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          { isError: true, content: [{ type: "text", text: saved.failure.detail }] },
+          sessionId,
+        );
+      }
+      yield* emitPostToolHook(false);
+      return jsonRpcSuccess(
+        rpc.id,
+        {
+          content: [
+            {
+              type: "text",
+              text: `Saved declarative mode "${idOpt.value}" under ~/.t3/harness/modes/${idOpt.value}.md.`,
+            },
+          ],
+        },
+        sessionId,
+      );
+    }
+
+    if (toolName === McpGateway.HARNESS_PLUGIN_PACK_NAME) {
+      if (!state.context.includeCreatorTools || Option.isNone(pluginHost)) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [{ type: "text", text: "plugin_pack is only available in Creator mode." }],
+          },
+          sessionId,
+        );
+      }
+      const rawId = typeof toolArgs.id === "string" ? toolArgs.id.trim() : "";
+      const name = typeof toolArgs.name === "string" ? toolArgs.name.trim() : "";
+      const version = typeof toolArgs.version === "string" ? toolArgs.version.trim() : "";
+      const idOpt = decodePluginId(rawId);
+      if (idOpt._tag === "None" || name.length === 0 || version.length === 0) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "plugin_pack requires valid id, name, and version fields.",
+              },
+            ],
+          },
+          sessionId,
+        );
+      }
+      const packed = yield* pluginHost.value
+        .packPlugin({
+          id: idOpt.value,
+          name,
+          version,
+          ...(typeof toolArgs.description === "string" && toolArgs.description.trim()
+            ? { description: toolArgs.description.trim() }
+            : {}),
+          ...(typeof toolArgs.author === "string" && toolArgs.author.trim()
+            ? { author: toolArgs.author.trim() }
+            : {}),
+        })
+        .pipe(Effect.result);
+      if (Result.isFailure(packed)) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          { isError: true, content: [{ type: "text", text: packed.failure.detail }] },
+          sessionId,
+        );
+      }
+      yield* emitPostToolHook(false);
+      return jsonRpcSuccess(
+        rpc.id,
+        {
+          content: [
+            {
+              type: "text",
+              text: `Packed plugin "${packed.success.id}" at ${packed.success.manifestPath} (${packed.success.fileCount} files, sha256:${packed.success.contentDigest.slice(0, 16)}). Owner trust confirmation is required in Settings -> Harness -> Plugins before activation.`,
+            },
+          ],
+          structuredContent: packed.success,
         },
         sessionId,
       );
@@ -542,6 +867,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
           }),
         ),
       );
+    yield* emitPostToolHook(result.isError === true);
     return jsonRpcSuccess(rpc.id, result, sessionId);
   }
 
@@ -578,6 +904,8 @@ export const layer = Layer.unwrap(
     const registry = yield* McpSessionRegistry.McpSessionRegistry;
     const gateway = yield* McpGateway.McpGateway;
     const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+    const hooksService = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
+    const pluginHost = yield* Effect.serviceOption(PluginHost.PluginHost);
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const projects = yield* ProjectStore.ProjectStoreV2;
     const adapterRegistry = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
@@ -587,6 +915,8 @@ export const layer = Layer.unwrap(
       registry,
       gateway,
       libraryStore,
+      hooksService,
+      pluginHost,
       projections,
       projects,
       adapterRegistry,

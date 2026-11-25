@@ -39,6 +39,7 @@ import { SettingsSection } from "./components/SettingsSection";
 import { formatMobileTargetHost, formatMobileTransportBreakdown } from "./harness-confirmation";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
 import { type MobileHarnessTab, SettingsHarnessLibraryPanel } from "./SettingsHarnessLibraryPanel";
+import { SettingsHarnessPluginsHooksPanel } from "./SettingsHarnessPluginsHooksPanel";
 
 const decodeServerId = Schema.decodeUnknownSync(HarnessMcpServerId);
 
@@ -731,6 +732,8 @@ function EnvironmentHarnessSection({
                   ["skills", gt("Skills")],
                   ["rules", gt("Rules")],
                   ["commands", gt("Commands")],
+                  ["plugins", gt("Plugins")],
+                  ["hooks", gt("Hooks")],
                   ["permissions", gt("Permissions")],
                   ["transfer", gt("Import / Export")],
                 ] as const
@@ -744,7 +747,15 @@ function EnvironmentHarnessSection({
               ))}
             </ScrollView>
 
-            {activeTab !== "mcp" ? (
+            {activeTab === "plugins" || activeTab === "hooks" ? (
+              <SettingsHarnessPluginsHooksPanel
+                activeTab={activeTab}
+                environmentId={environmentId}
+                targetHost={targetHost}
+                canWriteSettings={canWriteSettings}
+                canOperateTerminal={canOperateTerminal}
+              />
+            ) : activeTab !== "mcp" ? (
               <SettingsHarnessLibraryPanel
                 activeTab={activeTab}
                 environmentId={environmentId}

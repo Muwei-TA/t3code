@@ -74,6 +74,7 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
 import { useSettingsScope } from "./SettingsScopeContext";
 import { useSearchableSetting } from "./settingsSearch";
 import { HarnessLibraryPanels, type HarnessPanelTab } from "./HarnessLibraryTabs";
+import { HarnessHooksTab, HarnessPluginsTab } from "./HarnessPluginsAndHooksTabs";
 
 const decodeServerId = Schema.decodeUnknownOption(HarnessMcpServerId);
 
@@ -150,6 +151,8 @@ export function HarnessSettingsPanel() {
     { id: "skills", label: gt("Skills") },
     { id: "rules", label: gt("Rules & AGENTS.md") },
     { id: "commands", label: gt("Commands") },
+    { id: "plugins", label: gt("Plugins") },
+    { id: "hooks", label: gt("Hooks") },
     { id: "approvals", label: gt("Approvals") },
     { id: "transfer", label: gt("Import / Export") },
   ];
@@ -175,6 +178,16 @@ export function HarnessSettingsPanel() {
               key={`${environment.environmentId}:${workspaceRoot ?? ""}`}
               environment={environment}
               workspaceRoot={workspaceRoot}
+            />
+          ) : activeTab === "plugins" ? (
+            <HarnessPluginsTab
+              key={`${environment.environmentId}:plugins`}
+              environmentId={environment.environmentId}
+            />
+          ) : activeTab === "hooks" ? (
+            <HarnessHooksTab
+              key={`${environment.environmentId}:hooks`}
+              environmentId={environment.environmentId}
             />
           ) : (
             <HarnessLibraryPanels

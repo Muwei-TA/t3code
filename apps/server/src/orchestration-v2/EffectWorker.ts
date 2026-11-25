@@ -31,6 +31,7 @@ import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as HarnessHooksService from "../harness/HarnessHooksService.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
 
 const isProviderTurnControlError = Schema.is(ProviderTurnControlService.ProviderTurnControlError);
@@ -117,6 +118,7 @@ export const layerExecutor: Layer.Layer<
     const threads = yield* ThreadManagementService.ThreadManagementService;
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const harnessHooksOption = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
     const startRun = (
       effect: EffectOutbox.OrchestrationEffectV2,
       runId: RunId,
@@ -587,19 +589,42 @@ export const layerExecutor: Layer.Layer<
                     }),
                 ),
               );
-          case "checkpoint.capture":
+          case "checkpoint.capture": {
+            const { runId, scopeId } = effect.request;
             return runFinalization
               .finalize({
                 threadId: effect.threadId,
-                runId: effect.request.runId,
-                scopeId: effect.request.scopeId,
+                runId,
+                scopeId,
               })
               .pipe(
                 // Completion bookkeeping must survive a missed live run update, including capture retries.
                 Effect.andThen(
                   threads.recoverDelegatedTask(effect.threadId, {
-                    completedRunId: effect.request.runId,
+                    completedRunId: runId,
                   }),
+                ),
+                Effect.tap(() =>
+                  Option.isSome(harnessHooksOption)
+                    ? Effect.all(
+                        [
+                          harnessHooksOption.value.emitLifecycleEvent("checkpoint.created", {
+                            threadId: effect.threadId,
+                            runId,
+                            scopeId,
+                          }),
+                          harnessHooksOption.value.emitLifecycleEvent("turn.completed", {
+                            threadId: effect.threadId,
+                            runId,
+                          }),
+                          harnessHooksOption.value.emitLifecycleEvent("run.settled", {
+                            threadId: effect.threadId,
+                            runId,
+                          }),
+                        ],
+                        { discard: true },
+                      )
+                    : Effect.void,
                 ),
                 Effect.mapError(
                   (cause) =>
@@ -610,6 +635,7 @@ export const layerExecutor: Layer.Layer<
                     }),
                 ),
               );
+          }
           case "scheduled-tasks.cleanup":
             return resourceCleanup.cleanupScheduledTasks(effect.threadId).pipe(
               Effect.mapError(

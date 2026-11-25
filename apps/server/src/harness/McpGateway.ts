@@ -45,6 +45,10 @@ export const HARNESS_PROPOSE_PLAN_NAME = "propose_plan";
 export const HARNESS_SKILL_SEARCH_NAME = "harness_skill_search";
 export const HARNESS_SKILL_LOAD_NAME = "harness_skill_load";
 export const HARNESS_RULE_READ_NAME = "harness_rule_read";
+export const HARNESS_WRITE_SKILL_NAME = "harness_write_skill";
+export const HARNESS_CREATE_MODE_NAME = "harness_create_mode";
+export const HARNESS_WORKFLOW_VALIDATE_NAME = "workflow_validate";
+export const HARNESS_PLUGIN_PACK_NAME = "plugin_pack";
 
 const DEFAULT_IDLE_TTL_MS = 10 * 60 * 1_000;
 const DEFERRED_THRESHOLD_TOOLS = 24;
@@ -67,6 +71,7 @@ export interface GatewaySessionContext {
   readonly runtimeMode: RuntimeMode;
   readonly includeProposePlan: boolean;
   readonly includeLibraryTools?: boolean | undefined;
+  readonly includeCreatorTools?: boolean | undefined;
   readonly deferredExposure: boolean;
   readonly harnessCapabilities?: OrchestrationV2HarnessCapabilities | undefined;
 }
@@ -393,6 +398,93 @@ const HARNESS_RULE_READ_DEF: GatewayExposedTool = {
     additionalProperties: false,
   },
   readOnly: true,
+};
+
+const HARNESS_WRITE_SKILL_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_WRITE_SKILL_NAME,
+  serverId: null,
+  upstreamName: HARNESS_WRITE_SKILL_NAME,
+  description:
+    "Create or update a portable SKILL.md under ~/.t3/harness/skills/<id>/SKILL.md (available in Creator Mode).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: { type: "string", description: "Skill id (letters, digits, hyphens, underscores)." },
+      name: { type: "string", description: "Optional human-readable display name." },
+      description: { type: "string", description: "When agents should activate this skill." },
+      body: { type: "string", description: "Markdown instructions body for SKILL.md." },
+    },
+    required: ["id", "body"],
+    additionalProperties: false,
+  },
+  readOnly: false,
+};
+
+const HARNESS_CREATE_MODE_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_CREATE_MODE_NAME,
+  serverId: null,
+  upstreamName: HARNESS_CREATE_MODE_NAME,
+  description:
+    "Create or update a declarative portable mode under ~/.t3/harness/modes/<id>.md (available in Creator Mode).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: { type: "string", description: "Mode id (lowercase letters, digits, hyphens)." },
+      name: { type: "string", description: "Display name for the mode." },
+      description: { type: "string", description: "Short summary shown in mode switcher." },
+      baseInteractionMode: { type: "string", enum: ["default", "plan"] },
+      readonly: { type: "boolean" },
+      proposePlan: { type: "boolean" },
+      allowedMcpServers: { type: "array", items: { type: "string" } },
+      includedRules: { type: "array", items: { type: "string" } },
+      includedSkills: { type: "array", items: { type: "string" } },
+      body: { type: "string", description: "System prompt markdown for this mode." },
+    },
+    required: ["id", "body"],
+    additionalProperties: false,
+  },
+  readOnly: false,
+};
+
+const HARNESS_WORKFLOW_VALIDATE_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_WORKFLOW_VALIDATE_NAME,
+  serverId: null,
+  upstreamName: HARNESS_WORKFLOW_VALIDATE_NAME,
+  description:
+    "Validate a declarative workflows/*.yaml document (step DAG, modeIds, in-thread/child steps) and preview its compiled T3 workflow.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      yaml: { type: "string", description: "Full YAML source of the workflow." },
+    },
+    required: ["yaml"],
+    additionalProperties: false,
+  },
+  readOnly: true,
+};
+
+const HARNESS_PLUGIN_PACK_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_PLUGIN_PACK_NAME,
+  serverId: null,
+  upstreamName: HARNESS_PLUGIN_PACK_NAME,
+  description:
+    "Create or refresh t3-plugin.json for a plugin under ~/.t3/harness/plugins/<id> and compute its SHA-256 content digest for owner trust review (available in Creator Mode).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: {
+        type: "string",
+        description: "Plugin id (letters, digits, dots, hyphens, underscores).",
+      },
+      name: { type: "string", description: "Plugin display name." },
+      version: { type: "string", description: "Semver version string (e.g. 1.0.0)." },
+      description: { type: "string" },
+      author: { type: "string" },
+    },
+    required: ["id", "name", "version"],
+    additionalProperties: false,
+  },
+  readOnly: false,
 };
 
 export class McpGateway extends Context.Service<
@@ -1097,7 +1189,20 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       listed.push(HARNESS_PROPOSE_PLAN_DEF);
     }
     if (context.includeLibraryTools) {
-      listed.push(HARNESS_SKILL_SEARCH_DEF, HARNESS_SKILL_LOAD_DEF, HARNESS_RULE_READ_DEF);
+      listed.push(
+        HARNESS_SKILL_SEARCH_DEF,
+        HARNESS_SKILL_LOAD_DEF,
+        HARNESS_RULE_READ_DEF,
+        HARNESS_WORKFLOW_VALIDATE_DEF,
+      );
+    }
+    if (context.includeCreatorTools) {
+      listed.push(
+        HARNESS_WRITE_SKILL_DEF,
+        HARNESS_CREATE_MODE_DEF,
+        ...(context.includeLibraryTools ? [] : [HARNESS_WORKFLOW_VALIDATE_DEF]),
+        HARNESS_PLUGIN_PACK_DEF,
+      );
     }
     if (!shouldDefer) {
       listed.push(...upstreamTools);

@@ -83,6 +83,8 @@ export type HarnessPanelTab =
   | "skills"
   | "rules"
   | "commands"
+  | "plugins"
+  | "hooks"
   | "approvals"
   | "transfer";
 
@@ -91,7 +93,7 @@ export function HarnessLibraryPanels({
   environmentId,
   workspaceRoot,
 }: {
-  readonly activeTab: Exclude<HarnessPanelTab, "mcp">;
+  readonly activeTab: Exclude<HarnessPanelTab, "mcp" | "plugins" | "hooks">;
   readonly environmentId: EnvironmentId;
   readonly workspaceRoot: string | undefined;
 }) {

@@ -132,6 +132,15 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.harnessModeRemove]: AuthSettingsWriteScope,
   [WS_METHODS.harnessModeSetEnabled]: AuthSettingsWriteScope,
   [WS_METHODS.harnessApprovalRuleRevoke]: AuthOrchestrationOperateScope,
+  [WS_METHODS.harnessPluginInstall]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessPluginTrust]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessPluginSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessPluginRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessPluginReload]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessHookUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessHookRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessHookSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessHookTest]: AuthSettingsWriteScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 
@@ -182,6 +191,19 @@ export function clientRpcRequiredScopes(
   }
   if (method === WS_METHODS.harnessExportApply) {
     return [AuthSettingsWriteScope, AuthProvidersManageScope];
+  }
+  if (
+    method === WS_METHODS.harnessHookUpsert &&
+    input !== null &&
+    typeof input === "object" &&
+    typeof Reflect.get(input, "target") === "object" &&
+    Reflect.get(input, "target") !== null &&
+    Reflect.get(Reflect.get(input, "target") as object, "type") === "command"
+  ) {
+    return [AuthSettingsWriteScope, AuthTerminalOperateScope];
+  }
+  if (method === WS_METHODS.harnessHookTest) {
+    return [AuthSettingsWriteScope, AuthTerminalOperateScope];
   }
   return Object.hasOwn(CLIENT_GUARDED_RPC_SCOPES, method)
     ? [CLIENT_GUARDED_RPC_SCOPES[method as ClientGuardedRpcTag]]

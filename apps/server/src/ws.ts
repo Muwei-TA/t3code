@@ -139,6 +139,9 @@ import * as HarnessExporter from "./harness/HarnessExporter.ts";
 import { configContainsSecretPlaceholder } from "./harness/HarnessSecrets.ts";
 import * as McpGateway from "./harness/McpGateway.ts";
 import * as HarnessApprovalAuditStore from "./harness/HarnessApprovalAuditStore.ts";
+import * as HarnessHooksService from "./harness/HarnessHooksService.ts";
+import * as PluginHost from "./harness/PluginHost.ts";
+import { compileAndValidateDeclarativeWorkflow } from "./harness/DeclarativeWorkflowCompiler.ts";
 import * as HarnessContextService from "./harness/HarnessContextService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
@@ -1472,6 +1475,8 @@ export const layerWsRpc = (
     readonly harnessApprovalAudit?:
       | HarnessApprovalAuditStore.HarnessApprovalAuditStore["Service"]
       | undefined;
+    readonly harnessHooks?: HarnessHooksService.HarnessHooksService["Service"] | undefined;
+    readonly pluginHost?: PluginHost.PluginHost["Service"] | undefined;
     readonly mcpGateway?: McpGateway.McpGateway["Service"] | undefined;
     readonly harnessContext?: HarnessContextService.HarnessContextService["Service"] | undefined;
   },
@@ -1524,6 +1529,14 @@ export const layerWsRpc = (
         harnessServices?.harnessApprovalAudit !== undefined
           ? Option.some(harnessServices.harnessApprovalAudit)
           : yield* Effect.serviceOption(HarnessApprovalAuditStore.HarnessApprovalAuditStore);
+      const harnessHooksOption =
+        harnessServices?.harnessHooks !== undefined
+          ? Option.some(harnessServices.harnessHooks)
+          : yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
+      const pluginHostOption =
+        harnessServices?.pluginHost !== undefined
+          ? Option.some(harnessServices.pluginHost)
+          : yield* Effect.serviceOption(PluginHost.PluginHost);
       const mcpGatewayOption =
         harnessServices?.mcpGateway !== undefined
           ? Option.some(harnessServices.mcpGateway)
@@ -4038,6 +4051,83 @@ export const layerWsRpc = (
               return { rule, sessionDetached, note };
             }),
           }),
+        [WS_METHODS.harnessPluginsList]: () =>
+          Option.match(pluginHostOption, {
+            onNone: () => harnessUnavailable("PluginHost"),
+            onSome: (host) => host.list(),
+          }),
+        [WS_METHODS.harnessPluginInstall]: (input) =>
+          Option.match(pluginHostOption, {
+            onNone: () => harnessUnavailable("PluginHost"),
+            onSome: (host) => authorizeEffect(AuthSettingsWriteScope, host.install(input)),
+          }),
+        [WS_METHODS.harnessPluginTrust]: (input) =>
+          Option.match(pluginHostOption, {
+            onNone: () => harnessUnavailable("PluginHost"),
+            onSome: (host) => authorizeEffect(AuthSettingsWriteScope, host.trust(input)),
+          }),
+        [WS_METHODS.harnessPluginSetEnabled]: (input) =>
+          Option.match(pluginHostOption, {
+            onNone: () => harnessUnavailable("PluginHost"),
+            onSome: (host) => authorizeEffect(AuthSettingsWriteScope, host.setEnabled(input)),
+          }),
+        [WS_METHODS.harnessPluginRemove]: (input) =>
+          Option.match(pluginHostOption, {
+            onNone: () => harnessUnavailable("PluginHost"),
+            onSome: (host) => authorizeEffect(AuthSettingsWriteScope, host.remove(input)),
+          }),
+        [WS_METHODS.harnessPluginReload]: (input) =>
+          Option.match(pluginHostOption, {
+            onNone: () => harnessUnavailable("PluginHost"),
+            onSome: (host) => authorizeEffect(AuthSettingsWriteScope, host.reload(input)),
+          }),
+        [WS_METHODS.harnessHooksList]: () =>
+          Option.match(harnessHooksOption, {
+            onNone: () => harnessUnavailable("HarnessHooksService"),
+            onSome: (hooks) => hooks.list(),
+          }),
+        [WS_METHODS.harnessHookUpsert]: (input) =>
+          Option.match(harnessHooksOption, {
+            onNone: () => harnessUnavailable("HarnessHooksService"),
+            onSome: (hooks) =>
+              input.target.type === "command"
+                ? authorizeEffect(
+                    AuthSettingsWriteScope,
+                    authorizeEffect(AuthTerminalOperateScope, hooks.upsertUserHook(input)),
+                  )
+                : authorizeEffect(AuthSettingsWriteScope, hooks.upsertUserHook(input)),
+          }),
+        [WS_METHODS.harnessHookRemove]: (input) =>
+          Option.match(harnessHooksOption, {
+            onNone: () => harnessUnavailable("HarnessHooksService"),
+            onSome: (hooks) => authorizeEffect(AuthSettingsWriteScope, hooks.removeUserHook(input)),
+          }),
+        [WS_METHODS.harnessHookSetEnabled]: (input) =>
+          Option.match(harnessHooksOption, {
+            onNone: () => harnessUnavailable("HarnessHooksService"),
+            onSome: (hooks) =>
+              authorizeEffect(AuthSettingsWriteScope, hooks.setUserHookEnabled(input)),
+          }),
+        [WS_METHODS.harnessHookTest]: (input) =>
+          Option.match(harnessHooksOption, {
+            onNone: () => harnessUnavailable("HarnessHooksService"),
+            onSome: (hooks) =>
+              authorizeEffect(
+                AuthSettingsWriteScope,
+                authorizeEffect(AuthTerminalOperateScope, hooks.testHook(input)),
+              ),
+          }),
+        [WS_METHODS.harnessWorkflowValidate]: Effect.fn("ws.harnessWorkflowValidate")(
+          function* (input) {
+            const knownModes = Option.isSome(harnessLibraryStoreOption)
+              ? yield* harnessLibraryStoreOption.value.getSnapshot().pipe(
+                  Effect.map((snap) => new Set<string>(snap.modes.map((m) => m.id))),
+                  Effect.orElseSucceed(() => undefined),
+                )
+              : undefined;
+            return compileAndValidateDeclarativeWorkflow(input.yaml, knownModes);
+          },
+        ),
       });
       const splitHandlers: Pick<typeof handlers, SplitWsRpc["_tag"]> = handlers;
       const otherHandlers: Pick<typeof handlers, Exclude<ServerWsRpc, SplitWsRpc>["_tag"]> =
@@ -4082,6 +4172,8 @@ export const layer = Layer.unwrap(
     const harnessApprovalAudit = yield* Effect.serviceOption(
       HarnessApprovalAuditStore.HarnessApprovalAuditStore,
     );
+    const harnessHooks = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
+    const pluginHost = yield* Effect.serviceOption(PluginHost.PluginHost);
     const mcpGateway = yield* Effect.serviceOption(McpGateway.McpGateway);
     const harnessContext = yield* Effect.serviceOption(HarnessContextService.HarnessContextService);
     const capturedHarnessServices = {
@@ -4091,6 +4183,8 @@ export const layer = Layer.unwrap(
       harnessLibraryImporter: Option.getOrUndefined(harnessLibraryImporter),
       harnessExporter: Option.getOrUndefined(harnessExporter),
       harnessApprovalAudit: Option.getOrUndefined(harnessApprovalAudit),
+      harnessHooks: Option.getOrUndefined(harnessHooks),
+      pluginHost: Option.getOrUndefined(pluginHost),
       mcpGateway: Option.getOrUndefined(mcpGateway),
       harnessContext: Option.getOrUndefined(harnessContext),
     };

@@ -37,6 +37,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import * as ServerConfig from "../config.ts";
 import * as HarnessStore from "./HarnessStore.ts";
+import * as PluginHost from "./PluginHost.ts";
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 const MAX_READ_BYTES = 262_144;
@@ -412,6 +413,7 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const store = yield* HarnessStore.HarnessStore;
+  const pluginHostOption = yield* Effect.serviceOption(PluginHost.PluginHost);
 
   const harnessDir = store.harnessDir;
   const mountsRoot = path.join(serverConfig.stateDir, "harness-mounts");
@@ -877,6 +879,40 @@ const make = Effect.gen(function* () {
         overrides.managedPolicyAllowsHarness && enabled && !overriddenByProject;
       const { frontmatterEnabled: _fm, ...rest } = item;
       modes.push({ ...rest, enabled, effectiveEnabled, overriddenByProject });
+    }
+
+    // Merge active (trusted + enabled) plugin contributions without overriding user/project ids.
+    if (Option.isSome(pluginHostOption) && overrides.managedPolicyAllowsHarness) {
+      const existingSkillIds = new Set(skills.map((s) => s.id));
+      const existingRuleIds = new Set(rules.map((r) => r.id));
+      const existingCommandIds = new Set(commands.map((c) => c.id));
+      const existingModeIds = new Set(modes.map((m) => m.id));
+      for (const contrib of pluginHostOption.value.getActiveContributions()) {
+        for (const s of contrib.skills) {
+          if (!existingSkillIds.has(s.id)) {
+            existingSkillIds.add(s.id);
+            skills.push(s);
+          }
+        }
+        for (const r of contrib.rules) {
+          if (!existingRuleIds.has(r.id)) {
+            existingRuleIds.add(r.id);
+            rules.push(r);
+          }
+        }
+        for (const c of contrib.commands) {
+          if (!existingCommandIds.has(c.id)) {
+            existingCommandIds.add(c.id);
+            commands.push(c);
+          }
+        }
+        for (const m of contrib.modes) {
+          if (!existingModeIds.has(m.id)) {
+            existingModeIds.add(m.id);
+            modes.push(m);
+          }
+        }
+      }
     }
 
     return {
