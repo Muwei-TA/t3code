@@ -3547,10 +3547,20 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                     kind: "turn_start",
                   });
                 } else if (payload !== null) {
+                  const harnessText = (turnInput.harnessContext ?? [])
+                    .map((entry) => entry.text)
+                    .filter((part) => part.length > 0)
+                    .join("\n\n");
+                  const isSlash = payload.message.trimStart().startsWith("/");
+                  const instructionBlocks = [
+                    ...(turnInput.runtimePolicy.interactionMode === "plan"
+                      ? [T3_CODE_HARNESS_PLAN_MODE_INSTRUCTIONS]
+                      : []),
+                    ...(harnessText.length > 0 ? [harnessText] : []),
+                  ];
                   const message =
-                    turnInput.runtimePolicy.interactionMode === "plan" &&
-                    !payload.message.trimStart().startsWith("/")
-                      ? `<t3_code_instructions>\n${T3_CODE_HARNESS_PLAN_MODE_INSTRUCTIONS}\n</t3_code_instructions>\n\n<user_request>\n${payload.message}\n</user_request>`
+                    instructionBlocks.length > 0 && !isSlash
+                      ? `<t3_code_instructions>\n${instructionBlocks.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${payload.message}\n</user_request>`
                       : payload.message;
                   yield* sendPrompt({
                     providerTurnId: providerTurn.id,

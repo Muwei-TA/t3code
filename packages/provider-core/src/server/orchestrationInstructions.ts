@@ -70,6 +70,11 @@ Investigate with read-only actions and do not edit files or otherwise execute th
 export const T3_CODE_HARNESS_PROPOSE_PLAN_NOTE =
   "When the requirements are decision complete in Plan mode, publish the final Markdown plan by calling the `propose_plan` MCP tool and wait for user approval before starting implementation.";
 
+/** Fixed scaffold emitted only when portable skills or on-demand rules ride on `/mcp/harness`; guarded by AgentContextBudget. */
+export const T3_CODE_HARNESS_SCAFFOLD_INSTRUCTIONS = `<t3_harness>
+Portable personal harness tools are available on the \`t3-harness\` MCP server: use \`harness_skill_search\` and \`harness_skill_load\` to discover or read portable skills, and \`harness_rule_read\` to read on-demand or overflow rules on request.
+</t3_harness>`;
+
 const T3_CODE_ACP_PLAN_MODE_INSTRUCTIONS = `${T3_CODE_HARNESS_PLAN_MODE_INSTRUCTIONS} Treat this mode as active until T3 Code supplies a different interaction-mode instruction.`;
 
 export interface T3AcpInstructionState {

@@ -36,6 +36,8 @@ export interface McpProviderSessionConfig {
   readonly harnessEndpoint?: string | undefined;
   /** User-selected native passthrough servers, already trust-checked and secret-resolved for this session. */
   readonly nativeMcpServers?: ReadonlyArray<HarnessNativeMcpServer> | undefined;
+  /** Managed local Claude plugin directory mounting portable skills when `skillMount === "plugin-dir"`. */
+  readonly harnessSkillPluginDir?: string | undefined;
   /** Omit preview_* instructions when the user withholds agent browser access. */
   readonly browserToolsAvailable: boolean;
   readonly capabilities?: ReadonlySet<string>;

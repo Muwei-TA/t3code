@@ -1,8 +1,12 @@
 import {
   EnvironmentId,
+  HarnessCommandId,
+  HarnessSkillId,
+  NonNegativeInt,
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
+  TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { Atom, AtomRegistry } from "effect/reactivity";
@@ -13,6 +17,8 @@ import {
   getProviderSkillsForSlashMenu,
   hasCompleteProviderWorkspaceSnapshot,
   isProviderWorkspaceSnapshotScanning,
+  mergePortableHarnessCommands,
+  mergePortableHarnessSkills,
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
   resolveProvidersForCwd,
@@ -450,5 +456,98 @@ describe("provider workspace snapshot refresh atom", () => {
     registry.set(providersAtom, withSnapshot("2026-01-01T00:00:00.000Z"));
     expect(run).not.toHaveBeenCalled();
     unmount();
+  });
+});
+
+describe("portable Harness skill & command merging", () => {
+  it("merges enabled portable skills while deduplicating by path or case-insensitive name", () => {
+    const native = [
+      {
+        name: "existing-skill",
+        path: "/repo/.agents/skills/existing-skill/SKILL.md",
+        enabled: true,
+      },
+    ];
+    const merged = mergePortableHarnessSkills(native, [
+      {
+        id: HarnessSkillId.make("existing-skill"),
+        name: TrimmedNonEmptyString.make("Existing-Skill"),
+        scope: "user",
+        enabled: true,
+        effectiveEnabled: true,
+        overriddenByProject: false,
+        userInvocable: true,
+        userInvocationOnly: false,
+        sourcePath: "/home/user/.t3/harness/skills/existing-skill/SKILL.md",
+        contentDigest: "a",
+        bytes: NonNegativeInt.make(20),
+        body: "dup",
+      },
+      {
+        id: HarnessSkillId.make("disabled-skill"),
+        name: TrimmedNonEmptyString.make("disabled-skill"),
+        scope: "user",
+        enabled: false,
+        effectiveEnabled: false,
+        overriddenByProject: false,
+        userInvocable: true,
+        userInvocationOnly: false,
+        sourcePath: "/home/user/.t3/harness/skills/disabled-skill/SKILL.md",
+        contentDigest: "b",
+        bytes: NonNegativeInt.make(20),
+        body: "off",
+      },
+      {
+        id: HarnessSkillId.make("portable-audit"),
+        name: TrimmedNonEmptyString.make("portable-audit"),
+        scope: "user",
+        description: "Audit code",
+        enabled: true,
+        effectiveEnabled: true,
+        overriddenByProject: false,
+        userInvocable: true,
+        userInvocationOnly: false,
+        sourcePath: "/home/user/.t3/harness/skills/portable-audit/SKILL.md",
+        contentDigest: "c",
+        bytes: NonNegativeInt.make(40),
+        body: "check",
+      },
+    ]);
+    expect(merged.map((s) => s.name)).toEqual(["existing-skill", "portable-audit"]);
+    expect(merged[1]?.description).toBe("Audit code");
+  });
+
+  it("merges enabled portable commands without shadowing native slash commands", () => {
+    const native = [{ name: "compact", description: "Native compact" }];
+    const merged = mergePortableHarnessCommands(native, [
+      {
+        id: HarnessCommandId.make("review-pr"),
+        name: TrimmedNonEmptyString.make("review-pr"),
+        scope: "user",
+        description: "Review PR",
+        argumentHint: "<branch>",
+        enabled: true,
+        effectiveEnabled: true,
+        overriddenByProject: false,
+        sourcePath: "/home/user/.t3/harness/commands/review-pr.md",
+        contentDigest: "d",
+        bytes: NonNegativeInt.make(30),
+        body: "Review $1",
+      },
+      {
+        id: HarnessCommandId.make("muted-cmd"),
+        name: TrimmedNonEmptyString.make("muted-cmd"),
+        scope: "user",
+        enabled: false,
+        effectiveEnabled: false,
+        overriddenByProject: false,
+        sourcePath: "/home/user/.t3/harness/commands/muted-cmd.md",
+        contentDigest: "e",
+        bytes: NonNegativeInt.make(10),
+        body: "Muted",
+      },
+    ]);
+    expect(merged.map((c) => c.name)).toEqual(["compact", "review-pr"]);
+    expect(merged[1]?.input?.hint).toBe("<branch>");
   });
 });

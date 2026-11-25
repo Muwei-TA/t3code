@@ -58,5 +58,75 @@ export function createHarnessEnvironmentAtoms<R, E>(
       label: "environment-command:harness:thread:context-manifest",
       tag: WS_METHODS.harnessThreadContextManifest,
     }),
+    libraryQuery: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:harness:library:snapshot",
+      tag: WS_METHODS.harnessLibrarySnapshot,
+      staleTimeMs: 5_000,
+      idleTtlMs: 60_000,
+    }),
+    librarySnapshot: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:library:snapshot",
+      tag: WS_METHODS.harnessLibrarySnapshot,
+    }),
+    saveAgentsMd: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:agents-md:save",
+      tag: WS_METHODS.harnessAgentsMdSave,
+    }),
+    upsertSkill: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:skill:upsert",
+      tag: WS_METHODS.harnessSkillUpsert,
+    }),
+    removeSkill: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:skill:remove",
+      tag: WS_METHODS.harnessSkillRemove,
+    }),
+    setSkillEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:skill:set-enabled",
+      tag: WS_METHODS.harnessSkillSetEnabled,
+    }),
+    upsertRule: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:rule:upsert",
+      tag: WS_METHODS.harnessRuleUpsert,
+    }),
+    removeRule: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:rule:remove",
+      tag: WS_METHODS.harnessRuleRemove,
+    }),
+    setRuleEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:rule:set-enabled",
+      tag: WS_METHODS.harnessRuleSetEnabled,
+    }),
+    upsertCommand: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:command:upsert",
+      tag: WS_METHODS.harnessCommandUpsert,
+    }),
+    removeCommand: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:command:remove",
+      tag: WS_METHODS.harnessCommandRemove,
+    }),
+    setCommandEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:command:set-enabled",
+      tag: WS_METHODS.harnessCommandSetEnabled,
+    }),
+    updateSettings: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:settings:update",
+      tag: WS_METHODS.harnessSettingsUpdate,
+    }),
+    scanLibraryImports: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:library:scan-imports",
+      tag: WS_METHODS.harnessLibraryScanImports,
+    }),
+    applyLibraryImports: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:library:apply-imports",
+      tag: WS_METHODS.harnessLibraryApplyImports,
+    }),
+    previewExport: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:export:preview",
+      tag: WS_METHODS.harnessExportPreview,
+    }),
+    applyExport: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:export:apply",
+      tag: WS_METHODS.harnessExportApply,
+    }),
   };
 }

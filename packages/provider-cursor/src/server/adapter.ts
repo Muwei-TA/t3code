@@ -2906,6 +2906,10 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           if (rawText.trim() === "/compress" && turnInput.message.attachments.length === 0) {
             return { message: "/compress", prompt: undefined, runtimeInstructions: undefined };
           }
+          const harnessText = (turnInput.harnessContext ?? [])
+            .map((entry) => entry.text)
+            .filter((part) => part.length > 0)
+            .join("\n\n");
           const newText = t3OrchestrationPrompt({
             prompt: yield* providerMessageTextWithAttachmentPaths({
               text: yield* resolveCursorSkillText(
@@ -2920,8 +2924,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             hasDeviceTools,
             orchestrationDelivered: delivered.orchestration,
             deviceInstructionsDelivered: delivered.device,
-            providerInstructions: CURSOR_BACKGROUND_WAIT_INSTRUCTIONS,
-            providerInstructionsDelivered: delivered.backgroundWait,
+            providerInstructions:
+              harnessText.length > 0
+                ? `${CURSOR_BACKGROUND_WAIT_INSTRUCTIONS}\n\n${harnessText}`
+                : CURSOR_BACKGROUND_WAIT_INSTRUCTIONS,
+            providerInstructionsDelivered: delivered.backgroundWait && harnessText.length === 0,
           });
           const userText =
             interrupted === undefined

@@ -141,7 +141,11 @@ const SETTINGS_SEARCH_TERMS = {
     msg("harness", { $context: "settings search keyword" }),
     msg("servers", { $context: "settings search keyword" }),
     msg("stdio", { $context: "settings search keyword" }),
+    msg("skills", { $context: "settings search keyword" }),
+    msg("rules", { $context: "settings search keyword" }),
+    msg("commands", { $context: "settings search keyword" }),
     msg("import", { $context: "settings search keyword" }),
+    msg("export", { $context: "settings search keyword" }),
     msg("tools", { $context: "settings search keyword" }),
   ],
   SettingsEnvironmentSourceControl: [

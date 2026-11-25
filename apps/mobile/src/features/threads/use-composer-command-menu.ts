@@ -46,6 +46,8 @@ import {
   getProviderSkillsForSlashMenu,
   getProviderSlashCommandsForSlashMenu,
   isProviderSkillUserInvocable,
+  mergePortableHarnessCommands,
+  mergePortableHarnessSkills,
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
 } from "@t3tools/client-runtime/providerSkills";
@@ -59,7 +61,9 @@ import { msg, useGT, useMessages } from "gt-react-native";
 import { useEffect, useState } from "react";
 
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
+import { harnessEnvironment } from "../../state/harness";
 import { providerWorkspaceSnapshotRefresh } from "../../state/provider-workspace-snapshot-refresh";
+import { useEnvironmentQuery } from "../../state/query";
 import {
   useComposerPathSearch,
   useComposerPullRequestSearch,
@@ -351,6 +355,16 @@ export function useComposerCommandMenu({
     }
     return detectComposerTrigger(draftMessage, selection.end);
   })();
+  const isHarnessMenuTrigger = trigger?.kind === "slash-command" || trigger?.kind === "skill";
+  const harnessLibraryQuery = useEnvironmentQuery(
+    isHarnessMenuTrigger && environmentId
+      ? harnessEnvironment.libraryQuery({
+          environmentId,
+          input: projectCwd ? { workspaceRoot: projectCwd } : {},
+        })
+      : null,
+  );
+  const effectiveSkills = mergePortableHarnessSkills(skills, harnessLibraryQuery.data?.skills);
   const pathSearch = useComposerPathSearch({
     environmentId,
     cwd: trigger?.kind === "path" ? projectCwd : null,
@@ -398,7 +412,14 @@ export function useComposerCommandMenu({
 
     if (trigger.kind === "slash-command") {
       const q = trigger.query.toLowerCase();
-      const visibleSkills = getProviderSkillsForSlashMenu(skills, true);
+      const visibleSkills = getProviderSkillsForSlashMenu(effectiveSkills, true);
+      const nativeCommands = selectedProviderStatus
+        ? resolveProviderSlashCommandsForCwd(selectedProviderStatus, projectCwd)
+        : [];
+      const mergedCommands = mergePortableHarnessCommands(
+        nativeCommands,
+        harnessLibraryQuery.data?.commands,
+      );
       const commandItems = buildComposerSlashCommandItems(
         {
           query: q,
@@ -411,10 +432,7 @@ export function useComposerCommandMenu({
           selectedProviderStatus: selectedProviderStatus
             ? {
                 ...selectedProviderStatus,
-                slashCommands: getProviderSlashCommandsForSlashMenu(
-                  resolveProviderSlashCommandsForCwd(selectedProviderStatus, projectCwd),
-                  visibleSkills,
-                ),
+                slashCommands: getProviderSlashCommandsForSlashMenu(mergedCommands, visibleSkills),
               }
             : null,
         },
@@ -435,7 +453,9 @@ export function useComposerCommandMenu({
     }
 
     if (trigger.kind === "skill") {
-      const enabledSkills = dedupeProviderSkillsByName(skills.filter(isProviderSkillUserInvocable));
+      const enabledSkills = dedupeProviderSkillsByName(
+        effectiveSkills.filter(isProviderSkillUserInvocable),
+      );
       const normalizedQuery = normalizeSearchQuery(trigger.query, {
         trimLeadingPattern: /^\p{Sc}+/u,
       });

@@ -312,6 +312,7 @@ interface ActiveOpenCodeTurn {
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
   readonly agentFeedback: AgentFeedbackMode;
+  readonly harnessContext?: ProviderAdapter.ProviderAdapterV2TurnInput["harnessContext"];
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
   readonly providerThreadId: OrchestrationV2ProviderTurn["providerThreadId"];
   readonly runOrdinal: number;
@@ -3567,6 +3568,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               mcpSession?.harnessEndpoint !== undefined
                 ? T3_CODE_HARNESS_PROPOSE_PLAN_NOTE
                 : undefined,
+              ...(turn.harnessContext ?? []).map((entry) => entry.text),
             ]
               .filter(Boolean)
               .join("\n\n"),
@@ -3839,6 +3841,9 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 modelSelection: turnInput.modelSelection,
                 runtimePolicy: turnInput.runtimePolicy,
                 agentFeedback: turnInput.agentFeedback ?? "off",
+                ...(turnInput.harnessContext === undefined
+                  ? {}
+                  : { harnessContext: turnInput.harnessContext }),
                 providerTurnId,
                 providerThreadId: turnInput.providerThread.id,
                 runOrdinal: turnInput.runOrdinal,

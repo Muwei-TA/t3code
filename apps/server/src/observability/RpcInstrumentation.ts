@@ -280,6 +280,22 @@ const RPC_AGGREGATES = {
   [WS_METHODS.harnessMcpScanImports]: "harness",
   [WS_METHODS.harnessMcpApplyImports]: "harness",
   [WS_METHODS.harnessThreadContextManifest]: "harness",
+  [WS_METHODS.harnessLibrarySnapshot]: "harness",
+  [WS_METHODS.harnessAgentsMdSave]: "harness",
+  [WS_METHODS.harnessSkillUpsert]: "harness",
+  [WS_METHODS.harnessSkillRemove]: "harness",
+  [WS_METHODS.harnessSkillSetEnabled]: "harness",
+  [WS_METHODS.harnessRuleUpsert]: "harness",
+  [WS_METHODS.harnessRuleRemove]: "harness",
+  [WS_METHODS.harnessRuleSetEnabled]: "harness",
+  [WS_METHODS.harnessCommandUpsert]: "harness",
+  [WS_METHODS.harnessCommandRemove]: "harness",
+  [WS_METHODS.harnessCommandSetEnabled]: "harness",
+  [WS_METHODS.harnessSettingsUpdate]: "harness",
+  [WS_METHODS.harnessLibraryScanImports]: "harness",
+  [WS_METHODS.harnessLibraryApplyImports]: "harness",
+  [WS_METHODS.harnessExportPreview]: "harness",
+  [WS_METHODS.harnessExportApply]: "harness",
 } as const satisfies Readonly<Record<WsRpcMethod, string>>;
 
 const RPC_SPAN_PREFIX = "ws.rpc";

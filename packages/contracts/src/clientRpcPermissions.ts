@@ -103,7 +103,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.peerLinksPairLink]: AuthAccessWriteScope,
   // Send stores and sends a report from a thread's turn: the bar of running that thread.
   [WS_METHODS.agentFeedbackAnswerRequest]: AuthOrchestrationOperateScope,
-  // Portable harness MCP mutations & diagnostics: stdio/secret actions also enforce scopes server-side.
+  // Portable harness MCP, library & export mutations: stdio/secret/export actions also enforce scopes server-side.
   [WS_METHODS.harnessMcpLogs]: AuthDiagnosticsReadScope,
   [WS_METHODS.harnessMcpScanImports]: AuthSettingsWriteScope,
   [WS_METHODS.harnessMcpUpsert]: AuthSettingsWriteScope,
@@ -113,6 +113,21 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.harnessMcpRevokeProjectTrust]: AuthSettingsWriteScope,
   [WS_METHODS.harnessMcpRestart]: AuthOrchestrationOperateScope,
   [WS_METHODS.harnessMcpApplyImports]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessAgentsMdSave]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSkillUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSkillRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSkillSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessRuleUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessRuleRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessRuleSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessCommandUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessCommandRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessCommandSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSettingsUpdate]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessLibraryScanImports]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessLibraryApplyImports]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessExportPreview]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessExportApply]: AuthProvidersManageScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 
@@ -160,6 +175,9 @@ export function clientRpcRequiredScopes(
       }
       return scopes;
     }
+  }
+  if (method === WS_METHODS.harnessExportApply) {
+    return [AuthSettingsWriteScope, AuthProvidersManageScope];
   }
   return Object.hasOwn(CLIENT_GUARDED_RPC_SCOPES, method)
     ? [CLIENT_GUARDED_RPC_SCOPES[method as ClientGuardedRpcTag]]

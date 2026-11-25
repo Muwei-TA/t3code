@@ -34,15 +34,19 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import * as HarnessLibraryStore from "../harness/HarnessLibraryStore.ts";
+import { type NativeDiscoveredSkill, projectHarnessContext } from "../harness/HarnessProjector.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import * as PreviewAgentActivity from "../preview/PreviewAgentActivity.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as EventSink from "./EventSink.ts";
@@ -723,6 +727,10 @@ export const layer: Layer.Layer<
     const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const mcpAppModelContext = yield* McpAppModelContext.McpAppModelContext;
+    const harnessLibraryStore = yield* Effect.serviceOption(
+      HarnessLibraryStore.HarnessLibraryStore,
+    );
+    const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
     const previewAgentActivity = yield* PreviewAgentActivity.PreviewAgentActivity;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
     const finalizationObserver = yield* RunFinalizationService.RunFinalizationObserver;
@@ -2275,6 +2283,53 @@ export const layer: Layer.Layer<
           mcpAppModelContext,
           input.run.threadId,
         );
+        const harnessContext = Option.isSome(harnessLibraryStore)
+          ? yield* Effect.gen(function* () {
+              const workspaceRoot =
+                input.runtimePolicy.cwd ?? input.appThread.worktreePath ?? undefined;
+              const librarySnapshot = yield* harnessLibraryStore.value
+                .getSnapshot(workspaceRoot)
+                .pipe(Effect.orElseSucceed(() => null));
+              if (librarySnapshot === null || !librarySnapshot.managedPolicyAllowsHarness) {
+                return [] as ReadonlyArray<{ readonly key: string; readonly text: string }>;
+              }
+              const nativeSkills: ReadonlyArray<NativeDiscoveredSkill> = Option.isSome(
+                providerRegistry,
+              )
+                ? yield* providerRegistry.value.getProviders.pipe(
+                    Effect.map((providers) => {
+                      const matched = providers.find(
+                        (provider) => provider.instanceId === input.session.instanceId,
+                      );
+                      if (!matched) return [];
+                      const ws =
+                        workspaceRoot !== undefined
+                          ? matched.workspaceSnapshots?.find((snap) => snap.cwd === workspaceRoot)
+                          : undefined;
+                      return (ws?.skills ?? matched.skills).map((skill) => ({
+                        name: skill.name,
+                        path: skill.path,
+                      }));
+                    }),
+                    Effect.orElseSucceed(() => [] as ReadonlyArray<NativeDiscoveredSkill>),
+                  )
+                : [];
+              const capabilities = input.session.providerSession.capabilities;
+              const projected = projectHarnessContext({
+                library: librarySnapshot,
+                harnessCapabilities: capabilities.harness,
+                nativeSkills,
+                nativeReadsProjectAgentsMd: true,
+                promptText: input.message.text,
+                attachmentPaths: input.message.attachments.map((att) => att.name),
+                supportsMcpTools: capabilities.tools.supportsMcpTools,
+              });
+              return projected.segments.map((segment) => ({
+                key: segment.key,
+                text: segment.text,
+              }));
+            })
+          : [];
         const turnInput = {
           appThread: input.appThread,
           threadId: input.run.threadId,
@@ -2296,6 +2351,7 @@ export const layer: Layer.Layer<
           modelSelection: input.modelSelection,
           runtimePolicy: input.runtimePolicy,
           ...(appContext.length === 0 ? {} : { appContext }),
+          ...(harnessContext.length === 0 ? {} : { harnessContext }),
         };
         // Check after the context read: ingestion can settle the run while
         // it awaits. A failed ownership read fails the start below.

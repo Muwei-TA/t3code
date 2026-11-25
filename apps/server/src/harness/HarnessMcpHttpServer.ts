@@ -16,6 +16,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import * as McpGateway from "./McpGateway.ts";
 
 const SUPPORTED_PROTOCOL_VERSION = "2025-06-18";
@@ -72,6 +73,7 @@ const forbiddenResponse = (message: string) =>
 const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* (deps: {
   readonly registry: McpSessionRegistry.McpSessionRegistry["Service"];
   readonly gateway: McpGateway.McpGateway["Service"];
+  readonly libraryStore: Option.Option<HarnessLibraryStore.HarnessLibraryStore["Service"]>;
   readonly projections: ProjectionStore.ProjectionStoreV2["Service"];
   readonly projects: ProjectStore.ProjectStoreV2["Service"];
   readonly adapterRegistry: ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"];
@@ -84,7 +86,16 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     return HttpServerResponse.empty({ status: 403 });
   }
 
-  const { registry, gateway, projections, projects, adapterRegistry, orchestrator, random } = deps;
+  const {
+    registry,
+    gateway,
+    libraryStore,
+    projections,
+    projects,
+    adapterRegistry,
+    orchestrator,
+    random,
+  } = deps;
 
   const token = parseBearerToken(request) ?? "";
   const scope = yield* registry.resolve(token);
@@ -177,6 +188,17 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
       ? capabilities.value.harness
       : DEFAULT_HARNESS_CAPABILITIES;
     const deferredExposure = request.headers[MCP_TOOL_EXPOSURE_HEADER] === "deferred";
+    const librarySnapshot = Option.isSome(libraryStore)
+      ? yield* libraryStore.value.getSnapshot(workspaceRoot).pipe(Effect.orElseSucceed(() => null))
+      : null;
+    const includeLibraryTools =
+      snapshot.managedPolicyAllowsHarness &&
+      supportsMcpTools &&
+      librarySnapshot !== null &&
+      (librarySnapshot.skills.some((skill) => skill.effectiveEnabled) ||
+        librarySnapshot.rules.some((rule) => rule.effectiveEnabled) ||
+        (librarySnapshot.userAgentsMd.exists &&
+          librarySnapshot.userAgentsMd.body.trim().length > 0));
     const context: McpGateway.GatewaySessionContext = {
       providerSessionId: scope.thread.providerSessionId,
       workspaceRoot,
@@ -187,12 +209,14 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
         shell.interactionMode === "plan" &&
         !emitsProposedPlan &&
         supportsMcpTools,
+      includeLibraryTools,
       deferredExposure,
       harnessCapabilities,
     };
     return {
       shell,
       context,
+      librarySnapshot,
       managedPolicyAllowsHarness: snapshot.managedPolicyAllowsHarness,
     };
   });
@@ -348,6 +372,166 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
       );
     }
 
+    if (toolName === McpGateway.HARNESS_SKILL_SEARCH_NAME) {
+      if (Option.isNone(libraryStore) || state.librarySnapshot === null) {
+        return jsonRpcSuccess(
+          rpc.id,
+          { content: [{ type: "text", text: "No portable skills are available." }] },
+          sessionId,
+        );
+      }
+      const query = typeof toolArgs.query === "string" ? toolArgs.query.trim().toLowerCase() : "";
+      const terms = query.split(/[^a-z0-9_-]+/u).filter(Boolean);
+      const enabledSkills = state.librarySnapshot.skills.filter((skill) => skill.effectiveEnabled);
+      const matches =
+        terms.length === 0
+          ? enabledSkills.slice(0, 20)
+          : enabledSkills
+              .map((skill) => {
+                const haystack =
+                  `${skill.id} ${skill.name} ${skill.description ?? ""} ${skill.shortDescription ?? ""}`.toLowerCase();
+                let score = 0;
+                for (const term of terms) {
+                  if (skill.id.toLowerCase() === term || skill.name.toLowerCase() === term) {
+                    score += 100;
+                  } else if (
+                    skill.id.toLowerCase().includes(term) ||
+                    skill.name.toLowerCase().includes(term)
+                  ) {
+                    score += 10;
+                  } else if (haystack.includes(term)) {
+                    score += 2;
+                  }
+                }
+                return { skill, score };
+              })
+              .filter((entry) => entry.score > 0)
+              .sort((a, b) => b.score - a.score)
+              .slice(0, 12)
+              .map((entry) => entry.skill);
+      return jsonRpcSuccess(
+        rpc.id,
+        {
+          content: [
+            {
+              type: "text",
+              text:
+                matches.length === 0
+                  ? `No portable skills matched "${query}".`
+                  : matches
+                      .map(
+                        (skill) =>
+                          `- ${skill.name} (id: ${skill.id}, scope: ${skill.scope}): ${skill.shortDescription ?? skill.description ?? "No description"}`,
+                      )
+                      .join("\n"),
+            },
+          ],
+          structuredContent: {
+            skills: matches.map((skill) => ({
+              id: skill.id,
+              name: skill.name,
+              scope: skill.scope,
+              description: skill.shortDescription ?? skill.description ?? "",
+              sourcePath: skill.sourcePath,
+            })),
+          },
+        },
+        sessionId,
+      );
+    }
+
+    if (toolName === McpGateway.HARNESS_SKILL_LOAD_NAME) {
+      const name = typeof toolArgs.name === "string" ? toolArgs.name.trim() : "";
+      if (name.length === 0 || Option.isNone(libraryStore)) {
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [
+              { type: "text", text: "harness_skill_load requires a non-empty skill name." },
+            ],
+          },
+          sessionId,
+        );
+      }
+      const detail = yield* libraryStore.value.getSkillDetail({
+        nameOrId: name,
+        workspaceRoot: state.context.workspaceRoot,
+      });
+      if (Option.isNone(detail)) {
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [
+              { type: "text", text: `Portable skill "${name}" was not found or is disabled.` },
+            ],
+          },
+          sessionId,
+        );
+      }
+      const { skill, companionFiles } = detail.value;
+      const companionNote =
+        companionFiles.length > 0
+          ? `\n\nCompanion files in ${skill.sourcePath.replace(/\/SKILL\.md$/u, "")}:\n${companionFiles.map((f) => `- ${f}`).join("\n")}`
+          : "";
+      return jsonRpcSuccess(
+        rpc.id,
+        {
+          content: [
+            {
+              type: "text",
+              text: `# Skill: ${skill.name} (${skill.scope})\nSource: ${skill.sourcePath}\n\n${skill.body.trim()}${companionNote}`,
+            },
+          ],
+        },
+        sessionId,
+      );
+    }
+
+    if (toolName === McpGateway.HARNESS_RULE_READ_NAME) {
+      const ruleId = typeof toolArgs.id === "string" ? toolArgs.id.trim() : "";
+      if (ruleId.length === 0 || Option.isNone(libraryStore)) {
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [{ type: "text", text: "harness_rule_read requires a non-empty rule id." }],
+          },
+          sessionId,
+        );
+      }
+      const detail = yield* libraryStore.value.getRuleDetail({
+        id: ruleId,
+        workspaceRoot: state.context.workspaceRoot,
+      });
+      if (Option.isNone(detail)) {
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [
+              { type: "text", text: `Portable rule "${ruleId}" was not found or is disabled.` },
+            ],
+          },
+          sessionId,
+        );
+      }
+      const rule = detail.value;
+      return jsonRpcSuccess(
+        rpc.id,
+        {
+          content: [
+            {
+              type: "text",
+              text: `# Rule: ${rule.id} (${rule.scope}, apply: ${rule.apply})\nSource: ${rule.sourcePath}\n\n${rule.body.trim()}`,
+            },
+          ],
+        },
+        sessionId,
+      );
+    }
+
     const result = yield* gateway
       .callToolForSession({ context: state.context, toolName, arguments: toolArgs })
       .pipe(
@@ -393,6 +577,7 @@ export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const registry = yield* McpSessionRegistry.McpSessionRegistry;
     const gateway = yield* McpGateway.McpGateway;
+    const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const projects = yield* ProjectStore.ProjectStoreV2;
     const adapterRegistry = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
@@ -401,6 +586,7 @@ export const layer = Layer.unwrap(
     const handlePost = makeHarnessPostHandler({
       registry,
       gateway,
+      libraryStore,
       projections,
       projects,
       adapterRegistry,

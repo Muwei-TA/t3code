@@ -885,6 +885,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     /** ChatGPT token sharing does not accept service tiers. */
     readonly omitServiceTier?: boolean;
     readonly appContext?: ProviderAdapter.ProviderAdapterV2TurnInput["appContext"];
+    readonly harnessContext?: ProviderAdapter.ProviderAdapterV2TurnInput["harnessContext"];
     /** Set only for a model that offers Cyber Access; custom models never do. */
     readonly cyberAccess?: { readonly defaultProgram: string | undefined } | undefined;
     /** The user's `model_reasoning_summary` from the Codex config, when set. */
@@ -953,12 +954,19 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
       workspaceInstructions === ""
         ? undefined
         : { t3_code_workspace: { kind: "application" as const, value: workspaceInstructions } };
+    const harnessContext = Object.fromEntries(
+      (input.harnessContext ?? []).map((entry) => [
+        entry.key,
+        { kind: "application" as const, value: entry.text },
+      ]),
+    );
     const additionalContext =
       t3Context === undefined &&
       workspaceContext === undefined &&
+      Object.keys(harnessContext).length === 0 &&
       Object.keys(appContext).length === 0
         ? undefined
-        : { ...t3Context, ...workspaceContext, ...appContext };
+        : { ...t3Context, ...workspaceContext, ...harnessContext, ...appContext };
     return yield* decodeCodexTurnStartParams({
       threadId: input.nativeThreadId,
       input: input.codexInput,
@@ -7841,6 +7849,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
+              ...(turnInput.harnessContext === undefined
+                ? {}
+                : { harnessContext: turnInput.harnessContext }),
               ...(configuredReasoningSummary === undefined ? {} : { configuredReasoningSummary }),
             });
             yield* Ref.update(pendingRootTurns, (current) => {

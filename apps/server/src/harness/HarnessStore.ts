@@ -1,6 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Pure synchronous SHA-256 digest for trust verification and config fingerprinting.
 import * as NodeCrypto from "node:crypto";
 import {
+  DEFAULT_HARNESS_MAX_SYSTEM_CONTEXT_BYTES,
+  HarnessCommandId,
   HarnessConfigFile,
   HarnessError,
   type HarnessInvalidEntry,
@@ -8,8 +10,12 @@ import {
   HarnessMcpServerId,
   type HarnessMcpServerScope,
   type HarnessMcpTrustReason,
+  HarnessRuleId,
+  HarnessSkillId,
   IsoDateTime,
+  isReservedHarnessCommandId,
   isReservedHarnessMcpServerId,
+  PositiveInt,
 } from "@t3tools/contracts";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import * as Context from "effect/Context";
@@ -52,10 +58,23 @@ const decodeUnknownLenientJson = Schema.decodeUnknownEffect(fromLenientJson(Sche
 const encodeHarnessConfigJson = Schema.encodeEffect(HarnessConfigFile);
 const decodeServerEntry = Schema.decodeUnknownOption(HarnessMcpServerConfig);
 const decodeServerId = Schema.decodeUnknownOption(HarnessMcpServerId);
+const decodeSkillId = Schema.decodeUnknownOption(HarnessSkillId);
+const decodeRuleId = Schema.decodeUnknownOption(HarnessRuleId);
+const decodeCommandId = Schema.decodeUnknownOption(HarnessCommandId);
+const decodePositiveInt = Schema.decodeUnknownOption(PositiveInt);
 const decodeTrustLedgerJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(HarnessTrustLedgerFile),
 );
 const encodeTrustLedger = Schema.encodeEffect(HarnessTrustLedgerFile);
+
+const EMPTY_USER_HARNESS_CONFIG: HarnessConfigFile = {
+  schemaVersion: 1,
+  mcpServers: {},
+  disabledSkills: [],
+  disabledRules: [],
+  disabledCommands: [],
+  maxSystemContextBytes: null,
+};
 
 function formatPrettyJson(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
@@ -156,7 +175,7 @@ function decodeUserConfigLeniently(
       decodeUnknownJson(rawText).pipe(
         Effect.match({
           onFailure: (): LoadedUserHarnessConfig => ({
-            config: { schemaVersion: 1, mcpServers: {} },
+            config: EMPTY_USER_HARNESS_CONFIG,
             invalidEntries: [
               {
                 source: configPath,
@@ -168,7 +187,7 @@ function decodeUserConfigLeniently(
           onSuccess: (parsed): LoadedUserHarnessConfig => {
             if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
               return {
-                config: { schemaVersion: 1, mcpServers: {} },
+                config: EMPTY_USER_HARNESS_CONFIG,
                 invalidEntries: [
                   {
                     source: configPath,
@@ -186,17 +205,48 @@ function decodeUserConfigLeniently(
   );
 }
 
+function decodeIdList<Id extends string>(
+  raw: unknown,
+  decode: (value: unknown) => Option.Option<Id>,
+): ReadonlyArray<Id> {
+  if (!Array.isArray(raw)) return [];
+  const out: Array<Id> = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    const decoded = decode(item);
+    if (Option.isSome(decoded) && !seen.has(decoded.value)) {
+      seen.add(decoded.value);
+      out.push(decoded.value);
+    }
+  }
+  return out;
+}
+
 function decodePartialUserConfigObject(
   parsed: Record<string, unknown>,
   configPath: string,
 ): LoadedUserHarnessConfig {
+  const disabledSkills = decodeIdList(Reflect.get(parsed, "disabledSkills"), decodeSkillId);
+  const disabledRules = decodeIdList(Reflect.get(parsed, "disabledRules"), decodeRuleId);
+  const disabledCommands = decodeIdList(Reflect.get(parsed, "disabledCommands"), decodeCommandId);
+  const rawMaxBytes = Reflect.get(parsed, "maxSystemContextBytes");
+  const maxSystemContextBytes =
+    rawMaxBytes === null || rawMaxBytes === undefined
+      ? null
+      : Option.getOrElse(decodePositiveInt(rawMaxBytes), () => null);
+  const baseFields = {
+    disabledSkills,
+    disabledRules,
+    disabledCommands,
+    maxSystemContextBytes,
+  };
   const rawServers = Reflect.get(parsed, "mcpServers");
   if (rawServers === undefined) {
-    return { config: { schemaVersion: 1, mcpServers: {} }, invalidEntries: [] };
+    return { config: { schemaVersion: 1, mcpServers: {}, ...baseFields }, invalidEntries: [] };
   }
   if (rawServers === null || typeof rawServers !== "object" || Array.isArray(rawServers)) {
     return {
-      config: { schemaVersion: 1, mcpServers: {} },
+      config: { schemaVersion: 1, mcpServers: {}, ...baseFields },
       invalidEntries: [
         {
           source: configPath,
@@ -232,7 +282,7 @@ function decodePartialUserConfigObject(
     mcpServers[validId.value] = validEntry.value;
   }
   return {
-    config: { schemaVersion: 1, mcpServers },
+    config: { schemaVersion: 1, mcpServers, ...baseFields },
     invalidEntries,
   };
 }
@@ -242,6 +292,9 @@ interface LoadedProjectHarnessConfig {
   /** Includes invalid project server IDs so broken overrides still shadow user-level servers. */
   readonly declaredServerIds: ReadonlySet<string>;
   readonly disabledMcpServers: ReadonlySet<string>;
+  readonly disabledSkills: ReadonlySet<string>;
+  readonly disabledRules: ReadonlySet<string>;
+  readonly disabledCommands: ReadonlySet<string>;
   readonly invalidEntries: ReadonlyArray<HarnessInvalidEntry>;
 }
 
@@ -249,6 +302,9 @@ const EMPTY_PROJECT_HARNESS: LoadedProjectHarnessConfig = {
   mcpServers: {},
   declaredServerIds: new Set(),
   disabledMcpServers: new Set(),
+  disabledSkills: new Set(),
+  disabledRules: new Set(),
+  disabledCommands: new Set(),
   invalidEntries: [],
 };
 
@@ -346,7 +402,27 @@ function decodeProjectHarnessLeniently(
           }
         }
 
-        return { mcpServers, declaredServerIds, disabledMcpServers, invalidEntries };
+        const disabledSkills = new Set<string>(
+          decodeIdList(Reflect.get(rawHarness, "disabledSkills"), decodeSkillId),
+        );
+        const disabledRules = new Set<string>(
+          decodeIdList(Reflect.get(rawHarness, "disabledRules"), decodeRuleId),
+        );
+        const disabledCommands = new Set<string>(
+          decodeIdList(Reflect.get(rawHarness, "disabledCommands"), decodeCommandId).filter(
+            (id) => !isReservedHarnessCommandId(id),
+          ),
+        );
+
+        return {
+          mcpServers,
+          declaredServerIds,
+          disabledMcpServers,
+          disabledSkills,
+          disabledRules,
+          disabledCommands,
+          invalidEntries,
+        };
       },
     }),
   );
@@ -400,6 +476,24 @@ export class HarnessStore extends Context.Service<
       readonly repoRoot: string;
       readonly serverId: HarnessMcpServerId;
     }) => Effect.Effect<void, HarnessError>;
+    readonly setLibraryItemDisabled: (input: {
+      readonly kind: "skill" | "rule" | "command";
+      readonly id: string;
+      readonly disabled: boolean;
+    }) => Effect.Effect<void, HarnessError>;
+    readonly updateSettings: (input: {
+      readonly maxSystemContextBytes: typeof PositiveInt.Type | null;
+    }) => Effect.Effect<void, HarnessError>;
+    readonly readProjectLibraryOverrides: (workspaceRoot?: string | undefined) => Effect.Effect<{
+      readonly normalizedRepo: string | null;
+      readonly disabledSkills: ReadonlySet<string>;
+      readonly disabledRules: ReadonlySet<string>;
+      readonly disabledCommands: ReadonlySet<string>;
+      readonly invalidEntries: ReadonlyArray<HarnessInvalidEntry>;
+      readonly managedPolicyAllowsHarness: boolean;
+      readonly managedPolicyOrganization: string | null;
+      readonly maxSystemContextBytes: typeof PositiveInt.Type;
+    }>;
   }
 >()("t3/harness/HarnessStore") {}
 
@@ -479,7 +573,7 @@ const make = Effect.gen(function* () {
       }),
     );
     if (Option.isNone(raw)) {
-      return { config: { schemaVersion: 1 as const, mcpServers: {} }, invalidEntries: [] };
+      return { config: EMPTY_USER_HARNESS_CONFIG, invalidEntries: [] };
     }
     return yield* decodeUserConfigLeniently(raw.value, configPath);
   }).pipe(Effect.withSpan("HarnessStore.loadUserConfig"));
@@ -705,6 +799,7 @@ const make = Effect.gen(function* () {
         }
         yield* assertWriteAllowed(mergedConfig);
         const next: HarnessConfigFile = {
+          ...current,
           schemaVersion: 1,
           mcpServers: {
             ...current.mcpServers,
@@ -798,6 +893,7 @@ const make = Effect.gen(function* () {
 
         if (importedIds.length > 0) {
           yield* saveUserConfig({
+            ...current,
             schemaVersion: 1,
             mcpServers: nextServers,
           });
@@ -822,7 +918,7 @@ const make = Effect.gen(function* () {
         }
         const nextServers = { ...current.mcpServers };
         delete nextServers[id];
-        yield* saveUserConfig({ schemaVersion: 1, mcpServers: nextServers });
+        yield* saveUserConfig({ ...current, schemaVersion: 1, mcpServers: nextServers });
       }),
     );
   });
@@ -868,6 +964,7 @@ const make = Effect.gen(function* () {
           yield* assertWriteAllowed(existing);
         }
         yield* saveUserConfig({
+          ...current,
           schemaVersion: 1,
           mcpServers: {
             ...current.mcpServers,
@@ -960,6 +1057,112 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const setLibraryItemDisabled: HarnessStore["Service"]["setLibraryItemDisabled"] = Effect.fn(
+    "HarnessStore.setLibraryItemDisabled",
+  )(function* ({ kind, id, disabled }) {
+    if (!managedPolicyAllowsHarness) {
+      return yield* new HarnessError({
+        code: "policy_denied",
+        detail: `${policyHarnessDeniedBy ?? "Organization"}'s policy does not allow portable harness extensions.`,
+      });
+    }
+    yield* writeLock.withPermits(1)(
+      Effect.gen(function* () {
+        const { config: current } = yield* loadUserConfig;
+        const toggle = <T extends string>(list: ReadonlyArray<T>, value: T): ReadonlyArray<T> => {
+          const next = new Set(list);
+          if (disabled) next.add(value);
+          else next.delete(value);
+          return Array.from(next).sort((a, b) => a.localeCompare(b));
+        };
+        if (kind === "skill") {
+          const decoded = decodeSkillId(id);
+          if (Option.isNone(decoded)) {
+            return yield* new HarnessError({
+              code: "invalid_config",
+              detail: `Invalid skill id "${id}".`,
+            });
+          }
+          yield* saveUserConfig({
+            ...current,
+            disabledSkills: toggle(current.disabledSkills, decoded.value),
+          });
+          return;
+        }
+        if (kind === "rule") {
+          const decoded = decodeRuleId(id);
+          if (Option.isNone(decoded)) {
+            return yield* new HarnessError({
+              code: "invalid_config",
+              detail: `Invalid rule id "${id}".`,
+            });
+          }
+          yield* saveUserConfig({
+            ...current,
+            disabledRules: toggle(current.disabledRules, decoded.value),
+          });
+          return;
+        }
+        const decoded = decodeCommandId(id);
+        if (Option.isNone(decoded)) {
+          return yield* new HarnessError({
+            code: "invalid_config",
+            detail: `Invalid command id "${id}".`,
+          });
+        }
+        yield* saveUserConfig({
+          ...current,
+          disabledCommands: toggle(current.disabledCommands, decoded.value),
+        });
+      }),
+    );
+  });
+
+  const updateSettings: HarnessStore["Service"]["updateSettings"] = Effect.fn(
+    "HarnessStore.updateSettings",
+  )(function* ({ maxSystemContextBytes }) {
+    if (!managedPolicyAllowsHarness) {
+      return yield* new HarnessError({
+        code: "policy_denied",
+        detail: `${policyHarnessDeniedBy ?? "Organization"}'s policy does not allow portable harness extensions.`,
+      });
+    }
+    yield* writeLock.withPermits(1)(
+      Effect.gen(function* () {
+        const { config: current } = yield* loadUserConfig;
+        yield* saveUserConfig({
+          ...current,
+          maxSystemContextBytes,
+        });
+      }),
+    );
+  });
+
+  const readProjectLibraryOverrides: HarnessStore["Service"]["readProjectLibraryOverrides"] =
+    Effect.fn("HarnessStore.readProjectLibraryOverrides")(function* (workspaceRoot) {
+      const { config: userConfig, invalidEntries: userInvalid } = yield* loadUserConfig;
+      const normalizedRepo =
+        workspaceRoot !== undefined && workspaceRoot.trim().length > 0
+          ? yield* normalizeRepoRoot(workspaceRoot.trim())
+          : null;
+      const projectHarness =
+        normalizedRepo !== null
+          ? yield* loadProjectHarnessForRepo(normalizedRepo)
+          : EMPTY_PROJECT_HARNESS;
+      return {
+        normalizedRepo,
+        disabledSkills: projectHarness.disabledSkills,
+        disabledRules: projectHarness.disabledRules,
+        disabledCommands: projectHarness.disabledCommands,
+        invalidEntries: [...userInvalid, ...projectHarness.invalidEntries],
+        managedPolicyAllowsHarness,
+        managedPolicyOrganization,
+        maxSystemContextBytes:
+          userConfig.maxSystemContextBytes ??
+          PositiveInt.make(DEFAULT_HARNESS_MAX_SYSTEM_CONTEXT_BYTES),
+      };
+    });
+
   return HarnessStore.of({
     harnessDir,
     configPath,
@@ -972,6 +1175,9 @@ const make = Effect.gen(function* () {
     setServerEnabled,
     trustProjectServer,
     revokeProjectTrust,
+    setLibraryItemDisabled,
+    updateSettings,
+    readProjectLibraryOverrides,
   });
 });
 

@@ -1509,9 +1509,13 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "harness-mcp",
-    title: msg("Portable MCP servers"),
+    title: msg("Portable MCP servers, skills, rules & commands"),
     to: "/settings/harness",
-    searchTerms: [msg("harness mcp gateway stdio http sse import codex claude cursor antigravity")],
+    searchTerms: [
+      msg(
+        "harness mcp gateway stdio http sse skills rules agents.md commands slash import export codex claude cursor antigravity",
+      ),
+    ],
   },
   {
     id: "archive",

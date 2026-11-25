@@ -7,16 +7,84 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import { rpcAuthorizationError } from "../auth/RpcAuthorization.ts";
 import * as ServerConfig from "../config.ts";
+import * as HarnessLibraryStore from "../harness/HarnessLibraryStore.ts";
+import { expandPortableCommand } from "../harness/HarnessProjector.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import * as ProjectStore from "./ProjectStore.ts";
 
 import * as AttachmentClaims from "./AttachmentClaims.ts";
 import { isProviderSignOutPrompt } from "./CommandPolicy.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
+
+/** Expands leading portable `/<command>` templates on the server across Web, Mobile, MCP, and Scheduled Tasks. */
+const expandPortableSlashText = Effect.fn("ThreadMessageIntake.expandPortableSlashText")(
+  function* (input: {
+    readonly text: string;
+    readonly workspaceRoot?: string | undefined;
+    readonly projectId?: import("@t3tools/contracts").ProjectId | undefined;
+    readonly threadId?: import("@t3tools/contracts").ThreadId | undefined;
+  }) {
+    if (!input.text.trimStart().startsWith("/")) return input.text;
+    const libraryOpt = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+    if (Option.isNone(libraryOpt)) return input.text;
+
+    let workspaceRoot = input.workspaceRoot;
+    if (workspaceRoot === undefined && input.projectId !== undefined) {
+      const projectsOpt = yield* Effect.serviceOption(ProjectStore.ProjectStoreV2);
+      if (Option.isSome(projectsOpt)) {
+        const proj = yield* projectsOpt.value
+          .get(input.projectId)
+          .pipe(Effect.orElseSucceed(() => Option.none()));
+        if (Option.isSome(proj)) {
+          workspaceRoot = proj.value.workspaceRoot;
+        }
+      }
+    }
+    if (workspaceRoot === undefined && input.threadId !== undefined) {
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const shell = yield* threads
+        .getThreadShell(input.threadId)
+        .pipe(Effect.orElseSucceed(() => null));
+      if (shell !== null) {
+        if (shell.worktreePath !== null) {
+          workspaceRoot = shell.worktreePath;
+        } else {
+          const projectsOpt = yield* Effect.serviceOption(ProjectStore.ProjectStoreV2);
+          if (Option.isSome(projectsOpt)) {
+            const proj = yield* projectsOpt.value
+              .get(shell.projectId)
+              .pipe(Effect.orElseSucceed(() => Option.none()));
+            if (Option.isSome(proj)) {
+              workspaceRoot = proj.value.workspaceRoot;
+            }
+          }
+        }
+      }
+    }
+
+    const snapshot = yield* libraryOpt.value
+      .getSnapshot(workspaceRoot)
+      .pipe(Effect.orElseSucceed(() => null));
+    if (
+      snapshot === null ||
+      !snapshot.managedPolicyAllowsHarness ||
+      snapshot.commands.length === 0
+    ) {
+      return input.text;
+    }
+    const expanded = expandPortableCommand({
+      text: input.text,
+      commands: snapshot.commands,
+    });
+    return expanded.text;
+  },
+);
 
 // These failures precede commitCommand; generic dispatch errors can follow commits and remain ambiguous.
 function dispatchWasNotAccepted(
@@ -131,13 +199,34 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
   incoming: OrchestrationV2Command,
   sender: { readonly managesProviders: boolean },
 ) {
-  const command =
+  const rawCommand =
     incoming.type === "message.dispatch"
       ? yield* withGuestAttachments(incoming)
       : incoming.type === "queued-run.edit" && !sender.managesProviders
         ? yield* withQueuedAttachmentsOnSignOutText(incoming)
         : incoming;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const command = yield* Effect.gen(function* () {
+    if (
+      rawCommand.type !== "message.dispatch" ||
+      rawCommand.guestMessageId !== undefined ||
+      (yield* threads.hasReceipt(rawCommand.commandId))
+    ) {
+      return rawCommand;
+    }
+    const expandedText = yield* expandPortableSlashText({
+      text: rawCommand.text,
+      threadId: rawCommand.threadId,
+    });
+    if (
+      expandedText !== rawCommand.text &&
+      !sender.managesProviders &&
+      isProviderSignOutPrompt({ text: expandedText, attachments: rawCommand.attachments ?? [] })
+    ) {
+      return yield* rpcAuthorizationError(AuthProvidersManageScope);
+    }
+    return expandedText === rawCommand.text ? rawCommand : { ...rawCommand, text: expandedText };
+  });
   if (command.type === "runtime-request.respond" && command.attachmentsByQuestionId) {
     const config = yield* ServerConfig.ServerConfig;
     const incomingByQuestionId = command.attachmentsByQuestionId;
@@ -264,45 +353,68 @@ export const sendToThread = Effect.fn("ThreadMessageIntake.sendToThread")(functi
   input: ThreadManagement.ThreadManagementSendInput,
 ) {
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const expandedText = yield* expandPortableSlashText({
+    text: input.text,
+    threadId: input.threadId,
+  });
   const claimed = yield* AttachmentClaims.claimPendingAttachments(input);
-  return yield* threads.sendToThread({ ...input, attachments: claimed.attachments }).pipe(
-    Effect.tap((result) => releaseUnusedClaims(claimed.claimedPaths, result.message.attachments)),
-    Effect.tapError((error) =>
-      dispatchWasNotAccepted(error)
-        ? AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths)
-        : Effect.void,
-    ),
-  );
+  return yield* threads
+    .sendToThread({ ...input, text: expandedText, attachments: claimed.attachments })
+    .pipe(
+      Effect.tap((result) => releaseUnusedClaims(claimed.claimedPaths, result.message.attachments)),
+      Effect.tapError((error) =>
+        dispatchWasNotAccepted(error)
+          ? AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths)
+          : Effect.void,
+      ),
+    );
 });
 
 export const launchThread = Effect.fn("ThreadMessageIntake.launchThread")(function* (
   input: ThreadLaunch.ThreadLaunchInput,
 ) {
   const launches = yield* ThreadLaunch.ThreadLaunchService;
-  yield* AttachmentClaims.validateAttachmentLimits(input.initialMessage?.attachments ?? []);
-  if (!input.initialMessage?.attachments.some(AttachmentClaims.attachmentIsPendingUpload)) {
-    return yield* launches.launch(input);
+  const normalizedInput =
+    input.initialMessage !== undefined
+      ? {
+          ...input,
+          initialMessage: {
+            ...input.initialMessage,
+            text: yield* expandPortableSlashText({
+              text: input.initialMessage.text,
+              projectId: input.projectId,
+            }),
+          },
+        }
+      : input;
+  yield* AttachmentClaims.validateAttachmentLimits(
+    normalizedInput.initialMessage?.attachments ?? [],
+  );
+  if (
+    !normalizedInput.initialMessage?.attachments.some(AttachmentClaims.attachmentIsPendingUpload)
+  ) {
+    return yield* launches.launch(normalizedInput);
   }
-  if (input.threadId === undefined) {
+  if (normalizedInput.threadId === undefined) {
     return yield* new AttachmentClaims.AttachmentClaimError({
       message: "Uploaded attachments need a thread id at launch.",
     });
   }
   const claimed = yield* AttachmentClaims.claimPendingAttachments({
-    threadId: input.threadId,
-    attachments: input.initialMessage.attachments,
+    threadId: normalizedInput.threadId,
+    attachments: normalizedInput.initialMessage.attachments,
   });
   return yield* launches
     .launch({
-      ...input,
+      ...normalizedInput,
       initialMessage: {
-        ...input.initialMessage,
+        ...normalizedInput.initialMessage,
         attachments: claimed.attachments,
-        ...(input.initialMessage.context
+        ...(normalizedInput.initialMessage.context
           ? {
               context: remapComposerContextAttachments(
-                input.initialMessage.context,
-                input.initialMessage.attachments,
+                normalizedInput.initialMessage.context,
+                normalizedInput.initialMessage.attachments,
                 claimed.attachments,
               ),
             }

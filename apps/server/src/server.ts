@@ -95,7 +95,10 @@ import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrid
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as HarnessStore from "./harness/HarnessStore.ts";
+import * as HarnessLibraryStore from "./harness/HarnessLibraryStore.ts";
 import * as HarnessImporter from "./harness/HarnessImporter.ts";
+import * as HarnessLibraryImporter from "./harness/HarnessLibraryImporter.ts";
+import * as HarnessExporter from "./harness/HarnessExporter.ts";
 import * as McpGateway from "./harness/McpGateway.ts";
 import * as HarnessContextService from "./harness/HarnessContextService.ts";
 import * as HarnessMcpHttpServer from "./harness/HarnessMcpHttpServer.ts";
@@ -855,7 +858,16 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
       HarnessStore.layer,
+      HarnessLibraryStore.layer.pipe(Layer.provide(HarnessStore.layer)),
       HarnessImporter.layer.pipe(Layer.provide(HarnessStore.layer)),
+      HarnessLibraryImporter.layer.pipe(
+        Layer.provide(HarnessLibraryStore.layer),
+        Layer.provide(HarnessStore.layer),
+      ),
+      HarnessExporter.layer.pipe(
+        Layer.provide(HarnessLibraryStore.layer),
+        Layer.provide(HarnessStore.layer),
+      ),
       McpGateway.layer.pipe(
         Layer.provide(HarnessStore.layer),
         Layer.provide(SecretResolver.layer.pipe(Layer.provide(layerServerSettings))),

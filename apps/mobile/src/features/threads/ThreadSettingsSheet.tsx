@@ -1016,6 +1016,23 @@ function ThreadSettingsOptionsItem(props: {
           (server) =>
             `• ${server.id} (${server.scope}/${server.channel}): ${server.state}, ${server.toolCount} tools`,
         ),
+        ...(manifest.skills.length > 0
+          ? [
+              `${gt("Portable skills")}: ${manifest.skills.length}`,
+              ...manifest.skills.map(
+                (skill) => `• ${skill.name} (${skill.scope}/${skill.channel})`,
+              ),
+            ]
+          : []),
+        ...(manifest.rules.length > 0
+          ? [
+              `${gt("Portable rules")}: ${manifest.rules.length} (${manifest.contextUsedBytes}/${manifest.contextBudgetBytes} B)`,
+              ...manifest.rules.map((rule) => `• ${rule.id} (${rule.apply}/${rule.status})`),
+            ]
+          : []),
+        ...(manifest.commandsCount > 0
+          ? [`${gt("Portable commands")}: ${manifest.commandsCount}`]
+          : []),
         ...(manifest.degradedItems.length > 0
           ? ["", ...manifest.degradedItems.map((item) => `⚠ ${item.id}: ${item.reason}`)]
           : []),

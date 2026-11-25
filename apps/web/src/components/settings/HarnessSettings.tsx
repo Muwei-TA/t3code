@@ -73,6 +73,7 @@ import { toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { useSearchableSetting } from "./settingsSearch";
+import { HarnessLibraryPanels, type HarnessPanelTab } from "./HarnessLibraryTabs";
 
 const decodeServerId = Schema.decodeUnknownOption(HarnessMcpServerId);
 
@@ -132,8 +133,10 @@ function formatErrorMessage(error: unknown, fallback: string): string {
 }
 
 export function HarnessSettingsPanel() {
+  const gt = useGT();
   const setting = useSearchableSetting();
   const { scope, environment } = useSettingsScope();
+  const [activeTab, setActiveTab] = useState<HarnessPanelTab>("mcp");
   const connected = environment?.connection.phase === "connected";
   const workspaceRoot =
     scope.kind === "project" || scope.kind === "checkout"
@@ -141,14 +144,45 @@ export function HarnessSettingsPanel() {
           ?.workspaceRoot
       : undefined;
 
+  const tabs: ReadonlyArray<{ readonly id: HarnessPanelTab; readonly label: string }> = [
+    { id: "mcp", label: gt("MCP Servers") },
+    { id: "skills", label: gt("Skills") },
+    { id: "rules", label: gt("Rules & AGENTS.md") },
+    { id: "commands", label: gt("Commands") },
+    { id: "transfer", label: gt("Import / Export") },
+  ];
+
   return (
     <SettingsPageContainer>
       {connected && environment ? (
-        <EnvironmentHarnessMcpSection
-          key={`${environment.environmentId}:${workspaceRoot ?? ""}`}
-          environment={environment}
-          workspaceRoot={workspaceRoot}
-        />
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {tabs.map((tab) => (
+              <Button
+                key={tab.id}
+                size="sm"
+                variant={activeTab === tab.id ? "default" : "outline"}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                {tab.label}
+              </Button>
+            ))}
+          </div>
+          {activeTab === "mcp" ? (
+            <EnvironmentHarnessMcpSection
+              key={`${environment.environmentId}:${workspaceRoot ?? ""}`}
+              environment={environment}
+              workspaceRoot={workspaceRoot}
+            />
+          ) : (
+            <HarnessLibraryPanels
+              key={`${environment.environmentId}:${workspaceRoot ?? ""}:${activeTab}`}
+              activeTab={activeTab}
+              environmentId={environment.environmentId}
+              workspaceRoot={workspaceRoot}
+            />
+          )}
+        </div>
       ) : (
         <SettingsSection {...setting("harness-mcp")}>
           <p className="px-4 py-3 text-sm text-muted-foreground">

@@ -42,6 +42,9 @@ import {
 
 const HARNESS_TOOL_SEARCH_NAME = "harness_tool_search";
 export const HARNESS_PROPOSE_PLAN_NAME = "propose_plan";
+export const HARNESS_SKILL_SEARCH_NAME = "harness_skill_search";
+export const HARNESS_SKILL_LOAD_NAME = "harness_skill_load";
+export const HARNESS_RULE_READ_NAME = "harness_rule_read";
 
 const DEFAULT_IDLE_TTL_MS = 10 * 60 * 1_000;
 const DEFERRED_THRESHOLD_TOOLS = 24;
@@ -63,6 +66,7 @@ export interface GatewaySessionContext {
   readonly interactionMode: ProviderInteractionMode;
   readonly runtimeMode: RuntimeMode;
   readonly includeProposePlan: boolean;
+  readonly includeLibraryTools?: boolean | undefined;
   readonly deferredExposure: boolean;
   readonly harnessCapabilities?: OrchestrationV2HarnessCapabilities | undefined;
 }
@@ -330,6 +334,67 @@ const HARNESS_PROPOSE_PLAN_DEF: GatewayExposedTool = {
   readOnly: true,
 };
 
+const HARNESS_SKILL_SEARCH_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_SKILL_SEARCH_NAME,
+  serverId: null,
+  upstreamName: HARNESS_SKILL_SEARCH_NAME,
+  description:
+    "Search portable user and repository skills by keyword. Returns skill names, scopes, and summaries so you can load relevant skills with harness_skill_load.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "Keywords describing the task or skill to find (empty lists all skills).",
+      },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
+  readOnly: true,
+};
+
+const HARNESS_SKILL_LOAD_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_SKILL_LOAD_NAME,
+  serverId: null,
+  upstreamName: HARNESS_SKILL_LOAD_NAME,
+  description:
+    "Load the full SKILL.md instructions and companion file listing for a portable skill by name or id.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        description:
+          "Skill id or name returned by harness_skill_search or listed in portable skills.",
+      },
+    },
+    required: ["name"],
+    additionalProperties: false,
+  },
+  readOnly: true,
+};
+
+const HARNESS_RULE_READ_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_RULE_READ_NAME,
+  serverId: null,
+  upstreamName: HARNESS_RULE_READ_NAME,
+  description:
+    "Read the full body of a portable harness rule (use 'user:AGENTS.md', 'project:AGENTS.md', or a rule id from rules/*.md) when a rule is manual or exceeded inline context budget.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: {
+        type: "string",
+        description: "Rule identifier (e.g. 'user:AGENTS.md' or 'typescript-style').",
+      },
+    },
+    required: ["id"],
+    additionalProperties: false,
+  },
+  readOnly: true,
+};
+
 export class McpGateway extends Context.Service<
   McpGateway,
   {
@@ -349,6 +414,8 @@ export class McpGateway extends Context.Service<
       readonly emitsProposedPlan: boolean;
       readonly supportsMcpTools: boolean;
       readonly harnessCapabilities: OrchestrationV2HarnessCapabilities;
+      readonly hasLibraryGatewayTools?: boolean | undefined;
+      readonly libraryDigest?: string | undefined;
     }) => Effect.Effect<GatewaySessionInjection>;
     readonly listToolsForSession: (
       context: GatewaySessionContext,
@@ -912,13 +979,16 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     }
 
     gatewayServerFingerprints.sort();
+    const hasLibraryTools = input.hasLibraryGatewayTools === true && input.supportsMcpTools;
     const gatewayServersDigest = NodeCrypto.createHash("sha256")
-      .update(`${needsProposePlan ? "1" : "0"}\u0000${gatewayServerFingerprints.join("\u001f")}`)
+      .update(
+        `${needsProposePlan ? "1" : "0"}\u0000${hasLibraryTools ? "1" : "0"}\u0000${input.libraryDigest ?? ""}\u0000${gatewayServerFingerprints.join("\u001f")}`,
+      )
       .digest("hex")
       .slice(0, 24);
 
     return {
-      harnessActive: needsProposePlan || gatewayServerFingerprints.length > 0,
+      harnessActive: needsProposePlan || hasLibraryTools || gatewayServerFingerprints.length > 0,
       gatewayServersDigest,
       nativeMcpServers,
     };
@@ -1025,6 +1095,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     const listed: Array<GatewayExposedTool> = [];
     if (context.includeProposePlan) {
       listed.push(HARNESS_PROPOSE_PLAN_DEF);
+    }
+    if (context.includeLibraryTools) {
+      listed.push(HARNESS_SKILL_SEARCH_DEF, HARNESS_SKILL_LOAD_DEF, HARNESS_RULE_READ_DEF);
     }
     if (!shouldDefer) {
       listed.push(...upstreamTools);

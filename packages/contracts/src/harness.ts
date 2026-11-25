@@ -1,14 +1,77 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { ProviderInteractionMode } from "./providerPolicy.ts";
 
 const HARNESS_SERVER_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+const HARNESS_ITEM_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+
+/** Default user budget for inline portable harness context (bytes) before whole-block degradation. */
+export const DEFAULT_HARNESS_MAX_SYSTEM_CONTEXT_BYTES = 12_000;
 
 /** Sentinel returned for literal env/header values in redacted Harness read models. */
 export const HARNESS_SECRET_REDACTED = "\u2022\u2022\u2022\u2022\u2022\u2022";
+
+/** Built-in T3 / provider slash command names that portable custom commands may never shadow. */
+const RESERVED_HARNESS_COMMAND_IDS: ReadonlySet<string> = new Set([
+  "plan",
+  "default",
+  "model",
+  "side",
+  "btw",
+  "clear",
+  "compact",
+  "compress",
+  "login",
+  "logout",
+  "feedback",
+  "goal",
+  "help",
+  "usage",
+  "limits",
+  "skill",
+]);
+
+export function isReservedHarnessCommandId(id: string): boolean {
+  return RESERVED_HARNESS_COMMAND_IDS.has(id.trim().toLowerCase());
+}
+
+export const HarnessSkillId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(64),
+  Schema.isPattern(HARNESS_ITEM_ID_PATTERN),
+).annotate({
+  description:
+    "Stable portable skill directory identifier (letters, digits, underscores, hyphens).",
+});
+export type HarnessSkillId = typeof HarnessSkillId.Type;
+
+export const HarnessRuleId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(64),
+  Schema.isPattern(HARNESS_ITEM_ID_PATTERN),
+).annotate({
+  description: "Stable portable rule file identifier (letters, digits, underscores, hyphens).",
+});
+export type HarnessRuleId = typeof HarnessRuleId.Type;
+
+export const HarnessCommandId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(64),
+  Schema.isPattern(HARNESS_ITEM_ID_PATTERN),
+  Schema.makeFilter((value: string) => !isReservedHarnessCommandId(value), {
+    expected: "a non-reserved slash command identifier",
+  }),
+).annotate({
+  description:
+    "Stable portable slash command identifier (letters, digits, underscores, hyphens; cannot shadow built-in commands).",
+});
+export type HarnessCommandId = typeof HarnessCommandId.Type;
 
 /** Built-in T3 MCP server identifiers and dynamic thread-scoped prefixes that user/project configs may never shadow. */
 const RESERVED_HARNESS_MCP_SERVER_IDS: ReadonlySet<string> = new Set([
@@ -154,6 +217,14 @@ export const HarnessConfigFile = Schema.Struct({
   mcpServers: Schema.Record(HarnessMcpServerId, HarnessMcpServerConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  disabledSkills: Schema.Array(HarnessSkillId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  disabledRules: Schema.Array(HarnessRuleId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  disabledCommands: Schema.Array(HarnessCommandId).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  maxSystemContextBytes: Schema.NullOr(PositiveInt).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
 });
 export type HarnessConfigFile = typeof HarnessConfigFile.Type;
 
@@ -161,9 +232,12 @@ export type HarnessConfigFile = typeof HarnessConfigFile.Type;
 export const ProjectHarnessConfig = Schema.Struct({
   mcpServers: Schema.optionalKey(Schema.Record(HarnessMcpServerId, HarnessMcpServerConfig)),
   disabledMcpServers: Schema.optionalKey(Schema.Array(HarnessMcpServerId)),
+  disabledSkills: Schema.optionalKey(Schema.Array(HarnessSkillId)),
+  disabledRules: Schema.optionalKey(Schema.Array(HarnessRuleId)),
+  disabledCommands: Schema.optionalKey(Schema.Array(HarnessCommandId)),
 }).annotate({
   description:
-    "Project-scoped portable harness configuration (MCP servers and overrides). Stdio servers require explicit owner trust confirmation before execution.",
+    "Project-scoped portable harness configuration (MCP servers, skills, rules, commands overrides). Stdio servers require explicit owner trust confirmation before execution.",
 });
 export type ProjectHarnessConfig = typeof ProjectHarnessConfig.Type;
 
@@ -298,8 +372,307 @@ export const ThreadContextMcpItem = Schema.Struct({
 });
 export type ThreadContextMcpItem = typeof ThreadContextMcpItem.Type;
 
+export const HarnessRuleApplyMode = Schema.Literals(["always", "glob", "manual"]);
+export type HarnessRuleApplyMode = typeof HarnessRuleApplyMode.Type;
+
+export const HarnessAgentsMdView = Schema.Struct({
+  scope: HarnessMcpServerScope,
+  path: Schema.String,
+  exists: Schema.Boolean,
+  contentDigest: Schema.String,
+  bytes: NonNegativeInt,
+  body: Schema.String,
+});
+export type HarnessAgentsMdView = typeof HarnessAgentsMdView.Type;
+
+export const HarnessSkillEntry = Schema.Struct({
+  id: HarnessSkillId,
+  name: TrimmedNonEmptyString,
+  scope: HarnessMcpServerScope,
+  description: Schema.optionalKey(Schema.String),
+  shortDescription: Schema.optionalKey(Schema.String),
+  userInvocable: Schema.Boolean,
+  userInvocationOnly: Schema.Boolean,
+  enabled: Schema.Boolean,
+  effectiveEnabled: Schema.Boolean,
+  overriddenByProject: Schema.Boolean,
+  sourcePath: Schema.String,
+  contentDigest: Schema.String,
+  bytes: NonNegativeInt,
+  body: Schema.String,
+  origin: Schema.optionalKey(HarnessMcpOrigin),
+});
+export type HarnessSkillEntry = typeof HarnessSkillEntry.Type;
+
+export const HarnessRuleEntry = Schema.Struct({
+  id: HarnessRuleId,
+  scope: HarnessMcpServerScope,
+  description: Schema.optionalKey(Schema.String),
+  apply: HarnessRuleApplyMode,
+  globs: Schema.Array(Schema.String),
+  enabled: Schema.Boolean,
+  effectiveEnabled: Schema.Boolean,
+  overriddenByProject: Schema.Boolean,
+  sourcePath: Schema.String,
+  contentDigest: Schema.String,
+  bytes: NonNegativeInt,
+  body: Schema.String,
+  origin: Schema.optionalKey(HarnessMcpOrigin),
+});
+export type HarnessRuleEntry = typeof HarnessRuleEntry.Type;
+
+export const HarnessCommandEntry = Schema.Struct({
+  id: HarnessCommandId,
+  name: TrimmedNonEmptyString,
+  scope: HarnessMcpServerScope,
+  description: Schema.optionalKey(Schema.String),
+  argumentHint: Schema.optionalKey(Schema.String),
+  enabled: Schema.Boolean,
+  effectiveEnabled: Schema.Boolean,
+  overriddenByProject: Schema.Boolean,
+  sourcePath: Schema.String,
+  contentDigest: Schema.String,
+  bytes: NonNegativeInt,
+  body: Schema.String,
+  origin: Schema.optionalKey(HarnessMcpOrigin),
+});
+export type HarnessCommandEntry = typeof HarnessCommandEntry.Type;
+
+export const HarnessLibrarySnapshot = Schema.Struct({
+  harnessDir: Schema.String,
+  workspaceRoot: Schema.NullOr(Schema.String),
+  userAgentsMd: HarnessAgentsMdView,
+  projectAgentsMd: Schema.NullOr(HarnessAgentsMdView),
+  skills: Schema.Array(HarnessSkillEntry),
+  rules: Schema.Array(HarnessRuleEntry),
+  commands: Schema.Array(HarnessCommandEntry),
+  maxSystemContextBytes: PositiveInt,
+  invalidEntries: Schema.Array(HarnessInvalidEntry),
+  managedPolicyAllowsHarness: Schema.Boolean,
+  managedPolicyOrganization: Schema.NullOr(Schema.String),
+});
+export type HarnessLibrarySnapshot = typeof HarnessLibrarySnapshot.Type;
+
+export const HarnessLibrarySnapshotInput = Schema.Struct({
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessLibrarySnapshotInput = typeof HarnessLibrarySnapshotInput.Type;
+
+export const HarnessAgentsMdSaveInput = Schema.Struct({
+  body: Schema.String.check(Schema.isMaxLength(262_144)),
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessAgentsMdSaveInput = typeof HarnessAgentsMdSaveInput.Type;
+
+export const HarnessSkillUpsertInput = Schema.Struct({
+  id: HarnessSkillId,
+  name: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+  description: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(1024))),
+  shortDescription: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(256))),
+  userInvocable: Schema.optionalKey(Schema.Boolean),
+  userInvocationOnly: Schema.optionalKey(Schema.Boolean),
+  enabled: Schema.optionalKey(Schema.Boolean),
+  body: Schema.String.check(Schema.isMaxLength(262_144)),
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessSkillUpsertInput = typeof HarnessSkillUpsertInput.Type;
+
+export const HarnessSkillRemoveInput = Schema.Struct({
+  id: HarnessSkillId,
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessSkillRemoveInput = typeof HarnessSkillRemoveInput.Type;
+
+export const HarnessSkillSetEnabledInput = Schema.Struct({
+  id: HarnessSkillId,
+  enabled: Schema.Boolean,
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessSkillSetEnabledInput = typeof HarnessSkillSetEnabledInput.Type;
+
+export const HarnessRuleUpsertInput = Schema.Struct({
+  id: HarnessRuleId,
+  description: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+  apply: HarnessRuleApplyMode,
+  globs: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(256)))),
+  enabled: Schema.optionalKey(Schema.Boolean),
+  body: Schema.String.check(Schema.isMaxLength(262_144)),
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessRuleUpsertInput = typeof HarnessRuleUpsertInput.Type;
+
+export const HarnessRuleRemoveInput = Schema.Struct({
+  id: HarnessRuleId,
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessRuleRemoveInput = typeof HarnessRuleRemoveInput.Type;
+
+export const HarnessRuleSetEnabledInput = Schema.Struct({
+  id: HarnessRuleId,
+  enabled: Schema.Boolean,
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessRuleSetEnabledInput = typeof HarnessRuleSetEnabledInput.Type;
+
+export const HarnessCommandUpsertInput = Schema.Struct({
+  id: HarnessCommandId,
+  description: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+  argumentHint: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(256))),
+  enabled: Schema.optionalKey(Schema.Boolean),
+  body: Schema.String.check(Schema.isMaxLength(262_144)),
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessCommandUpsertInput = typeof HarnessCommandUpsertInput.Type;
+
+export const HarnessCommandRemoveInput = Schema.Struct({
+  id: HarnessCommandId,
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessCommandRemoveInput = typeof HarnessCommandRemoveInput.Type;
+
+export const HarnessCommandSetEnabledInput = Schema.Struct({
+  id: HarnessCommandId,
+  enabled: Schema.Boolean,
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessCommandSetEnabledInput = typeof HarnessCommandSetEnabledInput.Type;
+
+export const HarnessSettingsUpdateInput = Schema.Struct({
+  maxSystemContextBytes: Schema.NullOr(PositiveInt),
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessSettingsUpdateInput = typeof HarnessSettingsUpdateInput.Type;
+
+export const HarnessLibraryImportKind = Schema.Literals(["skill", "rule", "command", "agents_md"]);
+export type HarnessLibraryImportKind = typeof HarnessLibraryImportKind.Type;
+
+export const HarnessLibraryImportCandidate = Schema.Struct({
+  kind: HarnessLibraryImportKind,
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  description: Schema.optionalKey(Schema.String),
+  sourcePath: Schema.String,
+  previewDigest: Schema.String,
+  existingDigest: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  conflict: HarnessMcpImportConflict,
+  bytes: NonNegativeInt,
+  summary: Schema.String,
+});
+export type HarnessLibraryImportCandidate = typeof HarnessLibraryImportCandidate.Type;
+
+export const HarnessLibraryImportSourcePreview = Schema.Struct({
+  source: HarnessMcpImportSource,
+  found: Schema.Boolean,
+  candidates: Schema.Array(HarnessLibraryImportCandidate),
+  warnings: Schema.Array(Schema.String),
+});
+export type HarnessLibraryImportSourcePreview = typeof HarnessLibraryImportSourcePreview.Type;
+
+export const HarnessLibraryScanImportsInput = Schema.Struct({
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessLibraryScanImportsInput = typeof HarnessLibraryScanImportsInput.Type;
+
+export const HarnessLibraryScanImportsResult = Schema.Struct({
+  sources: Schema.Array(HarnessLibraryImportSourcePreview),
+});
+export type HarnessLibraryScanImportsResult = typeof HarnessLibraryScanImportsResult.Type;
+
+export const HarnessLibraryApplyImportsInput = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      source: HarnessMcpImportSource,
+      kind: HarnessLibraryImportKind,
+      id: TrimmedNonEmptyString,
+      expectedDigest: Schema.optionalKey(TrimmedNonEmptyString),
+      expectedExistingDigest: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+    }),
+  ),
+  overwriteExisting: Schema.optionalKey(Schema.Boolean),
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessLibraryApplyImportsInput = typeof HarnessLibraryApplyImportsInput.Type;
+
+export const HarnessLibraryApplyImportsResult = Schema.Struct({
+  importedKeys: Schema.Array(Schema.String),
+  skippedKeys: Schema.Array(Schema.String),
+  snapshot: HarnessLibrarySnapshot,
+});
+export type HarnessLibraryApplyImportsResult = typeof HarnessLibraryApplyImportsResult.Type;
+
+export const HarnessExportTarget = Schema.Literals(["codex", "claude", "cursor"]);
+export type HarnessExportTarget = typeof HarnessExportTarget.Type;
+
+export const HarnessExportSection = Schema.Literals(["mcp", "skills", "rules", "commands"]);
+export type HarnessExportSection = typeof HarnessExportSection.Type;
+
+export const HarnessExportFileAction = Schema.Literals(["create", "update", "unchanged"]);
+export type HarnessExportFileAction = typeof HarnessExportFileAction.Type;
+
+export const HarnessExportPreviewFile = Schema.Struct({
+  targetPath: Schema.String,
+  action: HarnessExportFileAction,
+  section: HarnessExportSection,
+  itemId: Schema.String,
+  bytes: NonNegativeInt,
+  previewSnippet: Schema.String,
+  hasSecretPlaceholders: Schema.Boolean,
+});
+export type HarnessExportPreviewFile = typeof HarnessExportPreviewFile.Type;
+
+export const HarnessExportPreviewInput = Schema.Struct({
+  target: HarnessExportTarget,
+  sections: Schema.optionalKey(Schema.Array(HarnessExportSection)),
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessExportPreviewInput = typeof HarnessExportPreviewInput.Type;
+
+export const HarnessExportPreviewResult = Schema.Struct({
+  target: HarnessExportTarget,
+  planDigest: Schema.String,
+  files: Schema.Array(HarnessExportPreviewFile),
+  warnings: Schema.Array(Schema.String),
+});
+export type HarnessExportPreviewResult = typeof HarnessExportPreviewResult.Type;
+
+export const HarnessExportApplyInput = Schema.Struct({
+  target: HarnessExportTarget,
+  sections: Schema.optionalKey(Schema.Array(HarnessExportSection)),
+  planDigest: TrimmedNonEmptyString,
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessExportApplyInput = typeof HarnessExportApplyInput.Type;
+
+export const HarnessExportApplyResult = Schema.Struct({
+  target: HarnessExportTarget,
+  writtenPaths: Schema.Array(Schema.String),
+  skippedPaths: Schema.Array(Schema.String),
+  warnings: Schema.Array(Schema.String),
+});
+export type HarnessExportApplyResult = typeof HarnessExportApplyResult.Type;
+
+export const ThreadContextSkillItem = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  scope: HarnessMcpServerScope,
+  channel: Schema.Literals(["native-mount", "gateway", "deduplicated", "disabled"]),
+  bytes: NonNegativeInt,
+  reason: Schema.optionalKey(Schema.String),
+});
+export type ThreadContextSkillItem = typeof ThreadContextSkillItem.Type;
+
+export const ThreadContextRuleItem = Schema.Struct({
+  id: Schema.String,
+  scope: HarnessMcpServerScope,
+  apply: HarnessRuleApplyMode,
+  status: Schema.Literals(["inlined", "on-demand", "degraded", "deduplicated", "disabled"]),
+  bytes: NonNegativeInt,
+  reason: Schema.optionalKey(Schema.String),
+});
+export type ThreadContextRuleItem = typeof ThreadContextRuleItem.Type;
+
 export const ThreadContextDegradedItem = Schema.Struct({
-  kind: Schema.Literals(["mcp", "plan"]),
+  kind: Schema.Literals(["mcp", "plan", "skill", "rule"]),
   id: Schema.String,
   reason: Schema.String,
 });
@@ -315,6 +688,12 @@ export const ThreadContextManifest = Schema.Struct({
   planModeReadOnlyEnforcement: HarnessPlanReadOnlyEnforcement,
   harnessGatewayActive: Schema.Boolean,
   mcpServers: Schema.Array(ThreadContextMcpItem),
+  skills: Schema.Array(ThreadContextSkillItem).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  rules: Schema.Array(ThreadContextRuleItem).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  commandsCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  contextBudgetBytes: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  contextUsedBytes: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  scaffoldBytes: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   degradedItems: Schema.Array(ThreadContextDegradedItem),
 });
 export type ThreadContextManifest = typeof ThreadContextManifest.Type;

@@ -3,6 +3,7 @@ import {
   type HarnessPlanModeKind,
   type HarnessPlanReadOnlyEnforcement,
   IsoDateTime,
+  NonNegativeInt,
   type ThreadContextDegradedItem,
   type ThreadContextManifest,
   type ThreadContextMcpItem,
@@ -17,6 +18,9 @@ import * as Option from "effect/Option";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
+import { type NativeDiscoveredSkill, projectHarnessContext } from "./HarnessProjector.ts";
 import * as McpGateway from "./McpGateway.ts";
 
 export class HarnessContextService extends Context.Service<
@@ -30,6 +34,8 @@ export class HarnessContextService extends Context.Service<
 
 const make = Effect.gen(function* () {
   const gateway = yield* McpGateway.McpGateway;
+  const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+  const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const adapterRegistry = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
@@ -75,6 +81,38 @@ const make = Effect.gen(function* () {
           };
 
       const snapshot = yield* gateway.getSnapshot(workspaceRoot);
+      const librarySnapshot = Option.isSome(libraryStore)
+        ? yield* libraryStore.value
+            .getSnapshot(workspaceRoot)
+            .pipe(Effect.orElseSucceed(() => null))
+        : null;
+      const nativeSkills: ReadonlyArray<NativeDiscoveredSkill> = Option.isSome(providerRegistry)
+        ? yield* providerRegistry.value.getProviders.pipe(
+            Effect.map((providers) => {
+              const matched = providers.find(
+                (provider) => provider.instanceId === thread.providerInstanceId,
+              );
+              if (!matched) return [];
+              const ws =
+                workspaceRoot !== undefined
+                  ? matched.workspaceSnapshots?.find((snap) => snap.cwd === workspaceRoot)
+                  : undefined;
+              const skills = ws?.skills ?? matched.skills;
+              return skills.map((skill) => ({ name: skill.name, path: skill.path }));
+            }),
+            Effect.orElseSucceed(() => [] as ReadonlyArray<NativeDiscoveredSkill>),
+          )
+        : [];
+      const projected =
+        librarySnapshot !== null
+          ? projectHarnessContext({
+              library: librarySnapshot,
+              harnessCapabilities,
+              nativeSkills,
+              nativeReadsProjectAgentsMd: true,
+              supportsMcpTools,
+            })
+          : null;
 
       const planModeSource: HarnessPlanModeKind = emitsProposedPlan
         ? "native"
@@ -151,7 +189,16 @@ const make = Effect.gen(function* () {
         });
       }
 
+      if (projected !== null) {
+        degradedItems.push(...projected.degradedItems);
+      }
+
       const now = yield* DateTime.now;
+      const commandsCount =
+        librarySnapshot !== null
+          ? NonNegativeInt.make(librarySnapshot.commands.filter((c) => c.effectiveEnabled).length)
+          : NonNegativeInt.make(0);
+
       return {
         threadId,
         generatedAt: IsoDateTime.make(DateTime.formatIso(now)),
@@ -162,8 +209,15 @@ const make = Effect.gen(function* () {
         harnessGatewayActive:
           snapshot.managedPolicyAllowsHarness &&
           (activeGatewayCount > 0 ||
+            projected?.needsGatewayTools === true ||
             (thread.interactionMode === "plan" && planModeSource === "harness-propose-plan")),
         mcpServers,
+        skills: projected?.skills ?? [],
+        rules: projected?.rules ?? [],
+        commandsCount,
+        contextBudgetBytes: projected?.contextBudgetBytes ?? NonNegativeInt.make(0),
+        contextUsedBytes: projected?.contextUsedBytes ?? NonNegativeInt.make(0),
+        scaffoldBytes: projected?.scaffoldBytes ?? NonNegativeInt.make(0),
         degradedItems,
       };
     });

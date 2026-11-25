@@ -35,6 +35,7 @@ import {
   type AuthAccessStreamEvent,
   AuthOrchestrationOperateScope,
   AuthProvidersManageScope,
+  AuthSettingsWriteScope,
   AuthTerminalOperateScope,
   type AuthEnvironmentScope,
   HarnessError,
@@ -131,7 +132,10 @@ import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as McpSignIn from "./mcpApps/McpSignIn.ts";
 import * as HarnessStore from "./harness/HarnessStore.ts";
+import * as HarnessLibraryStore from "./harness/HarnessLibraryStore.ts";
 import * as HarnessImporter from "./harness/HarnessImporter.ts";
+import * as HarnessLibraryImporter from "./harness/HarnessLibraryImporter.ts";
+import * as HarnessExporter from "./harness/HarnessExporter.ts";
 import { configContainsSecretPlaceholder } from "./harness/HarnessSecrets.ts";
 import * as McpGateway from "./harness/McpGateway.ts";
 import * as HarnessContextService from "./harness/HarnessContextService.ts";
@@ -1458,7 +1462,12 @@ export const layerWsRpc = (
   settingsClient: { readonly secretReferences: boolean },
   harnessServices?: {
     readonly harnessStore?: HarnessStore.HarnessStore["Service"] | undefined;
+    readonly harnessLibraryStore?: HarnessLibraryStore.HarnessLibraryStore["Service"] | undefined;
     readonly harnessImporter?: HarnessImporter.HarnessImporter["Service"] | undefined;
+    readonly harnessLibraryImporter?:
+      | HarnessLibraryImporter.HarnessLibraryImporter["Service"]
+      | undefined;
+    readonly harnessExporter?: HarnessExporter.HarnessExporter["Service"] | undefined;
     readonly mcpGateway?: McpGateway.McpGateway["Service"] | undefined;
     readonly harnessContext?: HarnessContextService.HarnessContextService["Service"] | undefined;
   },
@@ -1491,10 +1500,22 @@ export const layerWsRpc = (
         harnessServices?.harnessStore !== undefined
           ? Option.some(harnessServices.harnessStore)
           : yield* Effect.serviceOption(HarnessStore.HarnessStore);
+      const harnessLibraryStoreOption =
+        harnessServices?.harnessLibraryStore !== undefined
+          ? Option.some(harnessServices.harnessLibraryStore)
+          : yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
       const harnessImporterOption =
         harnessServices?.harnessImporter !== undefined
           ? Option.some(harnessServices.harnessImporter)
           : yield* Effect.serviceOption(HarnessImporter.HarnessImporter);
+      const harnessLibraryImporterOption =
+        harnessServices?.harnessLibraryImporter !== undefined
+          ? Option.some(harnessServices.harnessLibraryImporter)
+          : yield* Effect.serviceOption(HarnessLibraryImporter.HarnessLibraryImporter);
+      const harnessExporterOption =
+        harnessServices?.harnessExporter !== undefined
+          ? Option.some(harnessServices.harnessExporter)
+          : yield* Effect.serviceOption(HarnessExporter.HarnessExporter);
       const mcpGatewayOption =
         harnessServices?.mcpGateway !== undefined
           ? Option.some(harnessServices.mcpGateway)
@@ -3862,6 +3883,91 @@ export const layerWsRpc = (
             onNone: () => harnessUnavailable("HarnessContextService"),
             onSome: (contextService) => contextService.getThreadContextManifest(input.threadId),
           }),
+        [WS_METHODS.harnessLibrarySnapshot]: (input) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryStore"),
+            onSome: (lib) => lib.getSnapshot(input.workspaceRoot),
+          }),
+        [WS_METHODS.harnessAgentsMdSave]: (input) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryStore"),
+            onSome: (lib) => lib.saveUserAgentsMd(input),
+          }),
+        [WS_METHODS.harnessSkillUpsert]: (input) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryStore"),
+            onSome: (lib) => lib.upsertUserSkill(input),
+          }),
+        [WS_METHODS.harnessSkillRemove]: (input) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryStore"),
+            onSome: (lib) => lib.removeUserSkill(input),
+          }),
+        [WS_METHODS.harnessSkillSetEnabled]: (input) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryStore"),
+            onSome: (lib) => lib.setSkillEnabled(input),
+          }),
+        [WS_METHODS.harnessRuleUpsert]: (input) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryStore"),
+            onSome: (lib) => lib.upsertUserRule(input),
+          }),
+        [WS_METHODS.harnessRuleRemove]: (input) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryStore"),
+            onSome: (lib) => lib.removeUserRule(input),
+          }),
+        [WS_METHODS.harnessRuleSetEnabled]: (input) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryStore"),
+            onSome: (lib) => lib.setRuleEnabled(input),
+          }),
+        [WS_METHODS.harnessCommandUpsert]: (input) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryStore"),
+            onSome: (lib) => lib.upsertUserCommand(input),
+          }),
+        [WS_METHODS.harnessCommandRemove]: (input) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryStore"),
+            onSome: (lib) => lib.removeUserCommand(input),
+          }),
+        [WS_METHODS.harnessCommandSetEnabled]: (input) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryStore"),
+            onSome: (lib) => lib.setCommandEnabled(input),
+          }),
+        [WS_METHODS.harnessSettingsUpdate]: (input) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryStore"),
+            onSome: (lib) => lib.updateSettings(input),
+          }),
+        [WS_METHODS.harnessLibraryScanImports]: (input) =>
+          Option.match(harnessLibraryImporterOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryImporter"),
+            onSome: (importer) =>
+              importer.scan(input.workspaceRoot).pipe(Effect.map((sources) => ({ sources }))),
+          }),
+        [WS_METHODS.harnessLibraryApplyImports]: (input) =>
+          Option.match(harnessLibraryImporterOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryImporter"),
+            onSome: (importer) => importer.apply(input),
+          }),
+        [WS_METHODS.harnessExportPreview]: (input) =>
+          Option.match(harnessExporterOption, {
+            onNone: () => harnessUnavailable("HarnessExporter"),
+            onSome: (exporter) => exporter.preview(input),
+          }),
+        [WS_METHODS.harnessExportApply]: (input) =>
+          Option.match(harnessExporterOption, {
+            onNone: () => harnessUnavailable("HarnessExporter"),
+            onSome: (exporter) =>
+              authorizeEffect(
+                AuthSettingsWriteScope,
+                authorizeEffect(AuthProvidersManageScope, exporter.apply(input)),
+              ),
+          }),
       });
       const splitHandlers: Pick<typeof handlers, SplitWsRpc["_tag"]> = handlers;
       const otherHandlers: Pick<typeof handlers, Exclude<ServerWsRpc, SplitWsRpc>["_tag"]> =
@@ -3895,12 +4001,22 @@ export const layer = Layer.unwrap(
     const peerThreadRelay = yield* PeerThreadRelay.PeerThreadRelay;
     const peerClientPairing = yield* PeerClientPairing.PeerClientPairing;
     const harnessStore = yield* Effect.serviceOption(HarnessStore.HarnessStore);
+    const harnessLibraryStore = yield* Effect.serviceOption(
+      HarnessLibraryStore.HarnessLibraryStore,
+    );
     const harnessImporter = yield* Effect.serviceOption(HarnessImporter.HarnessImporter);
+    const harnessLibraryImporter = yield* Effect.serviceOption(
+      HarnessLibraryImporter.HarnessLibraryImporter,
+    );
+    const harnessExporter = yield* Effect.serviceOption(HarnessExporter.HarnessExporter);
     const mcpGateway = yield* Effect.serviceOption(McpGateway.McpGateway);
     const harnessContext = yield* Effect.serviceOption(HarnessContextService.HarnessContextService);
     const capturedHarnessServices = {
       harnessStore: Option.getOrUndefined(harnessStore),
+      harnessLibraryStore: Option.getOrUndefined(harnessLibraryStore),
       harnessImporter: Option.getOrUndefined(harnessImporter),
+      harnessLibraryImporter: Option.getOrUndefined(harnessLibraryImporter),
+      harnessExporter: Option.getOrUndefined(harnessExporter),
       mcpGateway: Option.getOrUndefined(mcpGateway),
       harnessContext: Option.getOrUndefined(harnessContext),
     };

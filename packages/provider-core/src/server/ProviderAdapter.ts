@@ -603,6 +603,8 @@ export interface ProviderAdapterV2TurnInput {
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
   readonly appContext?: ReadonlyArray<{ readonly key: string; readonly text: string }>;
+  /** Budgeted portable harness context segments (personal AGENTS.md, rules, skill index, scaffold). */
+  readonly harnessContext?: ReadonlyArray<{ readonly key: string; readonly text: string }>;
 }
 
 export type ProviderAdapterV2ResumeTurnInput = Omit<
@@ -633,6 +635,8 @@ export interface ProviderAdapterV2SteerInput {
   readonly modelSelection?: ModelSelection;
   /** The thread's MCP app notes; the adapter sends those the agent has not seen yet. */
   readonly appContext?: ProviderAdapterV2TurnInput["appContext"];
+  /** Budgeted portable harness context segments when changed mid-session. */
+  readonly harnessContext?: ProviderAdapterV2TurnInput["harnessContext"];
 }
 
 export interface ProviderAdapterV2InterruptInput {

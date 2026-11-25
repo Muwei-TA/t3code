@@ -32,10 +32,13 @@ import { basenameOfPath } from "../../pierre-icons";
 import {
   getProviderSkillsForSlashMenu,
   getProviderSlashCommandsForSlashMenu,
+  mergePortableHarnessCommands,
+  mergePortableHarnessSkills,
 } from "@t3tools/client-runtime/providerSkills";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useVisibleThreadShells } from "~/state/entities";
 import { useEnvironmentIdentities, useEnvironmentMachines } from "~/state/environments";
+import { harnessEnvironment } from "~/state/harness";
 import { offersLinkedEnvironmentsAtom } from "~/state/peerLinks";
 import {
   pullRequestEnvironment,
@@ -125,6 +128,24 @@ export function useComposerMenuItems({
   const settledPullRequestTextQuery =
     pullRequestTextQuery === debouncedPullRequestTextQuery ? pullRequestTextQuery : null;
   const isPathTrigger = composerTriggerKind === "path";
+  const isHarnessMenuTrigger =
+    composerTriggerKind === "slash-command" || composerTriggerKind === "skill";
+  const harnessLibraryLookup = useEnvironmentQuery(
+    isHarnessMenuTrigger
+      ? harnessEnvironment.libraryQuery({
+          environmentId,
+          input: gitCwd ? { workspaceRoot: gitCwd } : {},
+        })
+      : null,
+  );
+  const effectiveProviderSkills = mergePortableHarnessSkills(
+    selectedProviderSkills,
+    harnessLibraryLookup.data?.skills,
+  );
+  const effectiveProviderSlashCommands = mergePortableHarnessCommands(
+    selectedProviderSlashCommands,
+    harnessLibraryLookup.data?.commands,
+  );
   const environmentThreadShells = useVisibleThreadShells(isPathTrigger);
   // Mounts older settled threads matching the mention, here and on linked machines, which shells
   // may leave out.
@@ -293,11 +314,11 @@ export function useComposerMenuItems({
           : []),
       ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
       const slashMenuSkills = getProviderSkillsForSlashMenu(
-        selectedProviderSkills,
+        effectiveProviderSkills,
         showSkillsInSlashMenu,
       );
       const providerSlashCommandItems = getProviderSlashCommandsForSlashMenu(
-        selectedProviderSlashCommands,
+        effectiveProviderSlashCommands,
         slashMenuSkills,
       ).map((command) => ({
         id: `provider-slash-command:${selectedProvider}:${command.name}`,
@@ -332,7 +353,7 @@ export function useComposerMenuItems({
       return searchSlashCommandItems(slashCommandItems, query);
     }
     if (composerTrigger.kind === "skill") {
-      return searchProviderSkills(selectedProviderSkills, composerTrigger.query).map((skill) => ({
+      return searchProviderSkills(effectiveProviderSkills, composerTrigger.query).map((skill) => ({
         id: `skill:${selectedProvider}:${skill.name}`,
         type: "skill" as const,
         provider: selectedProvider,

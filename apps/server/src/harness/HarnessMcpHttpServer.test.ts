@@ -7,6 +7,8 @@ import {
   DEFAULT_HARNESS_CAPABILITIES,
   EnvironmentId,
   HarnessMcpServerId,
+  HarnessRuleId,
+  HarnessSkillId,
   type OrchestrationV2ServerCommand,
   ProjectId,
   ProviderInstanceId,
@@ -32,6 +34,7 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
+import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import * as HarnessMcpHttpServer from "./HarnessMcpHttpServer.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 import * as McpGateway from "./McpGateway.ts";
@@ -157,11 +160,14 @@ describe("HarnessMcpHttpServer", () => {
             }),
         } as unknown as Orchestrator.OrchestratorV2["Service"]);
 
+        const libraryLayer = HarnessLibraryStore.layer.pipe(Layer.provideMerge(storeLayer));
+
         const serverLayer = HttpRouter.serve(HarnessMcpHttpServer.layer, {
           disableLogger: true,
         }).pipe(
           Layer.provideMerge(McpSessionRegistry.layer),
           Layer.provideMerge(gatewayLayer),
+          Layer.provideMerge(libraryLayer),
           Layer.provideMerge(NodeHttpServer.layerTest),
           Layer.provide(mockEnvLayer),
           Layer.provide(mockProjectionLayer),
@@ -393,6 +399,104 @@ describe("HarnessMcpHttpServer", () => {
           );
           expect(mutateRes.result.isError).toBe(true);
           expect(mutateRes.result.content[0]?.text).toContain("Plan mode");
+
+          // 9. Portable read-only skill & rule tools work on /mcp/harness even in Plan mode.
+          const libStore = yield* HarnessLibraryStore.HarnessLibraryStore;
+          yield* libStore.upsertUserSkill({
+            id: HarnessSkillId.make("sql-audit"),
+            description: "Audit SQL migrations",
+            body: "Check indexes and locking.",
+          });
+          yield* libStore.upsertUserRule({
+            id: HarnessRuleId.make("sec-headers"),
+            description: "Security headers",
+            apply: "manual",
+            body: "Always set CSP and HSTS.",
+          });
+
+          const listWithLibrary = yield* Effect.promise(() =>
+            fetch(harnessUrl, {
+              method: "POST",
+              headers: {
+                authorization: authHeader,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({ jsonrpc: "2.0", id: 8, method: "tools/list", params: {} }),
+            }).then((r) => r.json() as Promise<{ result: { tools: Array<{ name: string }> } }>),
+          );
+          const listedNames = listWithLibrary.result.tools.map((t) => t.name);
+          expect(listedNames).toContain("harness_skill_search");
+          expect(listedNames).toContain("harness_skill_load");
+          expect(listedNames).toContain("harness_rule_read");
+
+          const searchRes = yield* Effect.promise(() =>
+            fetch(harnessUrl, {
+              method: "POST",
+              headers: {
+                authorization: authHeader,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 9,
+                method: "tools/call",
+                params: { name: "harness_skill_search", arguments: { query: "sql" } },
+              }),
+            }).then(
+              (r) =>
+                r.json() as Promise<{
+                  result: { isError?: boolean; content: Array<{ text?: string }> };
+                }>,
+            ),
+          );
+          expect(searchRes.result.isError).not.toBe(true);
+          expect(searchRes.result.content[0]?.text).toContain("sql-audit");
+
+          const loadRes = yield* Effect.promise(() =>
+            fetch(harnessUrl, {
+              method: "POST",
+              headers: {
+                authorization: authHeader,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 10,
+                method: "tools/call",
+                params: { name: "harness_skill_load", arguments: { name: "sql-audit" } },
+              }),
+            }).then(
+              (r) =>
+                r.json() as Promise<{
+                  result: { isError?: boolean; content: Array<{ text?: string }> };
+                }>,
+            ),
+          );
+          expect(loadRes.result.isError).not.toBe(true);
+          expect(loadRes.result.content[0]?.text).toContain("Check indexes and locking.");
+
+          const ruleRes = yield* Effect.promise(() =>
+            fetch(harnessUrl, {
+              method: "POST",
+              headers: {
+                authorization: authHeader,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 11,
+                method: "tools/call",
+                params: { name: "harness_rule_read", arguments: { id: "sec-headers" } },
+              }),
+            }).then(
+              (r) =>
+                r.json() as Promise<{
+                  result: { isError?: boolean; content: Array<{ text?: string }> };
+                }>,
+            ),
+          );
+          expect(ruleRes.result.isError).not.toBe(true);
+          expect(ruleRes.result.content[0]?.text).toContain("Always set CSP and HSTS.");
         }).pipe(Effect.provide(serverLayer));
       }).pipe(Effect.provide(NodeServices.layer)),
   );

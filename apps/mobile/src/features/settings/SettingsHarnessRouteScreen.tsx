@@ -38,6 +38,7 @@ import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
 import { formatMobileTargetHost, formatMobileTransportBreakdown } from "./harness-confirmation";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
+import { type MobileHarnessTab, SettingsHarnessLibraryPanel } from "./SettingsHarnessLibraryPanel";
 
 const decodeServerId = Schema.decodeUnknownSync(HarnessMcpServerId);
 
@@ -192,6 +193,7 @@ function EnvironmentHarnessSection({
   });
 
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<MobileHarnessTab>("mcp");
   const [addOpen, setAddOpen] = useState(false);
   const [newId, setNewId] = useState("");
   const [newTransportType, setNewTransportType] = useState<"http" | "sse" | "stdio">("http");
@@ -717,136 +719,179 @@ function EnvironmentHarnessSection({
               </View>
             ) : null}
 
-            <View className="flex-row flex-wrap gap-2">
-              <Button
-                label={gt("Add server")}
-                tone="primary"
-                disabled={!canWriteSettings}
-                onPress={() => setAddOpen(true)}
-              />
-              <Button
-                label={busyId === "__scan__" ? gt("Scanning...") : gt("Import from CLIs")}
-                tone="secondary"
-                disabled={!canWriteSettings || busyId === "__scan__"}
-                onPress={() => void handleScanImports()}
-              />
-              <Button label={gt("Refresh")} tone="secondary" onPress={() => listQuery.refresh()} />
-            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerClassName="flex-row gap-2"
+            >
+              {(
+                [
+                  ["mcp", gt("MCP")],
+                  ["skills", gt("Skills")],
+                  ["rules", gt("Rules")],
+                  ["commands", gt("Commands")],
+                  ["transfer", gt("Import / Export")],
+                ] as const
+              ).map(([tabKey, tabLabel]) => (
+                <Button
+                  key={tabKey}
+                  label={tabLabel}
+                  tone={activeTab === tabKey ? "primary" : "secondary"}
+                  onPress={() => setActiveTab(tabKey)}
+                />
+              ))}
+            </ScrollView>
 
-            {invalidEntries.length > 0 ? (
-              <Text className="text-xs text-destructive">
-                {gt("{count} invalid harness entry skipped in harness.json.", {
-                  count: invalidEntries.length,
-                })}
-              </Text>
-            ) : null}
-
-            {listQuery.isPending && servers.length === 0 ? (
-              <View className="py-4">
-                <AppActivityIndicator />
-              </View>
-            ) : servers.length === 0 ? (
-              <Text className="text-sm text-foreground-muted">
-                <T>
-                  No MCP servers configured yet. Add one or import from Codex, Claude, Cursor, or
-                  Antigravity.
-                </T>
-              </Text>
+            {activeTab !== "mcp" ? (
+              <SettingsHarnessLibraryPanel
+                activeTab={activeTab}
+                environmentId={environmentId}
+                workspaceRoot={activeWorkspaceRoot}
+                targetHost={targetHost}
+                canWriteSettings={canWriteSettings}
+                canManageProviders={canManageProviders}
+              />
             ) : (
-              <View className="gap-3">
-                {servers.map((server) => {
-                  const canTrustServer =
-                    canWriteSettings &&
-                    (server.config.transport.type !== "stdio" ||
-                      (canOperateTerminal && !stdioDisabledByPolicy)) &&
-                    (!server.requiresSecretAccess || canManageProviders);
-                  const canRestartServer =
-                    canOperateOrchestration &&
-                    server.effectiveEnabled &&
-                    (server.config.transport.type !== "stdio" || canOperateTerminal) &&
-                    (!server.requiresSecretAccess || canManageProviders);
-                  return (
-                    <View
-                      key={`${server.scope}:${server.id}`}
-                      className="gap-2 rounded-xl border border-border bg-card-alt p-3"
-                    >
-                      <View className="flex-row items-center justify-between gap-2">
-                        <View className="flex-1">
-                          <Text className="font-t3-semibold text-base text-foreground">
-                            {server.id}
+              <>
+                <View className="flex-row flex-wrap gap-2">
+                  <Button
+                    label={gt("Add server")}
+                    tone="primary"
+                    disabled={!canWriteSettings}
+                    onPress={() => setAddOpen(true)}
+                  />
+                  <Button
+                    label={busyId === "__scan__" ? gt("Scanning...") : gt("Import from CLIs")}
+                    tone="secondary"
+                    disabled={!canWriteSettings || busyId === "__scan__"}
+                    onPress={() => void handleScanImports()}
+                  />
+                  <Button
+                    label={gt("Refresh")}
+                    tone="secondary"
+                    onPress={() => listQuery.refresh()}
+                  />
+                </View>
+
+                {invalidEntries.length > 0 ? (
+                  <Text className="text-xs text-destructive">
+                    {gt("{count} invalid harness entry skipped in harness.json.", {
+                      count: invalidEntries.length,
+                    })}
+                  </Text>
+                ) : null}
+
+                {listQuery.isPending && servers.length === 0 ? (
+                  <View className="py-4">
+                    <AppActivityIndicator />
+                  </View>
+                ) : servers.length === 0 ? (
+                  <Text className="text-sm text-foreground-muted">
+                    <T>
+                      No MCP servers configured yet. Add one or import from Codex, Claude, Cursor,
+                      or Antigravity.
+                    </T>
+                  </Text>
+                ) : (
+                  <View className="gap-3">
+                    {servers.map((server) => {
+                      const canTrustServer =
+                        canWriteSettings &&
+                        (server.config.transport.type !== "stdio" ||
+                          (canOperateTerminal && !stdioDisabledByPolicy)) &&
+                        (!server.requiresSecretAccess || canManageProviders);
+                      const canRestartServer =
+                        canOperateOrchestration &&
+                        server.effectiveEnabled &&
+                        (server.config.transport.type !== "stdio" || canOperateTerminal) &&
+                        (!server.requiresSecretAccess || canManageProviders);
+                      return (
+                        <View
+                          key={`${server.scope}:${server.id}`}
+                          className="gap-2 rounded-xl border border-border bg-card-alt p-3"
+                        >
+                          <View className="flex-row items-center justify-between gap-2">
+                            <View className="flex-1">
+                              <Text className="font-t3-semibold text-base text-foreground">
+                                {server.id}
+                              </Text>
+                              <Text className="text-xs text-foreground-muted">
+                                {server.config.transport.type.toUpperCase()} · {server.scope} ·{" "}
+                                {server.state} · {gt("{count} tools", { count: server.toolCount })}
+                              </Text>
+                            </View>
+                            {server.scope === "user" ? (
+                              <Switch
+                                value={server.config.enabled}
+                                disabled={
+                                  !canWriteSettings ||
+                                  busyId === server.id ||
+                                  server.state === "blocked_by_policy"
+                                }
+                                onValueChange={() => handleToggleEnabled(server)}
+                              />
+                            ) : null}
+                          </View>
+
+                          <Text
+                            className="font-mono text-xs text-foreground-muted"
+                            numberOfLines={3}
+                          >
+                            {describeTransport(server.config.transport)}
                           </Text>
-                          <Text className="text-xs text-foreground-muted">
-                            {server.config.transport.type.toUpperCase()} · {server.scope} ·{" "}
-                            {server.state} · {gt("{count} tools", { count: server.toolCount })}
-                          </Text>
+
+                          {server.lastError ? (
+                            <Text className="text-xs text-destructive">{server.lastError}</Text>
+                          ) : null}
+
+                          <View className="flex-row flex-wrap gap-2 pt-1">
+                            {server.needsTrustConfirmation ? (
+                              <Button
+                                label={gt("Review & trust")}
+                                tone="primary"
+                                disabled={!canTrustServer || busyId === server.id}
+                                onPress={() => handleTrust(server)}
+                              />
+                            ) : null}
+                            {server.scope === "project" &&
+                            server.trustDigest !== null &&
+                            !server.needsTrustConfirmation ? (
+                              <Button
+                                label={gt("Revoke trust")}
+                                tone="secondary"
+                                disabled={!canWriteSettings || busyId === server.id}
+                                onPress={() => void handleRevokeTrust(server)}
+                              />
+                            ) : null}
+                            <Button
+                              label={gt("Restart")}
+                              tone="secondary"
+                              disabled={!canRestartServer || busyId === server.id}
+                              onPress={() => void handleRestart(server)}
+                            />
+                            {canReadDiagnostics ? (
+                              <Button
+                                label={gt("Logs")}
+                                tone="secondary"
+                                disabled={busyId === server.id}
+                                onPress={() => void handleOpenLogs(server)}
+                              />
+                            ) : null}
+                            {server.scope === "user" ? (
+                              <Button
+                                label={gt("Remove")}
+                                tone="secondary"
+                                disabled={!canWriteSettings || busyId === server.id}
+                                onPress={() => handleRemove(server)}
+                              />
+                            ) : null}
+                          </View>
                         </View>
-                        {server.scope === "user" ? (
-                          <Switch
-                            value={server.config.enabled}
-                            disabled={
-                              !canWriteSettings ||
-                              busyId === server.id ||
-                              server.state === "blocked_by_policy"
-                            }
-                            onValueChange={() => handleToggleEnabled(server)}
-                          />
-                        ) : null}
-                      </View>
-
-                      <Text className="font-mono text-xs text-foreground-muted" numberOfLines={3}>
-                        {describeTransport(server.config.transport)}
-                      </Text>
-
-                      {server.lastError ? (
-                        <Text className="text-xs text-destructive">{server.lastError}</Text>
-                      ) : null}
-
-                      <View className="flex-row flex-wrap gap-2 pt-1">
-                        {server.needsTrustConfirmation ? (
-                          <Button
-                            label={gt("Review & trust")}
-                            tone="primary"
-                            disabled={!canTrustServer || busyId === server.id}
-                            onPress={() => handleTrust(server)}
-                          />
-                        ) : null}
-                        {server.scope === "project" &&
-                        server.trustDigest !== null &&
-                        !server.needsTrustConfirmation ? (
-                          <Button
-                            label={gt("Revoke trust")}
-                            tone="secondary"
-                            disabled={!canWriteSettings || busyId === server.id}
-                            onPress={() => void handleRevokeTrust(server)}
-                          />
-                        ) : null}
-                        <Button
-                          label={gt("Restart")}
-                          tone="secondary"
-                          disabled={!canRestartServer || busyId === server.id}
-                          onPress={() => void handleRestart(server)}
-                        />
-                        {canReadDiagnostics ? (
-                          <Button
-                            label={gt("Logs")}
-                            tone="secondary"
-                            disabled={busyId === server.id}
-                            onPress={() => void handleOpenLogs(server)}
-                          />
-                        ) : null}
-                        {server.scope === "user" ? (
-                          <Button
-                            label={gt("Remove")}
-                            tone="secondary"
-                            disabled={!canWriteSettings || busyId === server.id}
-                            onPress={() => handleRemove(server)}
-                          />
-                        ) : null}
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
+                      );
+                    })}
+                  </View>
+                )}
+              </>
             )}
           </>
         )}
