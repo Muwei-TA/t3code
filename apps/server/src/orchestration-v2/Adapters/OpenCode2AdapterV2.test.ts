@@ -5842,6 +5842,145 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
   );
 
   it.effect(
+    "retains built-in and harness MCP denies across failed credential replacements until re-added",
+    () =>
+      Effect.gen(function* () {
+        const threadR = ThreadId.make("thread:opencode2-rotation-deny");
+        const serverR = yield* t3McpServerName(threadR).pipe(Effect.provide(NodeCrypto.layer));
+        const harnessR = yield* t3HarnessMcpServerName(threadR).pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        const registration = {
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId: threadR,
+          providerSessionId: "mcp:opencode2-rotation-deny",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          harnessEndpoint: "http://127.0.0.1:3773/mcp/harness",
+          authorizationHeader: "Bearer original",
+          browserToolsAvailable: false,
+        };
+        yield* mcpSessions.set(registration);
+        yield* Effect.addFinalizer(() => mcpSessions.clear(threadR));
+
+        const baseRules = [
+          { action: "*", resource: "*", effect: "allow" },
+          { action: "t3-code-*", resource: "*", effect: "deny" },
+          { action: "t3-harness-*", resource: "*", effect: "deny" },
+          { action: `${serverR}_*`, resource: "*", effect: "allow" },
+          { action: `${harnessR}_*`, resource: "*", effect: "allow" },
+          { action: `${harnessR}-*`, resource: "*", effect: "allow" },
+        ];
+        const deniedRules = [
+          ...baseRules,
+          ...[serverR, harnessR].sort().map((name) => ({
+            action: `${name}_*`,
+            resource: "*",
+            effect: "deny",
+          })),
+        ];
+        const failed = { status: 500, body: { message: "transient MCP error" } };
+        const add = (server: string, url: string, credential: string) =>
+          out("mcp.add", {
+            server,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url,
+              headers: { Authorization: credential },
+              oauth: false,
+            },
+          });
+        const instructions = out("session.instructions.entry.put", {
+          sessionID: SESSION,
+          key: "t3-code",
+          value: "<any>",
+        });
+        const prompt = [
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.execution.succeeded", { sessionID: SESSION }),
+        ];
+        const runtime = yield* openCode2ReplayRuntime([
+          ...opening,
+          out("session.get", { sessionID: SESSION }),
+          replyData("session.get", sessionInfo({ permissions: baseRules })),
+          ...noOpenRequests,
+          add(serverR, registration.endpoint, registration.authorizationHeader),
+          reply("mcp.add", null),
+          add(harnessR, registration.harnessEndpoint, registration.authorizationHeader),
+          reply("mcp.add", null),
+          instructions,
+          reply("session.instructions.entry.put", null),
+          ...prompt,
+          // Turn 2: both old registrations survive removal and replacement failures.
+          out("mcp.remove", { server: serverR, "location[directory]": WORK }),
+          reply("mcp.remove", failed),
+          out("mcp.remove", { server: harnessR, "location[directory]": WORK }),
+          reply("mcp.remove", failed),
+          add(serverR, registration.endpoint, "Bearer rotated"),
+          reply("mcp.add", failed),
+          add(harnessR, registration.harnessEndpoint, "Bearer rotated"),
+          reply("mcp.add", failed),
+          out("session.update", { sessionID: SESSION, permissions: deniedRules }),
+          reply("session.update", null),
+          instructions,
+          reply("session.instructions.entry.put", null),
+          ...prompt,
+          // Turn 3: the same desired credential is already cached. Failed adds must
+          // not cause session.update to restore the base rules before the prompt.
+          add(serverR, registration.endpoint, "Bearer rotated"),
+          reply("mcp.add", failed),
+          add(harnessR, registration.harnessEndpoint, "Bearer rotated"),
+          reply("mcp.add", failed),
+          ...prompt,
+          // Turn 4: only a confirmed successful replacement may lift each deny.
+          add(serverR, registration.endpoint, "Bearer rotated"),
+          reply("mcp.add", null),
+          add(harnessR, registration.harnessEndpoint, "Bearer rotated"),
+          reply("mcp.add", null),
+          out("session.update", { sessionID: SESSION, permissions: baseRules }),
+          reply("session.update", null),
+          instructions,
+          reply("session.instructions.entry.put", null),
+          ...prompt,
+          out("mcp.remove", { server: "<any>", "location[directory]": WORK }),
+          out("mcp.remove", { server: "<any>", "location[directory]": WORK }),
+          reply("mcp.remove", null),
+          reply("mcp.remove", null),
+        ]);
+
+        const thread = yield* runtime.resumeThread({
+          providerThread: { ...providerThread(yield* DateTime.now), appThreadId: threadR },
+          threadId: threadR,
+          modelSelection: bigPickle,
+          runtimePolicy: policy(),
+        });
+        const input = {
+          ...turnInput(thread),
+          threadId: threadR,
+          appThread: {
+            id: threadR,
+            title: TITLE,
+            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadR },
+          } as OrchestrationV2AppThread,
+        };
+
+        for (let turn = 1; turn <= 4; turn++) {
+          if (turn === 2) {
+            yield* mcpSessions.set({ ...registration, authorizationHeader: "Bearer rotated" });
+          }
+          const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+          const started = yield* runtime.startTurn(input).pipe(Effect.forkScoped);
+          yield* TestClock.adjust("250 millis");
+          yield* Fiber.join(started);
+          assert.equal((yield* Fiber.join(terminal))?.status, "completed");
+        }
+      }),
+  );
+
+  it.effect(
     "propagates denied MCP server rules to running subagent child sessions when mcp.remove fails",
     () =>
       Effect.gen(function* () {

@@ -5051,7 +5051,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         const failedRemovalNames = new Set<string>();
         for (const [key, entry] of trackedServers) {
           if (activeKeys.has(key)) {
-            if (staleUnremovedKeys.has(key) && !replacedKeys.has(key)) {
+            // A failed replacement can outlive the turn that detected the rotation.
+            // Keep its deny until this exact registration is removed or replaced.
+            if (
+              !replacedKeys.has(key) &&
+              (staleUnremovedKeys.has(key) || previousDeniedNameSet.has(entry.name))
+            ) {
               failedRemovalNames.add(entry.name);
             }
             continue;
@@ -5063,6 +5068,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           } else {
             failedRemovalNames.add(entry.name);
           }
+        }
+        // A successful same-key add also supersedes any failed unload cleanup.
+        for (const key of replacedKeys) {
+          orphanedMcpRemovals.delete(key);
         }
         const deniedServerNames = [...failedRemovalNames].sort();
 
