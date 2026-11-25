@@ -482,6 +482,24 @@ import {
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
+import {
+  HarnessError,
+  HarnessMcpApplyImportsInput,
+  HarnessMcpApplyImportsResult,
+  HarnessMcpListInput,
+  HarnessMcpLogsInput,
+  HarnessMcpLogsResult,
+  HarnessMcpRemoveInput,
+  HarnessMcpRestartInput,
+  HarnessMcpRevokeProjectTrustInput,
+  HarnessMcpScanImportsResult,
+  HarnessMcpSetEnabledInput,
+  HarnessMcpSnapshot,
+  HarnessMcpTrustProjectServerInput,
+  HarnessMcpUpsertInput,
+  HarnessThreadContextManifestInput,
+  ThreadContextManifest,
+} from "./harness.ts";
 
 export const WS_METHODS = {
   projectsListEntries: "projects.listEntries",
@@ -737,6 +755,18 @@ export const WS_METHODS = {
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+
+  harnessMcpList: "harness.mcp.list",
+  harnessMcpUpsert: "harness.mcp.upsert",
+  harnessMcpRemove: "harness.mcp.remove",
+  harnessMcpSetEnabled: "harness.mcp.setEnabled",
+  harnessMcpTrustProjectServer: "harness.mcp.trustProjectServer",
+  harnessMcpRevokeProjectTrust: "harness.mcp.revokeProjectTrust",
+  harnessMcpRestart: "harness.mcp.restart",
+  harnessMcpLogs: "harness.mcp.logs",
+  harnessMcpScanImports: "harness.mcp.scanImports",
+  harnessMcpApplyImports: "harness.mcp.applyImports",
+  harnessThreadContextManifest: "harness.thread.contextManifest",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -2453,6 +2483,72 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
+const WsHarnessMcpListRpc = Rpc.make(WS_METHODS.harnessMcpList, {
+  payload: HarnessMcpListInput,
+  success: HarnessMcpSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpUpsertRpc = Rpc.make(WS_METHODS.harnessMcpUpsert, {
+  payload: HarnessMcpUpsertInput,
+  success: HarnessMcpSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpRemoveRpc = Rpc.make(WS_METHODS.harnessMcpRemove, {
+  payload: HarnessMcpRemoveInput,
+  success: HarnessMcpSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpSetEnabledRpc = Rpc.make(WS_METHODS.harnessMcpSetEnabled, {
+  payload: HarnessMcpSetEnabledInput,
+  success: HarnessMcpSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpTrustProjectServerRpc = Rpc.make(WS_METHODS.harnessMcpTrustProjectServer, {
+  payload: HarnessMcpTrustProjectServerInput,
+  success: HarnessMcpSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpRevokeProjectTrustRpc = Rpc.make(WS_METHODS.harnessMcpRevokeProjectTrust, {
+  payload: HarnessMcpRevokeProjectTrustInput,
+  success: HarnessMcpSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpRestartRpc = Rpc.make(WS_METHODS.harnessMcpRestart, {
+  payload: HarnessMcpRestartInput,
+  success: HarnessMcpSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpLogsRpc = Rpc.make(WS_METHODS.harnessMcpLogs, {
+  payload: HarnessMcpLogsInput,
+  success: HarnessMcpLogsResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpScanImportsRpc = Rpc.make(WS_METHODS.harnessMcpScanImports, {
+  payload: Schema.Struct({}),
+  success: HarnessMcpScanImportsResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpApplyImportsRpc = Rpc.make(WS_METHODS.harnessMcpApplyImports, {
+  payload: HarnessMcpApplyImportsInput,
+  success: HarnessMcpApplyImportsResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessThreadContextManifestRpc = Rpc.make(WS_METHODS.harnessThreadContextManifest, {
+  payload: HarnessThreadContextManifestInput,
+  success: ThreadContextManifest,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
 export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthorization>()(
   "t3/contracts/RpcScopeAuthorization",
   { error: EnvironmentAuthorizationError },
@@ -2716,4 +2812,15 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeThreadRpc,
   WsOrchestrationV2SubscribeCommandOutputRpc,
   WsOrchestrationV2SubscribePromptSuggestionRpc,
+  WsHarnessMcpListRpc,
+  WsHarnessMcpUpsertRpc,
+  WsHarnessMcpRemoveRpc,
+  WsHarnessMcpSetEnabledRpc,
+  WsHarnessMcpTrustProjectServerRpc,
+  WsHarnessMcpRevokeProjectTrustRpc,
+  WsHarnessMcpRestartRpc,
+  WsHarnessMcpLogsRpc,
+  WsHarnessMcpScanImportsRpc,
+  WsHarnessMcpApplyImportsRpc,
+  WsHarnessThreadContextManifestRpc,
 ).middleware(RpcScopeAuthorization);

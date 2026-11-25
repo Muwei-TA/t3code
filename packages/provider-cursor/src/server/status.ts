@@ -29,6 +29,8 @@ const CURSOR_PRESENTATION = {
   displayName: "Cursor",
   supportsConversationRollback: true,
   showInteractionModeToggle: true,
+  harnessPlanMode: "native",
+  planReadOnlyEnforcement: "native",
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],

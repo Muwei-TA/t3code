@@ -45,6 +45,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import * as McpGateway from "../harness/McpGateway.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -687,6 +688,7 @@ function layerTest(input: {
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
   readonly installationGateLayer?: Layer.Layer<ProviderInstallationGate.ProviderInstallationGate>;
+  readonly mcpGatewayLayer?: Layer.Layer<McpGateway.McpGateway>;
 }) {
   const layerConfiguredEventSink =
     input.flakyReleaseWrites !== undefined
@@ -786,6 +788,7 @@ function layerTest(input: {
           input.installationGateLayer ?? ProviderInstallationGate.layer,
           ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),
           ...(input.projectServiceLayer === undefined ? [] : [input.projectServiceLayer]),
+          ...(input.mcpGatewayLayer === undefined ? [] : [input.mcpGatewayLayer]),
         ),
       ),
     ),
@@ -5865,6 +5868,120 @@ it.effect(
             idleTimeoutMs: 1000,
             capabilities: ExclusiveCapabilities,
             serverSettingsLayer: Layer.succeed(ServerSettings.ServerSettingsService, settings),
+          }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "reopens an idle session when Harness MCP or Plan mode changes, grants harness capability only while active, and revokes old tokens",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const mcpConfigs = yield* Ref.make<
+        ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+      >([]);
+      const injectionRef = yield* Ref.make<McpGateway.GatewaySessionInjection>({
+        harnessActive: false,
+        gatewayServersDigest: "",
+        nativeMcpServers: [],
+      });
+      const mcpGatewayLayer = Layer.succeed(McpGateway.McpGateway, {
+        resolveSessionInjection: () => Ref.get(injectionRef),
+      } as unknown as McpGateway.McpGateway["Service"]);
+
+      const effect = Effect.gen(function* () {
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const mcpRegistry = yield* McpSessionRegistry.McpSessionRegistry;
+        const threadId = ThreadId.make("thread-harness-refresh");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({
+              idAllocator,
+              threadId,
+              now: yield* DateTime.now,
+            }),
+          ],
+        });
+
+        // 1. Open while Harness is inactive: NO harnessEndpoint and NO "harness" capability.
+        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        assert.equal((yield* Ref.get(state)).openCount, 1);
+        const firstConfig = (yield* Ref.get(mcpConfigs))[0];
+        assert.isDefined(firstConfig);
+        assert.isUndefined(firstConfig?.harnessEndpoint);
+        assert.isFalse(firstConfig?.capabilities?.has("harness") === true);
+        const firstToken = firstConfig!.authorizationHeader.replace(/^Bearer\s+/, "");
+        assert.isDefined(yield* mcpRegistry.resolve(firstToken));
+
+        // 2. Enable Harness gateway + native passthrough server: idle session reopens and rotates credential.
+        yield* Ref.set(injectionRef, {
+          harnessActive: true,
+          gatewayServersDigest: "digest-gateway-v1",
+          nativeMcpServers: [{ id: "linear", type: "http", url: "https://mcp.linear.app/mcp" }],
+        });
+        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        assert.equal((yield* Ref.get(state)).openCount, 2);
+        assert.equal((yield* Ref.get(state)).closeCount, 1);
+        const secondConfig = (yield* Ref.get(mcpConfigs))[1];
+        assert.isDefined(secondConfig?.harnessEndpoint);
+        assert.isTrue(secondConfig?.capabilities?.has("harness") === true);
+        assert.deepEqual(
+          secondConfig?.nativeMcpServers?.map((server) => server.id),
+          ["linear"],
+        );
+        // Prior non-harness token is revoked on rotation.
+        assert.isUndefined(yield* mcpRegistry.resolve(firstToken));
+        const secondToken = secondConfig!.authorizationHeader.replace(/^Bearer\s+/, "");
+        assert.isDefined(yield* mcpRegistry.resolve(secondToken));
+
+        // 3. Gateway catalog changes while harnessActive stays true: idle session still reopens so clients refresh tools.
+        yield* Ref.set(injectionRef, {
+          harnessActive: true,
+          gatewayServersDigest: "digest-gateway-v2",
+          nativeMcpServers: [{ id: "linear", type: "http", url: "https://mcp.linear.app/mcp" }],
+        });
+        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        assert.equal((yield* Ref.get(state)).openCount, 3);
+        assert.equal((yield* Ref.get(state)).closeCount, 2);
+        const thirdConfig = (yield* Ref.get(mcpConfigs))[2];
+        assert.isDefined(thirdConfig?.harnessEndpoint);
+        assert.isUndefined(yield* mcpRegistry.resolve(secondToken));
+        const thirdToken = thirdConfig!.authorizationHeader.replace(/^Bearer\s+/, "");
+        assert.isDefined(yield* mcpRegistry.resolve(thirdToken));
+
+        // 4. Disable/revoke Harness servers: idle session reopens again, drops harnessEndpoint/native, revokes old harness token!
+        yield* Ref.set(injectionRef, {
+          harnessActive: false,
+          gatewayServersDigest: "",
+          nativeMcpServers: [],
+        });
+        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        assert.equal((yield* Ref.get(state)).openCount, 4);
+        assert.equal((yield* Ref.get(state)).closeCount, 3);
+        const fourthConfig = (yield* Ref.get(mcpConfigs))[3];
+        assert.isUndefined(fourthConfig?.harnessEndpoint);
+        assert.isUndefined(fourthConfig?.nativeMcpServers);
+        assert.isFalse(fourthConfig?.capabilities?.has("harness") === true);
+        assert.isUndefined(yield* mcpRegistry.resolve(thirdToken));
+      });
+
+      yield* effect.pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            mcpConfigs,
+            idleTimeoutMs: 1000,
+            capabilities: ExclusiveCapabilities,
+            mcpGatewayLayer,
           }),
         ),
       );

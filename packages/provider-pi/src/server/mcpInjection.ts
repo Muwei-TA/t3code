@@ -6,6 +6,7 @@ import type { McpProviderSessionConfig } from "@t3tools/provider-core/server/mcp
 import {
   PI_T3_MCP_EXTENSION_FILENAME,
   PI_T3_MCP_EXTENSION_SOURCE,
+  T3_HARNESS_MCP_URL_ENV,
   T3_MCP_BEARER_ENV,
   T3_MCP_URL_ENV,
   T3_PI_RUNTIME_MODE_ENV,
@@ -295,6 +296,7 @@ export function buildPiRpcLaunch(input: {
   const environment = { ...input.environment };
   // MCP credentials belong to this T3 session; discard inherited server/parent credentials.
   delete environment[T3_MCP_URL_ENV];
+  delete environment[T3_HARNESS_MCP_URL_ENV];
   delete environment[T3_MCP_BEARER_ENV];
   delete environment[T3_PI_MCP_EXTENSION_PATH_ENV];
 
@@ -314,6 +316,9 @@ export function buildPiRpcLaunch(input: {
       ...(hasT3Mcp && input.mcpSession !== undefined
         ? {
             [T3_MCP_URL_ENV]: input.mcpSession.endpoint,
+            ...(input.mcpSession.harnessEndpoint !== undefined
+              ? { [T3_HARNESS_MCP_URL_ENV]: input.mcpSession.harnessEndpoint }
+              : {}),
             [T3_MCP_BEARER_ENV]: bearerTokenFromAuthorizationHeader(
               input.mcpSession.authorizationHeader,
             ),

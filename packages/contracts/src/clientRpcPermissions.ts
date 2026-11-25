@@ -1,7 +1,9 @@
 import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./git.ts";
+import { HarnessMcpUpsertInput } from "./harness.ts";
 import {
   AuthAccessWriteScope,
+  AuthDiagnosticsReadScope,
   AuthEnvironmentMaintainScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -101,11 +103,33 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.peerLinksPairLink]: AuthAccessWriteScope,
   // Send stores and sends a report from a thread's turn: the bar of running that thread.
   [WS_METHODS.agentFeedbackAnswerRequest]: AuthOrchestrationOperateScope,
+  // Portable harness MCP mutations & diagnostics: stdio/secret actions also enforce scopes server-side.
+  [WS_METHODS.harnessMcpLogs]: AuthDiagnosticsReadScope,
+  [WS_METHODS.harnessMcpScanImports]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessMcpUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessMcpRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessMcpSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessMcpTrustProjectServer]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessMcpRevokeProjectTrust]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessMcpRestart]: AuthOrchestrationOperateScope,
+  [WS_METHODS.harnessMcpApplyImports]: AuthSettingsWriteScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 
 const decodePrepareThread = Schema.decodeUnknownSync(GitPreparePullRequestThreadInput);
 const decodeStackedAction = Schema.decodeUnknownSync(GitRunStackedActionInput);
+const decodeHarnessUpsert = Schema.decodeUnknownOption(HarnessMcpUpsertInput);
+
+const HARNESS_SECRET_PLACEHOLDER = /\$\{secret:/;
+
+function harnessTransportHasSecretPlaceholder(
+  transport: HarnessMcpUpsertInput["config"]["transport"],
+): boolean {
+  const record = transport.type === "stdio" ? transport.env : transport.headers;
+  return (
+    record !== undefined && Object.values(record).some((v) => HARNESS_SECRET_PLACEHOLDER.test(v))
+  );
+}
 
 export function clientRpcRequiredScopes(
   method: string,
@@ -123,6 +147,19 @@ export function clientRpcRequiredScopes(
       (payload.action === "create_pr" || payload.action === "commit_push_pr")
     )
       return [AuthSourceControlWriteScope, AuthOrchestrationReadScope];
+  }
+  if (method === WS_METHODS.harnessMcpUpsert && input !== undefined) {
+    const parsed = decodeHarnessUpsert(input);
+    if (parsed._tag === "Some") {
+      const scopes: Array<AuthEnvironmentScope> = [AuthSettingsWriteScope];
+      if (parsed.value.config.transport.type === "stdio") {
+        scopes.push(AuthTerminalOperateScope);
+      }
+      if (harnessTransportHasSecretPlaceholder(parsed.value.config.transport)) {
+        scopes.push(AuthProvidersManageScope);
+      }
+      return scopes;
+    }
   }
   return Object.hasOwn(CLIENT_GUARDED_RPC_SCOPES, method)
     ? [CLIENT_GUARDED_RPC_SCOPES[method as ClientGuardedRpcTag]]

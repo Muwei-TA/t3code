@@ -63,6 +63,11 @@ export async function loadMcpBridge(
     readonly allowsTool?: (name: string) => boolean;
     readonly runtimeMode?: string;
     readonly inputSchema?: Record<string, unknown>;
+    readonly harnessTools?: () => ReadonlyArray<{
+      readonly name: string;
+      readonly description?: string;
+      readonly annotations?: { readonly readOnlyHint?: boolean };
+    }>;
   } = {},
 ) {
   const handlers = new Map<string, AgentStartHook>();
@@ -105,6 +110,9 @@ export async function loadMcpBridge(
       env: {
         T3_MCP_URL: "http://fixture.invalid/mcp",
         T3_MCP_BEARER_TOKEN: "fixture-token",
+        ...(options.harnessTools
+          ? { T3_HARNESS_MCP_URL: "http://fixture.invalid/mcp/harness" }
+          : {}),
         T3_PI_MCP_EXTENSION_PATH: "/fixture/pi-t3-extension.ts",
         T3_PI_RUNTIME_MODE: options.runtimeMode,
       },
@@ -129,9 +137,16 @@ export async function loadMcpBridge(
         params?: unknown;
       };
       requests.push(request);
+      const isHarnessUrl = url.endsWith("/mcp/harness");
+      const listedTools = isHarnessUrl
+        ? (options.harnessTools?.() ?? []).map((tool) => ({
+            ...tool,
+            inputSchema: options.inputSchema ?? { type: "object", properties: {} },
+          }))
+        : catalog;
       const result =
         request.method === "tools/list"
-          ? { tools: catalog }
+          ? { tools: listedTools }
           : request.method === "tools/call"
             ? (options.result ?? { content: [{ type: "text", text: "browser snapshot" }] })
             : {};

@@ -58,7 +58,9 @@ import {
 
 const PI_PRESENTATION = {
   displayName: "Pi",
-  showInteractionModeToggle: false,
+  showInteractionModeToggle: true,
+  harnessPlanMode: "harness-propose-plan",
+  planReadOnlyEnforcement: "advisory",
   supportedRuntimeModes: ["approval-required", "auto-accept-edits", "full-access"],
   reportsContextWindow: true,
 } as const;

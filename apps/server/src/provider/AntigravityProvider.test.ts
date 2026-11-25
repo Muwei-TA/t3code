@@ -312,7 +312,9 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         auth: { status: "unknown" },
         models: [],
         setup: { canAuthenticate: true, canInstall: true },
-        showInteractionModeToggle: false,
+        showInteractionModeToggle: true,
+        harnessPlanMode: "harness-propose-plan",
+        planReadOnlyEnforcement: "advisory",
         supportsConversationRollback: true,
         supportsTextGeneration: false,
       });

@@ -31,6 +31,7 @@ import {
   type RuntimeRequestId,
   type ThreadTokenUsageSnapshot,
   type ThreadId,
+  isReservedHarnessMcpServerId,
   isRuntimeModeAbove,
   type TurnTokenUsage,
 } from "@t3tools/contracts";
@@ -944,6 +945,16 @@ export const AcpProviderCapabilitiesV2 = {
   runtimePolicy: {
     enforcement: "client-boundary",
   },
+  harness: {
+    mcpPassthrough: "stdio+http",
+    mcpListChanged: false,
+    skillMount: "none",
+    systemContextMutableMidSession: false,
+    maxSystemContextBytes: null,
+    nativeToolHooks: false,
+    nativeAllowAlways: true,
+    planReadOnlyEnforcement: "advisory",
+  },
 } satisfies OrchestrationV2ProviderCapabilities;
 
 function canSwitchModelInSession(
@@ -1090,6 +1101,28 @@ function acpMcpContext(
     return { servers: [], acpServers: [], httpServers: [] };
   }
   // codex-acp 1.2.0 and pi-acp drop injected HTTP servers, so HTTP is opt-in per flavor.
+  const nativeStdioServers = (session.nativeMcpServers ?? [])
+    .filter(
+      (server): server is McpProviderSession.HarnessNativeStdioMcpServer =>
+        server.type === "stdio" && !isReservedHarnessMcpServerId(server.id),
+    )
+    .map((server) => ({
+      name: server.id,
+      command: server.command,
+      args: [...server.args],
+      env: Object.entries(server.env ?? {}).map(([name, value]) => ({ name, value })),
+    }));
+  const nativeHttpServers = (session.nativeMcpServers ?? [])
+    .filter(
+      (server): server is McpProviderSession.HarnessNativeHttpMcpServer =>
+        server.type !== "stdio" && !isReservedHarnessMcpServerId(server.id),
+    )
+    .map((server) => ({
+      type: "http" as const,
+      name: server.id,
+      url: server.url,
+      headers: Object.entries(server.headers ?? {}).map(([name, value]) => ({ name, value })),
+    }));
   return {
     servers: [
       {
@@ -1102,13 +1135,28 @@ function acpMcpContext(
           { name: "T3_ACP_MCP_AUTHORIZATION", value: session.authorizationHeader },
         ],
       },
+      ...(session.harnessEndpoint === undefined
+        ? []
+        : [
+            {
+              name: "t3-harness",
+              command: self.command,
+              args: [...selfInvocationArgs(self, ["acp-mcp-bridge"])],
+              env: [
+                { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+                { name: "T3_ACP_MCP_ENDPOINT", value: session.harnessEndpoint },
+                { name: "T3_ACP_MCP_AUTHORIZATION", value: session.authorizationHeader },
+              ],
+            },
+          ]),
+      ...nativeStdioServers,
     ],
     acpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
-    httpServers:
-      mcpOverHttp === true
+    httpServers: [
+      ...(mcpOverHttp === true
         ? [
             {
-              type: "http",
+              type: "http" as const,
               name: "t3-code",
               url: session.endpoint,
               headers: [
@@ -1118,8 +1166,30 @@ function acpMcpContext(
                   : []),
               ],
             },
+            ...(session.harnessEndpoint === undefined
+              ? []
+              : [
+                  {
+                    type: "http" as const,
+                    name: "t3-harness",
+                    url: session.harnessEndpoint,
+                    headers: [
+                      { name: "Authorization", value: session.authorizationHeader },
+                      ...(deferMcpTools === true
+                        ? [
+                            {
+                              name: McpProviderSession.MCP_TOOL_EXPOSURE_HEADER,
+                              value: "deferred",
+                            },
+                          ]
+                        : []),
+                    ],
+                  },
+                ]),
           ]
-        : [],
+        : []),
+      ...nativeHttpServers,
+    ],
     endpoint: session.endpoint,
     authorization: session.authorizationHeader,
     processEnvironment: {

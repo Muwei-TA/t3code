@@ -5,6 +5,7 @@ import { PULL_REQUEST_LINKING_INSTRUCTIONS } from "@t3tools/provider-core/server
 export const PI_T3_MCP_EXTENSION_FILENAME = "pi-t3-mcp-extension.ts";
 
 export const T3_MCP_URL_ENV = "T3_MCP_URL";
+export const T3_HARNESS_MCP_URL_ENV = "T3_HARNESS_MCP_URL";
 export const T3_MCP_BEARER_ENV = "T3_MCP_BEARER_TOKEN";
 export const T3_PI_RUNTIME_MODE_ENV = "T3_PI_RUNTIME_MODE";
 export const T3_PI_MCP_EXTENSION_PATH_ENV = "T3_PI_MCP_EXTENSION_PATH";
@@ -21,6 +22,7 @@ import * as NodePath from "node:path";
 import { Type } from "typebox";
 
 const URL_ENV = ${JSON.stringify(T3_MCP_URL_ENV)};
+const HARNESS_URL_ENV = ${JSON.stringify(T3_HARNESS_MCP_URL_ENV)};
 const TOKEN_ENV = ${JSON.stringify(T3_MCP_BEARER_ENV)};
 const RUNTIME_MODE_ENV = ${JSON.stringify(T3_PI_RUNTIME_MODE_ENV)};
 const EXTENSION_PATH_ENV = ${JSON.stringify(T3_PI_MCP_EXTENSION_PATH_ENV)};
@@ -352,9 +354,17 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     pi.getAllTools().some((tool) => tool.name === "tool_search" && BUILTIN_TOOL_SEARCH_PATHS.has(tool.sourceInfo?.path ?? ""));
 
   const readOnlyMcpTools = new Set<string>();
+  const readOnlyHarnessTools = new Set<string>();
+  const T3_OWNED_HARNESS_READ_ONLY_TOOLS = new Set(["propose_plan", "harness_tool_search"]);
   const isReadOnlyMcpTool = (name: string) => {
     const extensionPath = env(EXTENSION_PATH_ENV);
-    if (extensionPath === undefined || !readOnlyMcpTools.has(name) || typeof pi.getAllTools !== "function") return false;
+    if (
+      extensionPath === undefined ||
+      (!readOnlyMcpTools.has(name) && !readOnlyHarnessTools.has(name)) ||
+      typeof pi.getAllTools !== "function"
+    ) {
+      return false;
+    }
     // A user extension may own the same name. Only our registered HTTP bridge
     // may inherit the canonical T3 server's read-only annotation.
     return pi.getAllTools().some((tool) => tool.name === name &&
@@ -411,8 +421,78 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     (isDeferred(name) || active.includes("mcp__t3-code__" + name));
   let catalog: ReadonlyArray<McpTool> = [];
 
+  const HARNESS_PREFIX = "mcp__t3-harness__";
   const client = createMcpClient(endpoint, token);
+  const harnessEndpoint = env(HARNESS_URL_ENV);
+  const harnessClient = harnessEndpoint !== undefined ? createMcpClient(harnessEndpoint, token) : undefined;
+  let harnessConnected = false;
+  let harnessCatalog: ReadonlyArray<McpTool> = [];
   let started: Promise<void> | undefined;
+
+  const registerHarnessTools = () => {
+    if (harnessClient === undefined) return;
+    readOnlyHarnessTools.clear();
+    const expectedNames = new Set<string>();
+    for (const tool of harnessCatalog) {
+      const name = tool.name;
+      const toolName = \`\${HARNESS_PREFIX}\${name}\`;
+      expectedNames.add(toolName);
+      // Only T3-owned read-only harness tools bypass Pi's tool_call confirmation; third-party
+      // MCP tools are still gated by Pi's runtimeMode and server-side McpGateway policy.
+      if (T3_OWNED_HARNESS_READ_ONLY_TOOLS.has(name)) readOnlyHarnessTools.add(toolName);
+      pi.registerTool({
+        name: toolName,
+        label: name,
+        description: tool.description ?? name,
+        parameters: jsonSchemaToTypebox(tool.inputSchema),
+        ...(supportsExposure ? { outputSchema: mcpOutputSchema(tool), exposure: "direct" as const } : {}),
+        async execute(_toolCallId, params, signal) {
+          const result = await harnessClient.callTool(
+            name,
+            (params ?? {}) as Record<string, unknown>,
+            signal,
+          );
+          // Refresh harness tools immediately after harness_tool_search loads deferred tools.
+          if (name === "harness_tool_search" && !isMcpToolError(result)) {
+            await refreshHarnessTools().catch(() => undefined);
+          }
+          const content = mcpModelContent(result);
+          if (isMcpToolError(result) && !content.some((part) => part.type === "text" && part.text.length > 0)) {
+            content.push({ type: "text", text: "MCP tool t3-harness/" + name + " returned an error" });
+          }
+          return {
+            content,
+            structuredContent: mcpScriptResult(result),
+            details: { server: "t3-harness", tool: name },
+            ...(isMcpToolError(result) ? { isError: true } : {}),
+          };
+        },
+      });
+    }
+    if (typeof pi.getActiveTools === "function" && typeof pi.setActiveTools === "function") {
+      const current = pi.getActiveTools();
+      const filtered = current.filter((name) => !name.startsWith(HARNESS_PREFIX) || expectedNames.has(name));
+      const added = [...expectedNames].filter((name) => !filtered.includes(name));
+      if (added.length > 0 || filtered.length !== current.length) {
+        pi.setActiveTools([...filtered, ...added]);
+      }
+    }
+  };
+
+  const refreshHarnessTools = async () => {
+    if (harnessClient === undefined) return;
+    const signal = AbortSignal.timeout(5_000);
+    try {
+      if (!harnessConnected) {
+        await harnessClient.connect(signal);
+        harnessConnected = true;
+      }
+      harnessCatalog = await harnessClient.listTools(signal);
+      registerHarnessTools();
+    } catch {
+      harnessConnected = false;
+    }
+  };
 
   const registerTools = () => {
     // Preserve public names for saved loadouts and tool selectors. The alias,
@@ -471,6 +551,9 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
       await client.connect(signal);
       catalog = await client.listTools(signal);
       registerTools();
+      if (harnessClient !== undefined) {
+        await refreshHarnessTools();
+      }
     })();
     started = attempt;
     void attempt.catch(() => {
@@ -527,7 +610,10 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   });
 
   // Keep guidance in the system prompt so leading slash commands still expand.
-  pi.on("before_agent_start", (event, ctx) => {
+  pi.on("before_agent_start", async (event, ctx) => {
+    if (harnessClient !== undefined) {
+      await refreshHarnessTools();
+    }
     reconcileDiscovery(ctx);
     const instructions = ORCHESTRATION_INSTRUCTIONS + "\\n\\n" + PULL_REQUEST_LINKING_INSTRUCTIONS;
     const sections = event.systemPromptOptions?.sections;

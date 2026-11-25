@@ -78,6 +78,7 @@ import {
   type EnvironmentId,
   type MessageId,
   type ModelSelection,
+  type PlanId,
   type PreviewAnnotationPayload,
   ProviderInstanceId,
   type ServerProvider,
@@ -215,7 +216,8 @@ import { cn } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { toastManager } from "./ui/toast";
 import { projectScriptIdFromCommand } from "~/projectScripts";
-import { newMessageId } from "~/lib/utils";
+import { proposedPlanTitle } from "@t3tools/shared/proposedPlanText";
+import { newMessageId, newThreadId } from "~/lib/utils";
 import {
   isInSideChatPane,
   resolveThreadOpenRoute,
@@ -421,6 +423,10 @@ const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
 import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
 
 const EMPTY_FEEDBACK_SUBMISSIONS: ReadonlyArray<CodexFeedbackSubmission> = [];
+
+function currentIsoTimestamp(): string {
+  return new Date().toISOString();
+}
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_TURN_ITEMS: ThreadStructure["turnItems"] = [];
 const EMPTY_RUNS: ThreadStructure["runs"] = [];
@@ -632,6 +638,9 @@ export default function ChatView(props: ChatViewProps) {
   const { resolvedTheme } = useTheme();
   const composerRuntimeMode = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.runtimeMode ?? null,
+  );
+  const composerInteractionMode = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.interactionMode ?? null,
   );
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
@@ -1046,6 +1055,10 @@ export default function ChatView(props: ChatViewProps) {
     composerRuntimeMode ??
     (isServerThread ? activeThread?.runtimeMode : undefined) ??
     defaultRuntimeMode;
+  const rawInteractionMode =
+    composerInteractionMode ??
+    (isServerThread ? activeThread?.interactionMode : undefined) ??
+    DEFAULT_INTERACTION_MODE;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = canWriteSourceControl && isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
@@ -1431,6 +1444,14 @@ export default function ChatView(props: ChatViewProps) {
   const selectedProvider = selectedProviderEntry?.driverKind ?? requestedDriverKind;
   const activeProviderInstanceId = selectedProviderEntry?.instanceId ?? null;
   const activeProviderStatus = selectedProviderEntry?.snapshot ?? null;
+  const providerSupportsPlanMode =
+    activeProviderStatus === null ||
+    activeProviderStatus.showInteractionModeToggle !== false ||
+    (activeProviderStatus.harnessPlanMode !== undefined &&
+      activeProviderStatus.harnessPlanMode !== "none");
+  const interactionMode: ProviderInteractionMode = providerSupportsPlanMode
+    ? rawInteractionMode
+    : DEFAULT_INTERACTION_MODE;
   const activeUsageModel =
     [
       composerModelSelectionApplies ? composerSelectedModelSelection : null,
@@ -1852,7 +1873,10 @@ export default function ChatView(props: ChatViewProps) {
       rememberCheckoutIsRepo(environmentId, gitStatusCwd, liveIsGitRepo);
     }
   }, [environmentId, gitStatusCwd, liveIsGitRepo]);
-  const isGitRepo = liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true;
+  const recalledIsGitRepo = recallCheckoutIsRepo(environmentId, gitStatusCwd);
+  const isGitRepo = liveIsGitRepo ?? recalledIsGitRepo ?? true;
+  // Require a confirmed Git repository before exposing or running worktree-only plan actions.
+  const isConfirmedGitRepo = (liveIsGitRepo ?? recalledIsGitRepo) === true;
   // A plain folder holding tracked repositories has turn diffs without being a Git repository.
   const diffAvailable =
     isGitRepo ||
@@ -2583,6 +2607,7 @@ export default function ChatView(props: ChatViewProps) {
     activeProjectCwd,
     serverConfig,
     runtimeMode,
+    interactionMode,
     isWorking,
     // A waiting run is checkpoint drain; Stop there reaches its background work.
     runIsLive: (isWorking && activeRuntime?.status !== "waiting") || phase === "connecting",
@@ -3054,6 +3079,7 @@ export default function ChatView(props: ChatViewProps) {
 
   const {
     getModelDisabledReason,
+    handleInteractionModeChangeStable,
     handleRuntimeModeChangeStable,
     onEnvModeChangeStable,
     onProviderModelSelectStable,
@@ -3072,6 +3098,7 @@ export default function ChatView(props: ChatViewProps) {
     supportsProviderSwitchingViaHandoff,
     multipleModelSelections,
     runtimeMode,
+    interactionMode,
     isLocalDraftThread,
     canOverrideServerThreadEnvMode,
     setPendingServerThreadEnvModeEntry,
@@ -3091,6 +3118,7 @@ export default function ChatView(props: ChatViewProps) {
     threadDetailLoading,
     activeEnvironmentUnavailable,
     runtimeMode,
+    interactionMode,
     localCheckoutBranchMismatch,
     composerRef,
     persistThreadSettingsForNextTurn,
@@ -3116,6 +3144,7 @@ export default function ChatView(props: ChatViewProps) {
     isGitRepo,
     phase,
     runtimeMode,
+    interactionMode,
     sendEnvMode,
     worktreeRepositories,
     startFromOrigin,
@@ -3196,6 +3225,128 @@ export default function ChatView(props: ChatViewProps) {
   const sendPreviewAnnotationStable = useStableCallback(sendPreviewAnnotation);
   const onComposerResumeStable = useStableCallback(onResume);
   const onComposerCompactContextStable = useStableCallback(onCompactContext);
+  const onContinuePlanningStable = useStableCallback(() => {
+    handleInteractionModeChangeStable("plan");
+    scheduleComposerFocusStable();
+  });
+  const onImplementProposedPlanStable = useStableCallback(
+    async (input: {
+      readonly planId: PlanId;
+      readonly planMarkdown: string;
+      readonly freshContext?: boolean;
+      readonly inNewWorktree?: boolean;
+    }) => {
+      if (!activeThread || !activeProject || !isServerThread || !canOperateThread) return;
+      const planText = input.planMarkdown.trim();
+      if (!planText) return;
+      const promptText = `Implement the approved plan:\n\n${planText}`;
+      const messageId = newMessageId();
+      const createdAt = currentIsoTimestamp();
+      const modelSelection =
+        composerRef.current?.getSendContext().selectedModelSelection ?? activeThread.modelSelection;
+
+      if (input.inNewWorktree) {
+        if (!isConfirmedGitRepo) return;
+        const targetThreadId = newThreadId();
+        const planTitle = proposedPlanTitle(planText) ?? activeThread.title;
+        const result = await startThreadTurn({
+          environmentId,
+          input: {
+            threadId: targetThreadId,
+            message: { messageId, role: "user", text: promptText, attachments: [] },
+            modelSelection,
+            titleSeed: planTitle,
+            runtimeMode,
+            interactionMode: DEFAULT_INTERACTION_MODE,
+            sourceProposedPlan: { threadId: activeThread.id, planId: input.planId },
+            bootstrap: {
+              createThread: {
+                projectId: activeProject.id,
+                title: planTitle,
+                modelSelection,
+                runtimeMode,
+                interactionMode: DEFAULT_INTERACTION_MODE,
+                branch: activeThreadBranch,
+                worktreePath: null,
+                createdAt,
+              },
+              ...(isGitRepo
+                ? {
+                    prepareWorktree: {
+                      projectCwd: activeProject.workspaceRoot,
+                      baseBranch: activeThreadBranch ?? "HEAD",
+                    },
+                    runSetupScript: true,
+                  }
+                : {}),
+            },
+            createdAt,
+          },
+        });
+        if (result._tag === "Failure") {
+          if (!isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            setThreadError(
+              activeThread.id,
+              thrownErrorMessage(error, m) ?? gt("Failed to start implementation worktree."),
+            );
+          }
+          return;
+        }
+        void navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(scopeThreadRef(environmentId, targetThreadId)),
+        });
+        return;
+      }
+
+      handleInteractionModeChangeStable(DEFAULT_INTERACTION_MODE);
+      setThreadError(activeThread.id, null);
+      const settingsResult = await persistThreadSettingsForNextTurn({
+        threadId: activeThread.id,
+        createdAt,
+        ...(localCheckoutBranchMismatch
+          ? { branch: localCheckoutBranchMismatch.currentBranch }
+          : {}),
+        runtimeMode,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+      });
+      if (settingsResult._tag === "Failure") {
+        if (!isAtomCommandInterrupted(settingsResult)) {
+          const error = squashAtomCommandFailure(settingsResult);
+          setThreadError(
+            activeThread.id,
+            thrownErrorMessage(error, m) ?? gt("Failed to switch back to build mode."),
+          );
+        }
+        return;
+      }
+      const turnResult = await startThreadTurn({
+        environmentId,
+        input: {
+          threadId: activeThread.id,
+          message: { messageId, role: "user", text: promptText, attachments: [] },
+          modelSelection,
+          runtimeMode,
+          interactionMode: DEFAULT_INTERACTION_MODE,
+          sourceProposedPlan: { threadId: activeThread.id, planId: input.planId },
+          ...(input.freshContext ? { freshContext: true } : {}),
+          createdAt,
+        },
+      });
+      if (turnResult._tag === "Failure") {
+        if (!isAtomCommandInterrupted(turnResult)) {
+          const error = squashAtomCommandFailure(turnResult);
+          setThreadError(
+            activeThread.id,
+            thrownErrorMessage(error, m) ?? gt("Failed to start plan implementation."),
+          );
+        }
+        return;
+      }
+      scrollToEnd(true);
+    },
+  );
   // Read from the projection the footer renders, so the scroll below sees the new message.
   const pendingGuestMessageIds =
     serverProjection?.thread.guestShare?.messages.flatMap((message) =>
@@ -3693,6 +3844,9 @@ export default function ChatView(props: ChatViewProps) {
                   {...(embedded
                     ? {}
                     : { onOpenTurnDiff: onOpenTurnDiffStable, onForkFromRun: onForkFromRunStable })}
+                  onImplementProposedPlan={onImplementProposedPlanStable}
+                  onContinuePlanning={onContinuePlanningStable}
+                  isGitRepo={isConfirmedGitRepo}
                   onOpenThread={onOpenRelatedThreadStable}
                   parentThreadLink={parentThreadLink}
                   workflowOpening={workflowOpening}
@@ -3906,6 +4060,7 @@ export default function ChatView(props: ChatViewProps) {
                                 respondingRequestIds={respondingRequestIds}
                                 runtimeMode={runtimeMode}
                                 defaultRuntimeMode={defaultRuntimeMode}
+                                interactionMode={interactionMode}
                                 lockedProvider={modelPickerLockedProvider}
                                 providerStatuses={providerStatuses as ServerProvider[]}
                                 providerCatalogKnown={serverConfig !== null}
@@ -3965,6 +4120,7 @@ export default function ChatView(props: ChatViewProps) {
                                 onOpenProviderSetup={openProviderSetupStable}
                                 getModelDisabledReason={getModelDisabledReason}
                                 handleRuntimeModeChange={handleRuntimeModeChangeStable}
+                                handleInteractionModeChange={handleInteractionModeChangeStable}
                                 focusComposer={focusComposerStable}
                                 scheduleComposerFocus={scheduleComposerFocusStable}
                                 setThreadError={setThreadError}

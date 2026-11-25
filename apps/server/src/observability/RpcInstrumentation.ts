@@ -269,6 +269,17 @@ const RPC_AGGREGATES = {
   [WS_METHODS.subscribeServerConfig]: "server",
   [WS_METHODS.subscribeServerLifecycle]: "server",
   [WS_METHODS.subscribeAuthAccess]: "auth",
+  [WS_METHODS.harnessMcpList]: "harness",
+  [WS_METHODS.harnessMcpUpsert]: "harness",
+  [WS_METHODS.harnessMcpRemove]: "harness",
+  [WS_METHODS.harnessMcpSetEnabled]: "harness",
+  [WS_METHODS.harnessMcpTrustProjectServer]: "harness",
+  [WS_METHODS.harnessMcpRevokeProjectTrust]: "harness",
+  [WS_METHODS.harnessMcpRestart]: "harness",
+  [WS_METHODS.harnessMcpLogs]: "harness",
+  [WS_METHODS.harnessMcpScanImports]: "harness",
+  [WS_METHODS.harnessMcpApplyImports]: "harness",
+  [WS_METHODS.harnessThreadContextManifest]: "harness",
 } as const satisfies Readonly<Record<WsRpcMethod, string>>;
 
 const RPC_SPAN_PREFIX = "ws.rpc";

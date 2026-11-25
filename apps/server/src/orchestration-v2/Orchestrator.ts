@@ -32,7 +32,8 @@ import {
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
   MessageId,
-  type NodeId,
+  NodeId,
+  PlanId,
   type ModelSelection,
   OrchestrationV2Command,
   type OrchestrationV2InternalCommand,
@@ -686,6 +687,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "subagent.stop":
     case "run.interrupt":
     case "run.output.submit":
+    case "plan.propose":
     case "queued-message.promote-to-steer":
     case "queued-run.start":
     case "queue.resume":
@@ -12399,6 +12401,180 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
   });
 
+  const dispatchPlanPropose = Effect.fn("Orchestrator.dispatchPlanPropose")(function* (
+    command: Extract<OrchestrationV2InternalCommand, { readonly type: "plan.propose" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    const projection = yield* projectionStore
+      .getThreadRecords(command.threadId, [
+        "runs",
+        "attempts",
+        "providerTurns",
+        "turnItems",
+        "plans",
+      ])
+      .pipe(mapDispatchError(command));
+    if (projection.thread.deletedAt !== null || projection.thread.archivedAt !== null) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} is archived or deleted and cannot propose a plan.`,
+      });
+    }
+    if (projection.thread.interactionMode !== "plan") {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} is not in Plan mode.`,
+      });
+    }
+    const activeRun = projection.runs.find((candidate) => candidate.id === command.runId);
+    if (activeRun === undefined || !isActiveRun(activeRun)) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Run ${command.runId} is not active and cannot publish a proposed plan.`,
+      });
+    }
+    if (
+      activeRun.providerInstanceId !== command.providerInstanceId ||
+      projection.thread.providerInstanceId !== command.providerInstanceId
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Provider ${command.providerInstanceId} does not own active run ${command.runId}.`,
+      });
+    }
+    if (yield* stopReachedRun(command, command.threadId, activeRun.id)) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Run ${activeRun.id} was stopped and cannot publish a proposed plan.`,
+      });
+    }
+    const adapter = yield* providerAdapters
+      .get(activeRun.providerInstanceId)
+      .pipe(mapDispatchError(command));
+    const capabilities = yield* adapter.getCapabilities().pipe(mapDispatchError(command));
+    if (capabilities.planning.emitsProposedPlan || !capabilities.tools.supportsMcpTools) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Provider ${activeRun.providerInstanceId} does not use harness propose_plan fallback.`,
+      });
+    }
+
+    const now = yield* DateTime.now;
+    const runId = activeRun.id;
+    const rootNodeId =
+      activeRun.rootNodeId ?? NodeId.make(`node:harness-root:${command.commandId}`);
+    const planNodeId = NodeId.make(`node:harness-plan:${command.commandId}`);
+    const planId = PlanId.make(`plan:harness:${command.commandId}`);
+    const turnItemId = TurnItemId.make(`item:harness-plan:${command.commandId}`);
+    const ordinal = yield* nextTurnItemOrdinal(projection);
+    const providerThreadId = activeRun.providerThreadId ?? null;
+    const providerTurnId = providerTurnForRun(projection, activeRun)?.id ?? null;
+
+    // Supersede any older active proposed plan on the same run so only the latest card stays actionable.
+    for (const existingPlan of projection.plans) {
+      if (
+        existingPlan.kind === "proposed_plan" &&
+        existingPlan.status === "active" &&
+        existingPlan.runId === runId
+      ) {
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "plan.updated",
+          threadId: command.threadId,
+          ...(existingPlan.runId === null ? {} : { runId: existingPlan.runId }),
+          nodeId: existingPlan.nodeId,
+          occurredAt: now,
+          payload: { ...existingPlan, status: "superseded" },
+        });
+      }
+    }
+
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "node.updated",
+      threadId: command.threadId,
+      ...(runId === null ? {} : { runId }),
+      nodeId: planNodeId,
+      occurredAt: now,
+      payload: {
+        id: planNodeId,
+        threadId: command.threadId,
+        runId,
+        parentNodeId: rootNodeId,
+        rootNodeId,
+        kind: "plan",
+        status: "completed",
+        countsForRun: false,
+        providerThreadId,
+        providerTurnId,
+        nativeItemRef: null,
+        runtimeRequestId: null,
+        checkpointScopeId: null,
+        startedAt: now,
+        completedAt: now,
+      },
+    });
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "plan.updated",
+      threadId: command.threadId,
+      ...(runId === null ? {} : { runId }),
+      nodeId: planNodeId,
+      occurredAt: now,
+      payload: {
+        id: planId,
+        threadId: command.threadId,
+        runId,
+        nodeId: planNodeId,
+        kind: "proposed_plan",
+        status: "active",
+        markdown: command.markdown,
+      },
+    });
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "turn-item.updated",
+      threadId: command.threadId,
+      ...(runId === null ? {} : { runId }),
+      nodeId: planNodeId,
+      occurredAt: now,
+      payload: {
+        id: turnItemId,
+        threadId: command.threadId,
+        runId,
+        nodeId: planNodeId,
+        providerThreadId,
+        providerTurnId,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal,
+        status: "completed",
+        title: null,
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+        type: "proposed_plan",
+        planId,
+        markdown: command.markdown,
+        streaming: false,
+      },
+    });
+  });
+
   const dispatchQueuedRunEdit = Effect.fn("Orchestrator.dispatchQueuedRunEdit")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "queued-run.edit" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -16224,6 +16400,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "run.output.submit":
         yield* dispatchRunOutputSubmit(command, events);
+        break;
+      case "plan.propose":
+        yield* dispatchPlanPropose(command, events);
         break;
       case "checkpoint.rollback":
         yield* dispatchCheckpointRollback(command, events, effects);

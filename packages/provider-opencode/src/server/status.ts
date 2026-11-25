@@ -37,7 +37,9 @@ import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
 
 const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
-  showInteractionModeToggle: false,
+  showInteractionModeToggle: true,
+  harnessPlanMode: "harness-propose-plan",
+  planReadOnlyEnforcement: "native",
 } as const;
 
 class OpenCodeProbeError extends Schema.TaggedError<OpenCodeProbeError>()("OpenCodeProbeError", {

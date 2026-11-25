@@ -41,7 +41,9 @@ import {
 
 const fxPresentation = (fullAccess: boolean) => ({
   displayName: "fx",
-  showInteractionModeToggle: false,
+  showInteractionModeToggle: true,
+  harnessPlanMode: "harness-propose-plan" as const,
+  planReadOnlyEnforcement: "advisory" as const,
   supportedRuntimeModes: fullAccess
     ? [...FX_SUPPORTED_RUNTIME_MODES, "full-access" as const]
     : FX_SUPPORTED_RUNTIME_MODES,

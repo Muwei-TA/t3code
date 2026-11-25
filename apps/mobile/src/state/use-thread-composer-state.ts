@@ -362,8 +362,18 @@ export function useThreadComposerState(input: {
     serverConfig?.providers ?? [],
   );
   const runtimeMode = selectedDraft.runtimeMode ?? selectedThread?.runtimeMode ?? null;
-  // Plan mode is not offered to users; every send runs in build mode.
-  const interactionMode = selectedThread ? DEFAULT_PROVIDER_INTERACTION_MODE : null;
+  const activeProvider = serverConfig?.providers.find(
+    (provider) => provider.instanceId === modelSelection?.instanceId,
+  );
+  const providerSupportsPlanMode =
+    activeProvider === undefined ||
+    activeProvider.showInteractionModeToggle !== false ||
+    (activeProvider.harnessPlanMode !== undefined && activeProvider.harnessPlanMode !== "none");
+  const interactionMode = selectedThread
+    ? providerSupportsPlanMode
+      ? (selectedDraft.interactionMode ?? selectedThread.interactionMode)
+      : DEFAULT_PROVIDER_INTERACTION_MODE
+    : null;
   const canSwitchThreadProvider = threadAllowsProviderSwitch({
     thread: selectedThreadShell,
     projection: selectedThreadProjection?.projection,
@@ -910,7 +920,9 @@ export function useThreadComposerState(input: {
       context: draft.context,
       modelSelection,
       runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      interactionMode: providerSupportsPlanMode
+        ? (draft.interactionMode ?? thread.interactionMode)
+        : DEFAULT_PROVIDER_INTERACTION_MODE,
       ...(compactBeforeSend
         ? { compactBeforeSend, dispatchMode: "queue" as const }
         : followUpDispatchMode === null

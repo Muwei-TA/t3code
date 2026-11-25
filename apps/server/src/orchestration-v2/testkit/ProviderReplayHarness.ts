@@ -167,6 +167,8 @@ export function makeReplayServerConfig(
       environmentIdPath: path.join(stateDir, "environment-id"),
       serverRuntimeStatePath: path.join(stateDir, "server-runtime.json"),
       secretsDir: path.join(stateDir, "secrets"),
+      harnessDir: path.join(baseDir, "harness"),
+      harnessTrustPath: path.join(stateDir, "harness-trust.json"),
     };
   });
 }

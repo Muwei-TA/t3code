@@ -94,6 +94,11 @@ import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceR
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
+import * as HarnessStore from "./harness/HarnessStore.ts";
+import * as HarnessImporter from "./harness/HarnessImporter.ts";
+import * as McpGateway from "./harness/McpGateway.ts";
+import * as HarnessContextService from "./harness/HarnessContextService.ts";
+import * as HarnessMcpHttpServer from "./harness/HarnessMcpHttpServer.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
 import * as PeerClientPairing from "./peer/PeerClientPairing.ts";
@@ -849,6 +854,21 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(ServerSecretStore.layer),
   Layer.provideMerge(
     Layer.mergeAll(
+      HarnessStore.layer,
+      HarnessImporter.layer.pipe(Layer.provide(HarnessStore.layer)),
+      McpGateway.layer.pipe(
+        Layer.provide(HarnessStore.layer),
+        Layer.provide(SecretResolver.layer.pipe(Layer.provide(layerServerSettings))),
+        Layer.provide(ServerSecretStore.layer),
+      ),
+    ).pipe(
+      Layer.provide(ManagedPolicy.layer),
+      Layer.provide(T3ProjectFileLoader.layer),
+      Layer.provide(layerWorkspace),
+    ),
+  ),
+  Layer.provideMerge(
+    Layer.mergeAll(
       CloudCliTokenManager.layer.pipe(
         Layer.provide(ServerSecretStore.layer),
         Layer.provide(ExternalLauncher.layer),
@@ -918,6 +938,10 @@ const layerMakeRoutes = Layer.mergeAll(
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
     Layer.provide(ProjectionStoreV2.layer),
   ),
+  HarnessMcpHttpServer.layer.pipe(
+    Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+    Layer.provide(ProjectionStoreV2.layer),
+  ),
   // Follows delegated tasks running in linked environments, including after a restart.
   Layer.effectDiscard(
     RemoteDelegation.RemoteDelegation.pipe(Effect.flatMap((remote) => remote.start())),
@@ -949,16 +973,22 @@ const layerMakeRoutes = Layer.mergeAll(
     ),
   ),
   Layer.provide(
-    SpeechService.layer.pipe(
-      Layer.provide(layerServerSettings),
-      Layer.provide(SpeechModelStore.layer),
+    Layer.mergeAll(
+      SpeechService.layer.pipe(
+        Layer.provide(layerServerSettings),
+        Layer.provide(SpeechModelStore.layer),
+      ),
+      CloudSpeech.layer.pipe(Layer.provide(SecretResolver.layer)),
+      HarnessContextService.layer.pipe(
+        Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+        Layer.provide(ProjectionStoreV2.layer),
+      ),
+      PreviewAutomationBroker.layer,
+      ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate)),
+      ProviderMaintenanceRunner.layer,
     ),
   ),
-  Layer.provide(CloudSpeech.layer.pipe(Layer.provide(SecretResolver.layer))),
   Layer.provide(layerServerSettings),
-  Layer.provide(PreviewAutomationBroker.layer),
-  Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate))),
-  Layer.provide(ProviderMaintenanceRunner.layer),
   Layer.provide(layerCommandReadiness),
   Layer.provide(ServerHttp.layerBrowserApiCors),
   Layer.provide(ServerHttp.layerHttpCompression),

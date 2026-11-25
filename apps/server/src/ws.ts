@@ -35,7 +35,10 @@ import {
   type AuthAccessStreamEvent,
   AuthOrchestrationOperateScope,
   AuthProvidersManageScope,
+  AuthTerminalOperateScope,
   type AuthEnvironmentScope,
+  HarnessError,
+  type HarnessMcpServerConfig,
   type ScheduledTaskListResult,
   WorkflowRequestError,
   AuthSessionId,
@@ -127,6 +130,11 @@ import * as ThreadViewers from "./orchestration-v2/ThreadViewers.ts";
 import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as McpSignIn from "./mcpApps/McpSignIn.ts";
+import * as HarnessStore from "./harness/HarnessStore.ts";
+import * as HarnessImporter from "./harness/HarnessImporter.ts";
+import { configContainsSecretPlaceholder } from "./harness/HarnessSecrets.ts";
+import * as McpGateway from "./harness/McpGateway.ts";
+import * as HarnessContextService from "./harness/HarnessContextService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
@@ -1448,6 +1456,12 @@ export const layerWsRpc = (
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
   reportProfiles: ServerBrowser.ProfileReporter,
   settingsClient: { readonly secretReferences: boolean },
+  harnessServices?: {
+    readonly harnessStore?: HarnessStore.HarnessStore["Service"] | undefined;
+    readonly harnessImporter?: HarnessImporter.HarnessImporter["Service"] | undefined;
+    readonly mcpGateway?: McpGateway.McpGateway["Service"] | undefined;
+    readonly harnessContext?: HarnessContextService.HarnessContextService["Service"] | undefined;
+  },
 ) =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -1473,6 +1487,29 @@ export const layerWsRpc = (
       const providerSessionsV2 = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const mcpAppRequests = yield* McpAppRequests.McpAppRequests;
       const mcpSignIn = yield* McpSignIn.McpSignIn;
+      const harnessStoreOption =
+        harnessServices?.harnessStore !== undefined
+          ? Option.some(harnessServices.harnessStore)
+          : yield* Effect.serviceOption(HarnessStore.HarnessStore);
+      const harnessImporterOption =
+        harnessServices?.harnessImporter !== undefined
+          ? Option.some(harnessServices.harnessImporter)
+          : yield* Effect.serviceOption(HarnessImporter.HarnessImporter);
+      const mcpGatewayOption =
+        harnessServices?.mcpGateway !== undefined
+          ? Option.some(harnessServices.mcpGateway)
+          : yield* Effect.serviceOption(McpGateway.McpGateway);
+      const harnessContextOption =
+        harnessServices?.harnessContext !== undefined
+          ? Option.some(harnessServices.harnessContext)
+          : yield* Effect.serviceOption(HarnessContextService.HarnessContextService);
+      const harnessUnavailable = (name: string) =>
+        Effect.fail(
+          new HarnessError({
+            code: "io_error",
+            detail: `${name} is not available in this server configuration.`,
+          }),
+        );
       const analytics = yield* AnalyticsService.AnalyticsService;
       const originProps = clientAnalyticsProps;
       const recordClientCommandAnalytics = (command: OrchestrationV2Command) => {
@@ -1638,6 +1675,16 @@ export const layerWsRpc = (
         currentSession.scopes.includes(requiredScope)
           ? effect
           : Effect.fail(rpcAuthorizationError(requiredScope));
+      const authorizeHarnessConfig = Effect.fn("ws.harness.authorizeConfig")(function* (
+        config: HarnessMcpServerConfig,
+      ) {
+        if (config.transport.type === "stdio") {
+          yield* authorizeEffect(AuthTerminalOperateScope, Effect.void);
+        }
+        if (configContainsSecretPlaceholder(config)) {
+          yield* authorizeEffect(AuthProvidersManageScope, Effect.void);
+        }
+      });
 
       const listAcpRegistrySessions = Effect.fn("ws.acpRegistry.listSessions")(function* (
         input: AcpRegistryListSessionsInput,
@@ -3708,6 +3755,113 @@ export const layerWsRpc = (
               Stream.concat(Stream.make(latest), changes),
             ),
           ),
+        [WS_METHODS.harnessMcpList]: (input) =>
+          Option.match(mcpGatewayOption, {
+            onNone: () => harnessUnavailable("McpGateway"),
+            onSome: (gateway) => gateway.getSnapshot(input.workspaceRoot),
+          }),
+        [WS_METHODS.harnessMcpUpsert]: (input) =>
+          Option.isSome(harnessStoreOption) && Option.isSome(mcpGatewayOption)
+            ? harnessStoreOption.value
+                .upsertUserServer({
+                  id: input.id,
+                  config: input.config,
+                  authorize: authorizeHarnessConfig,
+                })
+                .pipe(
+                  Effect.andThen(mcpGatewayOption.value.invalidateServer(input.id)),
+                  Effect.andThen(mcpGatewayOption.value.getSnapshot(input.workspaceRoot)),
+                )
+            : harnessUnavailable("HarnessStore"),
+        [WS_METHODS.harnessMcpRemove]: (input) =>
+          Option.isSome(harnessStoreOption) && Option.isSome(mcpGatewayOption)
+            ? harnessStoreOption.value
+                .removeUserServer(input.id)
+                .pipe(
+                  Effect.andThen(mcpGatewayOption.value.invalidateServer(input.id)),
+                  Effect.andThen(mcpGatewayOption.value.getSnapshot(input.workspaceRoot)),
+                )
+            : harnessUnavailable("HarnessStore"),
+        [WS_METHODS.harnessMcpSetEnabled]: (input) =>
+          Option.isSome(harnessStoreOption) && Option.isSome(mcpGatewayOption)
+            ? harnessStoreOption.value
+                .setServerEnabled({
+                  id: input.id,
+                  enabled: input.enabled,
+                  expectedDigest: input.expectedDigest,
+                  authorize: authorizeHarnessConfig,
+                })
+                .pipe(
+                  Effect.andThen(mcpGatewayOption.value.invalidateServer(input.id)),
+                  Effect.andThen(mcpGatewayOption.value.getSnapshot(input.workspaceRoot)),
+                )
+            : harnessUnavailable("HarnessStore"),
+        [WS_METHODS.harnessMcpTrustProjectServer]: (input) =>
+          Option.isSome(harnessStoreOption) && Option.isSome(mcpGatewayOption)
+            ? harnessStoreOption.value
+                .trustProjectServer({
+                  ...input,
+                  authorize: authorizeHarnessConfig,
+                })
+                .pipe(
+                  Effect.andThen(mcpGatewayOption.value.invalidateServer(input.serverId)),
+                  Effect.andThen(mcpGatewayOption.value.getSnapshot(input.repoRoot)),
+                )
+            : harnessUnavailable("HarnessStore"),
+        [WS_METHODS.harnessMcpRevokeProjectTrust]: (input) =>
+          Option.isSome(harnessStoreOption) && Option.isSome(mcpGatewayOption)
+            ? harnessStoreOption.value
+                .revokeProjectTrust(input)
+                .pipe(
+                  Effect.andThen(mcpGatewayOption.value.invalidateServer(input.serverId)),
+                  Effect.andThen(mcpGatewayOption.value.getSnapshot(input.repoRoot)),
+                )
+            : harnessUnavailable("HarnessStore"),
+        [WS_METHODS.harnessMcpRestart]: (input) =>
+          Option.match(mcpGatewayOption, {
+            onNone: () => harnessUnavailable("McpGateway"),
+            onSome: (gateway) =>
+              gateway.restartServer({
+                ...input,
+                authorize: authorizeHarnessConfig,
+              }),
+          }),
+        [WS_METHODS.harnessMcpLogs]: (input) =>
+          Option.match(mcpGatewayOption, {
+            onNone: () => harnessUnavailable("McpGateway"),
+            onSome: (gateway) => gateway.getLogs(input.serverId),
+          }),
+        [WS_METHODS.harnessMcpScanImports]: () =>
+          Option.match(harnessImporterOption, {
+            onNone: () => harnessUnavailable("HarnessImporter"),
+            onSome: (importer) => importer.scan.pipe(Effect.map((sources) => ({ sources }))),
+          }),
+        [WS_METHODS.harnessMcpApplyImports]: (input) =>
+          Option.isSome(harnessImporterOption) && Option.isSome(mcpGatewayOption)
+            ? harnessImporterOption.value
+                .apply({
+                  items: input.items,
+                  overwriteExisting: input.overwriteExisting,
+                  authorize: authorizeHarnessConfig,
+                })
+                .pipe(
+                  Effect.flatMap(({ importedIds, skippedIds }) =>
+                    Effect.forEach(
+                      importedIds,
+                      (id) => mcpGatewayOption.value.invalidateServer(id),
+                      { discard: true },
+                    ).pipe(
+                      Effect.andThen(mcpGatewayOption.value.getSnapshot(input.workspaceRoot)),
+                      Effect.map((snapshot) => ({ importedIds, skippedIds, snapshot })),
+                    ),
+                  ),
+                )
+            : harnessUnavailable("HarnessImporter"),
+        [WS_METHODS.harnessThreadContextManifest]: (input) =>
+          Option.match(harnessContextOption, {
+            onNone: () => harnessUnavailable("HarnessContextService"),
+            onSome: (contextService) => contextService.getThreadContextManifest(input.threadId),
+          }),
       });
       const splitHandlers: Pick<typeof handlers, SplitWsRpc["_tag"]> = handlers;
       const otherHandlers: Pick<typeof handlers, Exclude<ServerWsRpc, SplitWsRpc>["_tag"]> =
@@ -3740,6 +3894,16 @@ export const layer = Layer.unwrap(
     const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
     const peerThreadRelay = yield* PeerThreadRelay.PeerThreadRelay;
     const peerClientPairing = yield* PeerClientPairing.PeerClientPairing;
+    const harnessStore = yield* Effect.serviceOption(HarnessStore.HarnessStore);
+    const harnessImporter = yield* Effect.serviceOption(HarnessImporter.HarnessImporter);
+    const mcpGateway = yield* Effect.serviceOption(McpGateway.McpGateway);
+    const harnessContext = yield* Effect.serviceOption(HarnessContextService.HarnessContextService);
+    const capturedHarnessServices = {
+      harnessStore: Option.getOrUndefined(harnessStore),
+      harnessImporter: Option.getOrUndefined(harnessImporter),
+      mcpGateway: Option.getOrUndefined(mcpGateway),
+      harnessContext: Option.getOrUndefined(harnessContext),
+    };
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3815,6 +3979,7 @@ export const layer = Layer.unwrap(
               serverBrowser,
               reportProfiles,
               readSettingsClient(url.value),
+              capturedHarnessServices,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Handler-context reporters see only request defects, not server-wide defects.

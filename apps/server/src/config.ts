@@ -45,6 +45,10 @@ export interface ServerDerivedPaths {
   readonly worktreesDir: string;
   /** Where workflow definition files live. In the home itself: they are the user's own code. */
   readonly workflowsDir: string;
+  /** Where portable user harness files live (`~/.t3/harness`), physically outside `userdata`. */
+  readonly harnessDir: string;
+  /** Machine-local trust ledger for project-defined stdio MCP servers. */
+  readonly harnessTrustPath: string;
   readonly worktreeCheckoutCacheDir: string;
   readonly attachmentsDir: string;
   readonly browserArtifactsDir: string;
@@ -164,6 +168,8 @@ export const deriveServerPaths = Effect.fn(function* (
     providerStatusCacheDir,
     worktreesDir: join(baseDir, "worktrees"),
     workflowsDir: join(baseDir, "workflows"),
+    harnessDir: join(baseDir, "harness"),
+    harnessTrustPath: join(stateDir, "harness-trust.json"),
     worktreeCheckoutCacheDir: join(providerStatusCacheDir, "worktree-checkouts"),
     attachmentsDir,
     browserArtifactsDir: join(stateDir, "browser-artifacts"),

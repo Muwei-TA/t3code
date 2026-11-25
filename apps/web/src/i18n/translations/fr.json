@@ -71,6 +71,7 @@
   "cd03eb1b84271c02": "Agent",
   "bfe1a60f3f9c60fb": "Tour {turn} · {what}",
   "dfdaa6255a416140": "Résumé de {turns, plural, one {{turns} tour récent} other {{turns} tours récents}}, {textTurns, plural, =0 {sans texte des messages} one {avec le texte des messages du dernier tour} other {avec le texte des messages des {textTurns} derniers tours}}{truncated, select, yes {, raccourci pour tenir dans la limite} other {}}",
+  "260c6b45f52d2f27": "Ajoute le texte de vos messages et des réponses de l'agent dans {textTurns, plural, one {le dernier tour} other {les {textTurns} derniers tours}}.",
   "afac52a5cc2dc801": "Impossible d'envoyer votre réponse. Réessayez.",
   "79d776428f4d0650": "Le fichier n’a pas pu être chargé. Reconnectez-vous et réessayez.",
   "3ea34cbb1ca5ba9b": "Aperçu annulé.",
@@ -272,6 +273,10 @@
   "3280d45703154eb4": "{count, plural, one {Tentative de rendu de {count} page HTML} other {Tentative de rendu de {count} pages HTML}}",
   "898770cae17df8d2": "{count, plural, one {{count} message envoyé} other {{count} messages envoyés}}",
   "e63f6b002f96e1e0": "{count, plural, one {Tentative d’envoi de {count} message} other {Tentative d’envoi de {count} messages}}",
+  "720d4f0739737033": "{count, plural, one {Proposed {count} plan} other {Proposed {count} plans}}",
+  "5f62809dfb11f286": "{count, plural, one {Tried to propose {count} plan} other {Tried to propose {count} plans}}",
+  "4b50f2509b8fd59d": "{count, plural, one {Searched harness tools {count} time} other {Searched harness tools {count} times}}",
+  "9bc4b3333b6fc82a": "{count, plural, one {Tried to search harness tools {count} time} other {Tried to search harness tools {count} times}}",
   "fad31ec7ecac436d": "{count, plural, one {Fils listés {count} fois} other {Fils listés {count} fois}}",
   "42b96626eb49fc73": "{count, plural, one {Tentative de lister les fils {count} fois} other {Tentative de lister les fils {count} fois}}",
   "28d3809da9e7feb9": "{count, plural, one {Statut des tâches vérifié {count} fois} other {Statut des tâches vérifié {count} fois}}",
@@ -1790,6 +1795,9 @@
   "98f445984c075971": "Les discussions annexes sont disponibles après le premier message.",
   "e9cf5c708ad52a85": "Disponible une fois le worktree du fil configuré.",
   "6b1c0d7732da6648": "Échec du compactage du contexte.",
+  "8e1995faa8e21438": "Failed to start implementation worktree.",
+  "a55ba331dbfa14e4": "Failed to switch back to build mode.",
+  "ed2bf95c43ff82d7": "Failed to start plan implementation.",
   "bbbce20ad5d6790d": "{count, plural, one {{count} en file d’attente} other {{count} en file d’attente}}",
   "2d3ad1215c5d8a52": "Cette connexion ne peut pas modifier les fils.",
   "86860f420c3af36a": "Préparation de la machine",
@@ -2733,9 +2741,9 @@
   "db7b3a938c45e56c": "Mise à jour {version} prête à être téléchargée",
   "9a951140b69ba740": "Téléchargement de la mise à jour ({percent} %)",
   "7fdece033260e9fb": "Téléchargement de la mise à jour",
+  "52e1d4a487c0cf4b": "Échec de l’installation de {version}. Cliquez pour réessayer.",
   "09ef51903e99e876": "Mise à jour téléchargée. Cliquez pour redémarrer et l’installer.",
   "d62631cab06d2b80": "Mise à jour {version} téléchargée. Cliquez pour redémarrer et l’installer.",
-  "52e1d4a487c0cf4b": "Échec de l’installation de {version}. Cliquez pour réessayer.",
   "78a04e0e625c0990": "Échec de la mise à jour",
   "c24de5eb69373a55": "Cette version {build} ignore les versions {track}. Vérifiez le canal de mise à jour dans les Réglages pour terminer le changement.",
   "b02ae45a6109c93b": "À jour",
@@ -3495,8 +3503,15 @@
   "061c0c9f27104d23": "Aucun skill trouvé. Essayez / pour parcourir les commandes du fournisseur.",
   "0a6fbecab03f7ef3": "Aucun fichier ni dossier correspondant.",
   "0e7b21ab11721ca7": "Aucune commande correspondante.",
+  "921c756de7a822c1": "Plan mode active (advisory read-only): T3 harness MCP write tools are blocked; native provider tools follow provider instructions. Click to return to Build mode.",
+  "9cdfcdcc4315be4d": "Plan mode active: read-only planning before implementation. Click to return to Build mode.",
+  "a5dfd20f775abab7": "Switch to Plan mode (advisory read-only with structured plan output)",
+  "db6c31d4fbae0606": "Switch to Plan mode",
   "2029db2cc30beb6d": "Ouvrir les paramètres des fournisseurs",
   "517cfb8f24123f5b": "Aucun fournisseur disponible",
+  "101ca3243c16f53a": "Plan mode active, switch to Build mode",
+  "1da50d03ec9df047": "Plan (advisory)",
+  "4a223758cb5a8af4": "Plan",
   "7ff1a0ef1490668d": "L’API Presse-papiers n’est pas disponible pour copier l’ID du fil de feedback Codex.",
   "1967731535386826": "Impossible de copier l’ID du fil de feedback Codex dans le presse-papiers.",
   "9c5afbfbbe8b305d": "Impossible de copier l’ID du fil",
@@ -3638,7 +3653,6 @@
   "4e0710d19dfc2e7e": "Envoyer ce rapport à l'équipe T3 ?",
   "87d0ae0723ba75d1": "Voici tout ce qui quitte votre machine. Rien n'est envoyé tant que vous ne cliquez pas sur Envoyer.",
   "bf19826f81484328": "Inclure la conversation",
-  "260c6b45f52d2f27": "Ajoute le texte de vos messages et des réponses de l'agent dans {textTurns, plural, one {le dernier tour} other {les {textTurns} derniers tours}}.",
   "ddb7e6f8ce99e657": "Seule une personne autorisée à exécuter des agents sur cette machine peut l'envoyer ou le refuser.",
   "03c1eb603c112f47": "Ne pas envoyer",
   "653405e4ed498d9f": "Envoyer",
@@ -3978,6 +3992,7 @@
   "979cece449deec58": "Impossible d’enregistrer le plan",
   "6f04fb17a308322d": "Une erreur s’est produite lors de l’enregistrement.",
   "f2c5bb584187afc0": "Plan",
+  "b0c81209b2b736e4": "Superseded",
   "22cb24de4fe3c298": "Actions du plan",
   "efd9775f35548e44": "Copié !",
   "a2050560a358cb80": "Copier dans le presse-papiers",
@@ -3985,8 +4000,17 @@
   "8e11a9c7b61add92": "Développer le plan",
   "3414b088dde8621b": "Enregistrement...",
   "762fcce45b65eea9": "Enregistrer",
+  "221dd4241db01d9c": "Starting...",
+  "bc690793b36437ba": "Implement plan",
+  "3f9789221aebe612": "Clear context & implement",
+  "78ae9a123f9e1339": "Implement in new worktree",
+  "99782bc301e03853": "Edit & implement",
   "ac670afc4c280e6f": "Télécharger en Markdown",
   "7b4d16e6e203579d": "Enregistrer dans l’espace de travail",
+  "b0a7a1902e8c29fe": "Implement plan",
+  "8e121eb84ffc8291": "Fresh context",
+  "f5b66c481aa3e4df": "Modifier",
+  "9df14cccfc7693ff": "Continue planning",
   "2e6574ee1fa81515": "Enregistrer le plan dans l’espace de travail",
   "730433ae490bb9ae": [
     "Saisissez un chemin relatif à",
@@ -4012,6 +4036,9 @@
     "."
   ],
   "fc3b6bf340ccc47b": "Chemin de l’espace de travail",
+  "c17a23d713ede0e0": "Edit plan before implementing",
+  "8dfe98a682157fba": "Adjust the steps below before switching to build mode and starting execution.",
+  "9154cea7464561e4": "Plan markdown",
   "bda161176d64ec51": "Choisir un modèle",
   "b1ab3352e78f5241": "{model} (indisponible)",
   "2e3999c63ac1c29b": "Choisir des modèles",
@@ -4197,6 +4224,32 @@
       "v": "v"
     }
   ],
+  "27506b4d9e3189eb": "Could not inspect thread context.",
+  "344e646fcd4f9a9f": "Inspect thread context and MCP servers",
+  "8fcd54ccbde728bd": "Contexte",
+  "bc8fb31b07676837": "Inspect active MCP servers and Plan mode status",
+  "1fc8b62e05da5996": "Inspect active MCP servers and harness context",
+  "1ef0ccbe5aa656ac": "Plan mode",
+  "f83041b9e320239f": "Default mode",
+  "e0c0aea2b4567267": "Plan cards: Native",
+  "5fe370de56509ea8": "Plan cards: T3 propose_plan",
+  "6360800ac5faffbb": "Plan cards: Unavailable",
+  "f66fbef097ecd023": "Read-only: Native",
+  "63ed24372ef255c8": "Read-only: Advisory",
+  "3da4c44daa577257": "T3 Gateway active",
+  "a09ff1cfef5f141b": "T3 Gateway idle",
+  "b8305e184a9767f5": "T3 Gateway",
+  "6ecaa4d7d101eec3": "Natif",
+  "4dccb48528cb04d2": "Blocked",
+  "0b236f40b2a852aa": "Désactivé",
+  "67bbfc0dbbdadbc8": "{count, plural, one {{count} tool} other {{count} tools}}",
+  "dbe41250c7db98d8": "Thread context & Harness",
+  "f7c8d979912465db": "On-demand snapshot of MCP servers, routing channels, and Plan mode enforcement for this thread.",
+  "5e011b9d0a09a9c3": "Inspecting thread context...",
+  "6da7b4ac8a990024": "MCP Servers",
+  "1e1caba650712523": "No portable MCP servers configured for this workspace.",
+  "3b61937e694ac2c1": "Notices & degradations",
+  "f32f1452b6608eb3": "Manage Harness MCP",
   "e58a1d884fa1d8f2": "Détails du fil",
   "43c5fbd02c6f330a": "Afficher moins",
   "de45b075b016cb14": [
@@ -8360,7 +8413,6 @@
   "0c99fa183ed512e8": "{platform} disponible sur certains",
   "e6886a7f77b73a8e": "{platform} non disponible",
   "b0b7610d9860d18d": "Non configuré sur cette machine.",
-  "f5b66c481aa3e4df": "Modifier",
   "b35256ca61016104": "Ajouter une source",
   "3b20ef0670ae4b0b": "Machine via SSH",
   "121ccffacb6b8c6d": "Expo Simulators",
@@ -8629,6 +8681,252 @@
   "e8622c39abe68f9d": "par défaut",
   "5383ef2d2c09cdf7": "Rechercher des polices…",
   "ea08337bcadd35b4": "Aucune police trouvée.",
+  "3b77efbddf60b8f9": "Could not update MCP server",
+  "cb93e356d1133a0f": "Failed to toggle server state.",
+  "f346a4661a429a72": "Connected to {id}",
+  "3a23b9be74c8b617": "{count, plural, one {{count} tool loaded} other {{count} tools loaded}}",
+  "f68fbe0401d88a85": "Could not connect to {id}",
+  "f4e5a98026547234": "Could not restart {id}",
+  "8691674f9ff0cc27": "Failed to restart MCP server.",
+  "e64c6a8fc3248842": "Could not scan CLI configurations",
+  "e20e525877c79781": "Failed to scan local CLI MCP files.",
+  "fc4a96487715c2dd": "Removed {id}",
+  "1460f7dac98ff946": "Could not remove {id}",
+  "6f8e4398e2d170ac": "Failed to remove MCP server.",
+  "ebb50b6703fd1b81": "Trusted {id}",
+  "bc063dfb1e46f4c6": "Could not trust {id}",
+  "1429a0a599c889e1": "Failed to save trust approval.",
+  "b667bf270395ff51": "Revoked trust for {id}",
+  "db0989aa8f08e353": "Connected ({count})",
+  "afc8fb892e52f932": "Erreur",
+  "67c4873d49eeada6": "Needs trust",
+  "fa891300374ac336": "Blocked by policy",
+  "ce5951a137949761": "User",
+  "1037b5639c9a7c45": "Native passthrough",
+  "5e18e2781030fad6": "Toggle {id}",
+  "ac7bdcfed0826a47": "Connect or restart {id}",
+  "93f0a54678cc1595": "View logs for {id}",
+  "cae28dd8f2d6d315": "Edit {id}",
+  "679d910a23b848d3": "Remove {id}",
+  "82a9ddbe85dd67fc": "Route: {route} · Policy: {policy} · Secret placeholders: yes",
+  "efd586463c0accd1": "Route: {route} · Policy: {policy}",
+  "0170265b9402683d": "Server ID must start with a letter or digit and use only letters, digits, -, or _.",
+  "ff263045079de82d": "Local stdio MCP servers are not permitted on this connection.",
+  "a48f50839f691bff": "Enter a command to launch the stdio MCP server.",
+  "7422c578bee444c0": "Enter a valid http:// or https:// MCP endpoint URL.",
+  "d836f804c2cb2dc0": "Updated {id}",
+  "d322250bd5cfe6b5": "Added {id}",
+  "a9cf0dbec8a0680a": "Failed to save MCP server.",
+  "2ff03f922550cb1a": "Edit MCP server",
+  "d4901f14058466ac": "Add portable MCP server",
+  "3814aca0c34e7822": "GitHub issues and repository search",
+  "2d25f69c1602f41e": "Imported {count, plural, one {{count} MCP server} other {{count} MCP servers}}",
+  "66227885099fc081": "Import failed",
+  "accaf30ed349879e": "Could not import selected MCP servers.",
+  "a09545c3e39b9891": "New",
+  "3b58df212a50bb12": "Already imported",
+  "d0d7d90aabe6f75a": "Differs from existing",
+  "3585b039b3cbce9f": "Importing...",
+  "1cadab62fc93b02e": "Import selected ({count})",
+  "13acfdd2e7f96433": "Connect an environment to configure portable MCP servers and harness extensions.",
+  "b5cbec89930470c9": "Import from CLI",
+  "e6e4b713eaf4d497": "Add MCP server",
+  "97388c061a394481": [
+    "Configure MCP servers once in",
+    " ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": {
+        "i": 2,
+        "k": "_gt_value_2",
+        "v": "v"
+      }
+    },
+    " ",
+    "and reuse them across every provider through the isolated ",
+    {
+      "t": "code",
+      "i": 3,
+      "c": "/mcp/harness"
+    },
+    " ",
+    "gateway. Use ",
+    {
+      "t": "code",
+      "i": 4,
+      "c": "${secret:NAME}"
+    },
+    " or",
+    " ",
+    {
+      "t": "code",
+      "i": 5,
+      "c": "${secret:provider:ref}"
+    },
+    " for credentials."
+  ],
+  "4247e5730988f6a9": "Restricted by organization policy",
+  "3f28feb80259d963": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " has disabled portable harness extensions on this environment."
+  ],
+  "674c8528afbd2c9e": "Local stdio MCP servers disabled",
+  "c889606a56f7e660": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " only allows remote HTTP/SSE MCP servers on this environment."
+  ],
+  "e98b1119c37796d5": "Invalid entries in harness.json",
+  "4480192a018fd1bf": "No portable MCP servers configured yet. Add one manually or import existing servers from Codex, Claude, Cursor, or Antigravity without modifying their original files.",
+  "dded5d9100cb032f": [
+    "Project stdio server with secret placeholders from",
+    " ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": "t3.json"
+    },
+    " requires owner trust approval before running."
+  ],
+  "bdfc4328d842f409": [
+    "Project MCP server with secret placeholders from ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": "t3.json"
+    },
+    " ",
+    "requires owner trust approval before resolving secrets."
+  ],
+  "0faf2334d277ffc4": [
+    "Project stdio server from ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": "t3.json"
+    },
+    " requires owner trust approval before running."
+  ],
+  "4fa906482d7412d6": [
+    "Project MCP server from ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": "t3.json"
+    },
+    " requires owner trust approval before connecting."
+  ],
+  "a38ffc5f81210fd6": "Review & trust",
+  "793de82a0d077a4b": "Trusted for current digest",
+  "e9459149a38c95c1": "Revoke trust",
+  "52d4be6f6cd63137": [
+    "MCP diagnostics: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "2aeb959e188c111f": "Recent stderr and lifecycle events captured by the T3 Harness gateway.",
+  "78d2e0386f1c7c14": "Loading logs...",
+  "908b4450089fd67a": "No logs recorded yet. Stdio servers start lazily on first tool use or when you click Restart.",
+  "596fa07867bbed59": [
+    "Remove MCP server ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    "?"
+  ],
+  "28db7124e98d7c77": [
+    "This removes the server from your portable ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": "harness.json"
+    },
+    " and stops any pooled connection on this environment."
+  ],
+  "111a44209dc6e701": "Supprimer",
+  "bdd8474eaeb7d168": [
+    "Trust project MCP server ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    "?"
+  ],
+  "2497eb386433544a": [
+    "Approving this lets T3 Code activate the following project MCP server from",
+    " ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": "t3.json"
+    },
+    " on ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    ". Trust is pinned to its full transport, channel, policy, and destination digest and resets if",
+    " ",
+    {
+      "t": "code",
+      "i": 3,
+      "c": "t3.json"
+    },
+    " changes."
+  ],
+  "7e2e8bec840689a3": "Trust & enable",
+  "9fb072ea040d84bf": "Retry loading Harness",
+  "0b27489e18ff9300": [
+    "Saved to your portable ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": "~/.t3/harness/harness.json"
+    },
+    " and available to every provider."
+  ],
+  "78ade2037b60c8f0": "Server ID",
+  "e4c938ffecbcc0f9": "Transport",
+  "7829c84c95f43d4d": "Streamable HTTP",
+  "5772a96c29d1b1e0": "Arguments",
+  "25dd9bfc957e5d4f": "Working directory (optional)",
+  "53ebc7ac9d3ca214": [
+    "Environment variables (KEY=VALUE per line, supports ",
+    "${secret:NAME}",
+    ")"
+  ],
+  "2324770ba91371ac": "Endpoint URL",
+  "029ee0da11b55808": ["Headers (Header=Value per line, supports ", "${secret:NAME}", ")"],
+  "c63859e4c9498a50": "Injection route",
+  "a1e040a4633ad7a9": "T3 Gateway (Recommended, all 11 providers)",
+  "1254295397b68cc4": "Native passthrough (when supported)",
+  "1f1d7fb15df04123": "Gateway tool policy",
+  "b52d53c792dbfce2": "Auto-allow read-only",
+  "c42a0fb28e41730e": "Strict",
+  "e76d2c31b6338b2d": "Auto-allow all",
+  "485d980db9663410": "Allowed tools (optional, comma-separated)",
+  "fc84151cc373fbac": "Disabled tools (optional, comma-separated)",
+  "1938f83479ad1616": "Description (optional)",
+  "1f2cb20867fa0e1a": "Import MCP servers from installed CLIs",
+  "bef26eaaede1c4aa": "Read-only scan of Codex, Claude, Cursor, and Antigravity configurations. Existing CLI files are never modified.",
+  "88848855e61e6ccb": "Scanning local CLI configurations...",
+  "86c6a20770a4fbf6": "No importable MCP servers were found in Codex, Claude, Cursor, or Antigravity.",
+  "b1a949c7a95d4932": "Overwrite servers with matching IDs already in harness.json",
   "d6ad43bc4b700a88": "Aucune donnée de profil de navigateur à effacer.",
   "ad8efd437b301a37": "Système",
   "42e23caa6ef99cad": "Clair",
@@ -8755,9 +9053,13 @@
   "ed83b25c71c98a20": "Choisissez un ou plusieurs {scope}s {tracker} pour chaque projet. Leurs tickets s'affichent à côté de ceux du dépôt, et les agents créent les nouveaux tickets dans le premier, sauf si vous leur indiquez une autre destination.",
   "19c2d5e81ff8f89a": "{scope} {tracker} pour {project}",
   "68e061510b765772": "Non lié",
+  "99d51127f573296b": "Autre compte",
+  "8ec2c57414669b79": "Connectez un second espace de travail ou utilisateur {tracker}.",
+  "99963c0142e17f00": "Pour le nouveau compte {tracker}.",
   "a2d95d39d3398bda": "Identifiant refusé",
   "9eae463720500113": "Stocké sur le serveur.",
   "b6e27ab2537ef874": "En créer un",
+  "6d8e4ebc889bace9": "Ajouter un compte",
   "13ef526271b0f5d4": "Effacer toutes les conditions",
   "d1938a629f039515": "Supprimer la condition",
   "84a605b241ce65b7": "Supprimer le groupe et ses conditions",
@@ -9193,7 +9495,6 @@
   "e749b8ba2ff18f8f": "Ajouter {name} au projet",
   "6d08f0285e2bbf34": "Ajouter un dossier",
   "b7820a37d8ff1918": "Les dépôts situés dans ce dossier font partie du projet dès qu’ils s’y trouvent. Ajoutez un dossier pour en intégrer un situé ailleurs.",
-  "111a44209dc6e701": "Supprimer",
   "daafb41c2b3c066f": "Dans le fichier d’espace de travail",
   "2c5c798252f91fdc": "Ajouter",
   "7e4d1ce9725c2327": "Suivez un dépôt ou un dossier situé n’importe où sur la machine de ce projet.",
@@ -9597,7 +9898,6 @@
   "434f4fcb39b24c50": "Impossible de redémarrer le moniteur de ressources",
   "10bac993f42d409d": "La nouvelle tentative du moniteur de ressources a échoué.",
   "6be2b961b1f8ff7d": "Moniteur de ressources",
-  "6ecaa4d7d101eec3": "Natif",
   "0d05597497fc05b4": "Actualiser la télémétrie des ressources",
   "b34d800eb1b43bf9": "Échantillonnage toutes les ...",
   "7023577291b75f1e": "CPU actuel",
@@ -9618,7 +9918,6 @@
   "cd03f1a6d9d79875": "Alimentation externe",
   "7918a964c1578170": "Mode économie d’énergie",
   "f62db7ca5ce71d28": "Activé",
-  "0b236f40b2a852aa": "Désactivé",
   "6318d52001c1021f": "Inactif",
   "a8b0545544a81b2d": "Actif",
   "51a1d52c0e4eb89a": "Session",
@@ -11306,12 +11605,10 @@
   "21d70fad26b0e631": "Surface du code",
   "80ec0ed641fd464d": "Résultats de recherche",
   "5faa875c0c10e21e": "Résultat actuel",
-  "8fcd54ccbde728bd": "Contexte",
   "58c50282546cc1d0": "Arrière-plan de la barre latérale",
   "af4c158f5758af59": "Contrôles de la barre latérale",
   "cddde869ea4ceb29": "Sélection de la barre latérale",
   "735a61ef214f6836": "Arrière-plan du terminal",
-  "afc8fb892e52f932": "Erreur",
   "16ad4c65b7cde1bb": "« {label} » n’a pas de palette claire. Créez un thème du même nom pour en ajouter une.",
   "0ec05a92bf5537a2": "« {label} » n’a pas de palette sombre. Créez un thème du même nom pour en ajouter une.",
   "a9cfdfa41271d7d4": "« {label} » a déjà une palette claire.",
@@ -11789,6 +12086,7 @@
   "afda415d2d75a5d3": "Discussion",
   "4beeab8d1814b251": "Diffs et pull requests",
   "3b958faa12d54484": "Raccourcis clavier",
+  "b2b5383883352b08": "Harness & MCP",
   "2ab325baee3ec9a3": "Tâches planifiées",
   "0a59e086514a62a9": "Gestion de versions et tickets",
   "1de0df2b8a4fb96e": "Partage et accès",
@@ -11995,6 +12293,8 @@
   "fd4ec272764a2405": "1password coffre identifiants clé d’api",
   "ff679e74f97044e6": "Ajouter un fournisseur de secrets",
   "ddd5990f613aebb4": "nouveau coffre 1password op cli compte",
+  "92e1045de14c2302": "Portable MCP servers",
+  "71c29c0d53ebc9ff": "harness mcp gateway stdio http sse import codex claude cursor antigravity",
   "b9b1dccabd2ed00d": "Fils archivés",
   "f505371f6f6fd624": "restaurer rouvrir supprimés historique projets",
   "2ed592dc3ae2e382": "Donnez un libellé à l’hôte.",
@@ -12603,6 +12903,16 @@
   "156ff7b625287a1e": "Masquer les éléments ignorés",
   "69b985b97ab45e6b": "Afficher {count} ignorés",
   "2400254d362de84d": "Chargement des exécutions de workflow…",
+  "cae5c3205c01d062": [
+    {
+      "t": "span",
+      "i": 1,
+      "c": "Un fichier de workflow présente un problème."
+    },
+    " ",
+    "La dernière version valide continue de s’exécuter."
+  ],
+  "ed8ce6ebc73dc12d": "Ouvrir le fichier",
   "145e1f7503ba3b2c": [
     "Cet environnement n’a aucune exécution avec ce lien.",
     " ",
@@ -12628,16 +12938,6 @@
       "c": "Lire le guide"
     }
   ],
-  "cae5c3205c01d062": [
-    {
-      "t": "span",
-      "i": 1,
-      "c": "Un fichier de workflow présente un problème."
-    },
-    " ",
-    "La dernière version valide continue de s’exécuter."
-  ],
-  "ed8ce6ebc73dc12d": "Ouvrir le fichier",
   "5d8d278ff828102d": "Tous les workflows",
   "39459da07479f482": "Agent",
   "7741243632056b81": "{step} · transcription",
@@ -12782,9 +13082,5 @@
   "27d76249d09eb69f": "Guide de revue prêt",
   "faa3bb26abb39c93": "Échec du guide de revue",
   "b7df38b7d8792d78": "Ouvrir le guide",
-  "9e91e9a77b664e4e": "Impossible de démarrer un guide de revue",
-  "99d51127f573296b": "Autre compte",
-  "8ec2c57414669b79": "Connectez un second espace de travail ou utilisateur {tracker}.",
-  "99963c0142e17f00": "Pour le nouveau compte {tracker}.",
-  "6d8e4ebc889bace9": "Ajouter un compte"
+  "9e91e9a77b664e4e": "Impossible de démarrer un guide de revue"
 }

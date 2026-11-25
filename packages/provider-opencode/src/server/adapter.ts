@@ -37,6 +37,7 @@ import {
   type ProviderSessionId,
   type RuntimeRequestId,
   type ThreadId,
+  isReservedHarnessMcpServerId,
   settingsSecretLiteral,
 } from "@t3tools/contracts";
 import { OpenCodeSettings } from "../settings.ts";
@@ -66,7 +67,10 @@ import {
   summarizeNativeProtocolPayload,
 } from "@t3tools/provider-core/server/nativeProtocolLogging";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
-import { t3OrchestrationSystemPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
+import {
+  T3_CODE_HARNESS_PROPOSE_PLAN_NOTE,
+  t3OrchestrationSystemPrompt,
+} from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import { readableProviderErrorMessage } from "./providerErrorMessage.ts";
@@ -207,6 +211,16 @@ const OpenCodeProviderCapabilitiesV2 = {
   },
   runtimePolicy: {
     enforcement: "native",
+  },
+  harness: {
+    mcpPassthrough: "http",
+    mcpListChanged: false,
+    skillMount: "none",
+    systemContextMutableMidSession: true,
+    maxSystemContextBytes: null,
+    nativeToolHooks: false,
+    nativeAllowAlways: false,
+    planReadOnlyEnforcement: "native",
   },
 } satisfies OrchestrationV2ProviderCapabilities;
 
@@ -1110,6 +1124,35 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               },
             }),
           );
+          if (mcpSession.harnessEndpoint !== undefined) {
+            yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
+              client.mcp.add({
+                name: "t3-harness",
+                config: {
+                  type: "remote",
+                  url: mcpSession.harnessEndpoint!,
+                  headers: { Authorization: mcpSession.authorizationHeader },
+                  oauth: false,
+                },
+              }),
+            ).pipe(Effect.ignore);
+          }
+          for (const nativeServer of mcpSession.nativeMcpServers ?? []) {
+            if (nativeServer.type === "stdio" || isReservedHarnessMcpServerId(nativeServer.id)) {
+              continue;
+            }
+            yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
+              client.mcp.add({
+                name: nativeServer.id,
+                config: {
+                  type: "remote",
+                  url: nativeServer.url,
+                  ...(nativeServer.headers ? { headers: { ...nativeServer.headers } } : {}),
+                  oauth: false,
+                },
+              }),
+            ).pipe(Effect.ignore);
+          }
         }
 
         const now = yield* DateTime.now;
@@ -3520,6 +3563,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 agentFeedback: hasT3Mcp ? turn.agentFeedback : "off",
                 runtimePolicy: turn.runtimePolicy,
               }),
+              turn.runtimePolicy.interactionMode === "plan" &&
+              mcpSession?.harnessEndpoint !== undefined
+                ? T3_CODE_HARNESS_PROPOSE_PLAN_NOTE
+                : undefined,
             ]
               .filter(Boolean)
               .join("\n\n"),

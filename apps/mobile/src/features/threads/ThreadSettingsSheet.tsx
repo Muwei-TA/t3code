@@ -15,12 +15,17 @@ import type {
   EnvironmentId,
   ModelSelection,
   ProjectId,
+  ProviderInteractionMode,
   ProviderOptionDescriptor,
   ProviderOptionSelection,
   RuntimeMode,
   ServerSettings,
+  ThreadContextManifest,
   ThreadId,
 } from "@t3tools/contracts";
+import { harnessEnvironment } from "../../state/harness";
+import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { LegendListRenderItemProps } from "@legendapp/list/react-native";
 import { RegistryContext, useAtomMount, useAtomValue } from "@effect/atom-react";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
@@ -302,6 +307,9 @@ type ThreadSettingsSessionProps = {
   readonly onUpdateOptionSelections: (selections: ReadonlyArray<ProviderOptionSelection>) => void;
   readonly runtimeMode: RuntimeMode;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
+  readonly interactionMode?: ProviderInteractionMode | undefined;
+  readonly onUpdateInteractionMode?: ((mode: ProviderInteractionMode) => void) | undefined;
+  readonly threadId?: ThreadId | null | undefined;
 };
 
 /** The composer draft the sheet edits: the thread's own, or a queued message being edited. */
@@ -325,6 +333,9 @@ type ThreadSettingsSessionValue = {
   readonly runtimeMode: RuntimeMode;
   readonly runtimeModeChoices: ReadonlyArray<RuntimeModeChoice>;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly onUpdateInteractionMode?: ((mode: ProviderInteractionMode) => void) | undefined;
+  readonly threadId: ThreadId | null;
   readonly displayedDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly promptTraits: ReturnType<typeof getPromptControlledTraits>;
   readonly displayedModelSelection: ModelSelection | null;
@@ -647,6 +658,9 @@ function ThreadSettingsSessionProvider(
     runtimeMode: compatibleRuntimeMode,
     runtimeModeChoices,
     onUpdateRuntimeMode: props.onUpdateRuntimeMode,
+    interactionMode: props.interactionMode ?? "default",
+    onUpdateInteractionMode: props.onUpdateInteractionMode,
+    threadId: props.threadId ?? null,
     displayedDescriptors,
     promptTraits,
     displayedModelSelection: pendingModel?.selection ?? props.selectedModel,
@@ -972,6 +986,49 @@ function ThreadSettingsOptionsItem(props: {
         .get(session.environmentId)
         ?.providers.find((provider) => provider.instanceId === session.providerInstanceId) ?? null)
     : null;
+  const showPlanModeToggle =
+    session.onUpdateInteractionMode !== undefined &&
+    selectedProvider !== null &&
+    (selectedProvider.showInteractionModeToggle !== false ||
+      (selectedProvider.harnessPlanMode !== undefined &&
+        selectedProvider.harnessPlanMode !== "none"));
+  const planReadOnlyEnforcement = selectedProvider?.planReadOnlyEnforcement ?? "none";
+  const fetchContextManifest = useAtomCommand(harnessEnvironment.threadContextManifest, {
+    reportFailure: false,
+  });
+  const [inspectingContext, setInspectingContext] = useState(false);
+
+  const handleInspectContext = async () => {
+    if (!session.environmentId || !session.threadId || inspectingContext) return;
+    setInspectingContext(true);
+    const result = await fetchContextManifest({
+      environmentId: session.environmentId,
+      input: { threadId: session.threadId },
+    });
+    setInspectingContext(false);
+    if (result._tag === "Success") {
+      const manifest: ThreadContextManifest = result.value;
+      const lines = [
+        `${gt("Mode")}: ${manifest.interactionMode} (${manifest.planModeReadOnlyEnforcement})`,
+        `${gt("Harness MCP")}: ${manifest.harnessGatewayActive ? gt("Active") : gt("Inactive")}`,
+        `${gt("MCP servers")}: ${manifest.mcpServers.length} (${manifest.mcpServers.reduce((acc, s) => acc + s.toolCount, 0)} ${gt("tools")})`,
+        ...manifest.mcpServers.map(
+          (server) =>
+            `• ${server.id} (${server.scope}/${server.channel}): ${server.state}, ${server.toolCount} tools`,
+        ),
+        ...(manifest.degradedItems.length > 0
+          ? ["", ...manifest.degradedItems.map((item) => `⚠ ${item.id}: ${item.reason}`)]
+          : []),
+      ];
+      Dialog.alert(gt("Thread context"), lines.join("\n"));
+    } else {
+      const error = squashAtomCommandFailure(result);
+      Dialog.alert(
+        gt("Could not inspect context"),
+        errorDisplayMessage(error, m) ?? gt("Try again."),
+      );
+    }
+  };
 
   return (
     <View style={{ paddingBottom: insets.bottom + props.bottomInset + 12 }}>
@@ -983,6 +1040,21 @@ function ThreadSettingsOptionsItem(props: {
         className="mx-4 overflow-hidden rounded-2xl bg-grouped-card"
         layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}
       >
+        {showPlanModeToggle ? (
+          <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
+            <SwitchRow
+              label={
+                planReadOnlyEnforcement === "advisory"
+                  ? gt("Plan mode (advisory read-only)")
+                  : gt("Plan mode")
+              }
+              value={session.interactionMode === "plan"}
+              onValueChange={(enabled) =>
+                session.onUpdateInteractionMode?.(enabled ? "plan" : "default")
+              }
+            />
+          </Animated.View>
+        ) : null}
         {session.displayedDescriptors.map((descriptor) => {
           if (descriptor.type === "select") {
             return (
@@ -1028,7 +1100,7 @@ function ThreadSettingsOptionsItem(props: {
         })}
         <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
           <DisclosureRow
-            isLast
+            isLast={session.threadId === null}
             label={gt("Runtime", { $context: "agent permission mode setting" })}
             value={(() => {
               const label = session.runtimeModeChoices.find(
@@ -1039,6 +1111,16 @@ function ThreadSettingsOptionsItem(props: {
             onPress={() => props.onOpenSubmenu({ kind: "runtime" })}
           />
         </Animated.View>
+        {session.threadId !== null ? (
+          <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
+            <DisclosureRow
+              isLast
+              label={inspectingContext ? gt("Inspecting context...") : gt("Inspect thread context")}
+              value={undefined}
+              onPress={() => void handleInspectContext()}
+            />
+          </Animated.View>
+        ) : null}
       </Animated.View>
 
       <Text className="px-5 pb-2 pt-7 text-sm font-t3-medium text-foreground-muted">
@@ -1569,6 +1651,11 @@ export function ExistingThreadSettingsRouteScreen({
       }}
       runtimeMode={draftSettings.runtimeMode ?? selectedThread.runtimeMode}
       onUpdateRuntimeMode={(runtimeMode) => updateComposerDraftSettings(threadKey, { runtimeMode })}
+      interactionMode={draftSettings.interactionMode ?? selectedThread.interactionMode}
+      onUpdateInteractionMode={(interactionMode) =>
+        updateComposerDraftSettings(threadKey, { interactionMode })
+      }
+      threadId={selectedThread.id}
       onClose={() => navigation.goBack()}
     />
   );
@@ -1599,6 +1686,8 @@ export function NewTaskThreadSettingsRouteScreen() {
       onUpdateOptionSelections={flow.setSelectedModelOptions}
       runtimeMode={flow.runtimeMode}
       onUpdateRuntimeMode={flow.setRuntimeMode}
+      interactionMode={flow.interactionMode}
+      onUpdateInteractionMode={flow.setInteractionMode}
       onClose={() => navigation.goBack()}
     />
   );

@@ -33,6 +33,7 @@ import type {
   PreviewAnnotationPayload,
   ThreadContextRecord,
   EnvironmentContextRecord,
+  ProviderInteractionMode,
   ResolvedKeybindingsConfig,
   RuntimeMode,
   RuntimeRequestId,
@@ -423,6 +424,7 @@ export interface ChatComposerProps {
 
   runtimeMode: RuntimeMode;
   defaultRuntimeMode?: RuntimeMode;
+  interactionMode: ProviderInteractionMode;
 
   lockedProvider: ProviderDriverKind | null;
   providerStatuses: ServerProvider[];
@@ -508,6 +510,7 @@ export interface ChatComposerProps {
   onOpenProviderSetup: (instanceId: ProviderInstanceId) => void;
   getModelDisabledReason: (instanceId: ProviderInstanceId, model: string) => string | null;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
+  handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
 
   focusComposer: () => void;
   scheduleComposerFocus: () => void;
@@ -558,6 +561,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activePendingIsResponding: incomingPendingIsResponding,
     respondingRequestIds,
     runtimeMode,
+    interactionMode,
     lockedProvider,
     providerStatuses,
     providerCatalogKnown,
@@ -600,6 +604,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onOpenProviderSetup,
     getModelDisabledReason,
     handleRuntimeModeChange,
+    handleInteractionModeChange,
     focusComposer,
     scheduleComposerFocus,
     setThreadError,
@@ -2680,9 +2685,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     : composerControlsCollapsed
       ? 0
       : expandedControlsIconOnlyBlockCount;
+  const selectedProviderSnapshot =
+    providerStatuses.find((provider) => provider.instanceId === selectedInstanceId) ?? null;
+  const showPlanModeToggle =
+    selectedProviderSnapshot !== null &&
+    (selectedProviderSnapshot.showInteractionModeToggle !== false ||
+      (selectedProviderSnapshot.harnessPlanMode !== undefined &&
+        selectedProviderSnapshot.harnessPlanMode !== "none"));
+  const planReadOnlyEnforcement = selectedProviderSnapshot?.planReadOnlyEnforcement ?? "none";
+
   const composerControls = (
     <ComposerControlsBar
       environmentId={environmentId}
+      activeThreadId={activeThreadId}
       workspaceCwd={gitCwd}
       routeKind={routeKind}
       routeThreadRef={routeThreadRef}
@@ -2699,6 +2714,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       defaultRuntimeMode={props.defaultRuntimeMode}
       compatibleRuntimeModeOptions={compatibleRuntimeModeOptions}
       handleRuntimeModeChange={handleRuntimeModeChange}
+      interactionMode={interactionMode}
+      showPlanModeToggle={showPlanModeToggle}
+      planReadOnlyEnforcement={planReadOnlyEnforcement}
+      handleInteractionModeChange={handleInteractionModeChange}
       composerControlsCollapsed={composerControlsCollapsed}
       effortDisplay={settings.effortDisplay}
       permissionsShownInStrip={props.permissionsShownInStrip}

@@ -99,6 +99,8 @@ function claudeProviderModels(
 const CLAUDE_PRESENTATION = {
   displayName: "Claude",
   showInteractionModeToggle: true,
+  harnessPlanMode: "native",
+  planReadOnlyEnforcement: "native",
   reportsContextWindow: true,
 } as const;
 function toTitleCaseWords(value: string): string {

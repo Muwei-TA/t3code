@@ -43,6 +43,7 @@ import {
   type ProviderInstanceId,
   type RunId,
   type RuntimeRequestId,
+  isReservedHarnessMcpServerId,
 } from "@t3tools/contracts";
 import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -68,7 +69,10 @@ import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 import { readableProviderErrorMessage } from "../providerErrorMessage.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
-import { t3OrchestrationSystemPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
+import {
+  T3_CODE_HARNESS_PROPOSE_PLAN_NOTE,
+  t3OrchestrationSystemPrompt,
+} from "@t3tools/provider-core/server/orchestrationInstructions";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import { HTML_RENDER_TOOL_NAME } from "@t3tools/shared/htmlRender";
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
@@ -165,7 +169,7 @@ const OpenCode2ProviderCapabilities = {
     emitsToolStarted: true,
     emitsToolCompleted: true,
     emitsToolOutput: true,
-    supportsMcpTools: false,
+    supportsMcpTools: true,
     supportsDynamicToolCallbacks: false,
     supportsBackgroundWait: true,
   },
@@ -217,6 +221,16 @@ const OpenCode2ProviderCapabilities = {
     nativeRequestIds: "strong",
   },
   runtimePolicy: { enforcement: "native" },
+  harness: {
+    mcpPassthrough: "http",
+    mcpListChanged: false,
+    skillMount: "none",
+    systemContextMutableMidSession: true,
+    maxSystemContextBytes: null,
+    nativeToolHooks: false,
+    nativeAllowAlways: false,
+    planReadOnlyEnforcement: "native",
+  },
 } satisfies OrchestrationV2ProviderCapabilities;
 
 type EventOf<T extends OpenCodeEvent["type"]> = Extract<OpenCodeEvent, { readonly type: T }>;
@@ -388,7 +402,18 @@ interface ThreadState {
   /** Prompts other clients queued while no T3 turn ran, shown once delivered; `leads` the next wake if no report preceded it. */
   readonly externalPrompts: Map<string, { readonly text: string; leads: boolean }>;
   mcp:
-    | { readonly name: string; readonly directory: string; readonly credential: string }
+    | {
+        readonly name: string;
+        readonly harnessName: string | undefined;
+        readonly harnessEndpoint: string | undefined;
+        readonly nativeServerNames: ReadonlyArray<string>;
+        /** Revoked/inactive registrations whose `mcp.remove` failed and must stay denied until removed. */
+        readonly deniedServerNames: ReadonlyArray<string>;
+        /** Every `(directory, name)` added for this thread that has not yet been confirmed removed. */
+        readonly trackedServers: Map<string, { readonly name: string; readonly directory: string }>;
+        readonly directory: string;
+        readonly credential: string;
+      }
     | undefined;
   instructions: string | undefined;
 }
@@ -436,13 +461,60 @@ export const t3McpServerName = Effect.fn("t3McpServerName")(function* (threadId:
   return `t3-code-${Hex.encode(digest).slice(0, 16)}`;
 });
 
-// Last match wins: deny all threads' T3 servers, then allow only this thread's.
-const mcpRules = (mcpServerName: string | null): ReadonlyArray<Rule> =>
+/**
+ * Fixed-length 27-char thread namespace for T3 Harness MCP registrations so no two threads
+ * can ever collide after sanitization or prefix-overlap under OpenCode wildcard rules.
+ */
+export const t3HarnessMcpServerName = Effect.fn("t3HarnessMcpServerName")(function* (
+  threadId: string,
+) {
+  const crypto = yield* Digest.Digest;
+  const digest = yield* crypto
+    .digest(Digest.sha256, new TextEncoder().encode(threadId))
+    .pipe(Effect.orDie);
+  return `t3-harness-${Hex.encode(digest).slice(0, 16)}`;
+});
+
+/**
+ * Thread-scoped native passthrough registration name under the thread's fixed-length harness
+ * namespace (`t3-harness-<16hex>-<8hex>`, 36 chars <= 64) so sibling threads sharing a directory
+ * never leak or disturb each other's native MCP registrations.
+ */
+export const t3NativeMcpServerName = Effect.fn("t3NativeMcpServerName")(function* (
+  harnessServerName: string,
+  nativeServerId: string,
+) {
+  const crypto = yield* Digest.Digest;
+  const digest = yield* crypto
+    .digest(Digest.sha256, new TextEncoder().encode(nativeServerId))
+    .pipe(Effect.orDie);
+  return `${harnessServerName}-${Hex.encode(digest).slice(0, 8)}`;
+});
+
+// Last match wins: deny all threads' T3 built-in and Harness/native servers, allow only this thread's,
+// and explicitly re-deny any revoked registration whose `mcp.remove` transiently failed.
+const mcpRules = (
+  mcpServerName: string | null,
+  harnessServerName: string | null,
+  deniedServerNames: ReadonlyArray<string> = [],
+): ReadonlyArray<Rule> =>
   mcpServerName === null
     ? []
     : [
         { action: "t3-code-*", resource: "*", effect: "deny" },
+        { action: "t3-harness-*", resource: "*", effect: "deny" },
         { action: `${mcpServerName}_*`, resource: "*", effect: "allow" },
+        ...(harnessServerName !== null
+          ? [
+              { action: `${harnessServerName}_*`, resource: "*", effect: "allow" as const },
+              { action: `${harnessServerName}-*`, resource: "*", effect: "allow" as const },
+            ]
+          : []),
+        ...deniedServerNames.map((deniedName): Rule => ({
+          action: `${deniedName}_*`,
+          resource: "*",
+          effect: "deny",
+        })),
       ];
 
 const sessionRules = (
@@ -450,6 +522,8 @@ const sessionRules = (
   paths: ReadonlyArray<Rule>,
   grants: ReadonlyArray<Rule>,
   mcpServerName: string | null,
+  harnessServerName: string | null,
+  deniedServerNames: ReadonlyArray<string> = [],
 ): ReadonlyArray<Rule> => [
   ...(policy.runtimeMode === "full-access"
     ? [rule("*", "allow")]
@@ -471,7 +545,7 @@ const sessionRules = (
   // Plan edits are re-allowed only for plan paths; free-tier sessions refuse denied shell/read.
   ...(policy.interactionMode === "plan" ? [rule("edit", "deny")] : []),
   ...paths,
-  ...mcpRules(mcpServerName),
+  ...mcpRules(mcpServerName, harnessServerName, deniedServerNames),
 ];
 
 const sameRules = (left: ReadonlyArray<Rule> | undefined, right: ReadonlyArray<Rule>) =>
@@ -836,6 +910,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
   let nativeGoalSupport: boolean | undefined;
   const mcpServerNameFor = (threadId: string) =>
     t3McpServerName(threadId).pipe(Effect.provideService(Digest.Digest, crypto));
+  const harnessMcpServerNameFor = (threadId: string) =>
+    t3HarnessMcpServerName(threadId).pipe(Effect.provideService(Digest.Digest, crypto));
+  const nativeMcpServerNameFor = (harnessName: string, nativeServerId: string) =>
+    t3NativeMcpServerName(harnessName, nativeServerId).pipe(
+      Effect.provideService(Digest.Digest, crypto),
+    );
 
   const borrow = Effect.gen(function* () {
     const lent = yield* Deferred.make<
@@ -899,7 +979,31 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const threads = new Map<string, ThreadState>();
     const childOwners = new Map<string, ThreadState>();
     const announced = new Map<string, EventOf<"session.created">["data"]>();
+    const unattachedRules = new Map<string, ReadonlyArray<Rule>>();
+    const unrevokedMcpChildren = new Map<string, Set<string>>();
     const strays = new Map<string, ThreadState>();
+    // Preserves ownership after `stopStrays` deletes a stopped parent so late descendants still resolve their root.
+    const strayLineage = new Map<string, ThreadState>();
+
+    const markUnrevokedChild = (rootSessionId: string, childId: string) => {
+      let set = unrevokedMcpChildren.get(rootSessionId);
+      if (set === undefined) {
+        set = new Set();
+        unrevokedMcpChildren.set(rootSessionId, set);
+      }
+      set.add(childId);
+    };
+
+    const clearUnrevokedChild = (rootSessionId: string, childId: string) => {
+      const set = unrevokedMcpChildren.get(rootSessionId);
+      if (set === undefined) return;
+      set.delete(childId);
+      if (set.size === 0) unrevokedMcpChildren.delete(rootSessionId);
+    };
+
+    const unrevokedChildrenOf = (rootSessionId: string): ReadonlyArray<string> => [
+      ...(unrevokedMcpChildren.get(rootSessionId) ?? []),
+    ];
     const busy = new Set<string>();
     const pending = new Map<RuntimeRequestId, PendingRequest>();
     const lock = yield* Semaphore.make(1);
@@ -2175,16 +2279,23 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       child.providerThread = withReportedModel(providerThread, child.model);
       child.directory = call.state.directory;
       child.agent = info?.agent ?? call.agent ?? child.agent;
-      child.rules = info?.permissions ?? child.rules;
+      child.rules = unattachedRules.get(childId) ?? info?.permissions ?? child.rules;
+      unattachedRules.delete(childId);
       threads.set(childId, child);
       childOwners.set(childId, rootOf(call.state));
       call.child = child;
       yield* emit({ type: "app_thread.created", driver, appThread });
       yield* emitProviderThread(child);
       yield* emitSubagent(call);
-      // Reused child sessions may retain old mode rules; refresh policy as soon as the call identifies them.
-      if (info === undefined) {
-        yield* writeRules(child, rootOf(call.state).policy).pipe(
+      // Refresh reused children and fail closed if a new child cannot receive active MCP deny rules.
+      const root = rootOf(call.state);
+      if ((root.mcp?.deniedServerNames.length ?? 0) > 0) {
+        const enforced = yield* enforceChildDeniedRules(child, root.policy);
+        if (!enforced) {
+          yield* blockUnrevokedChildExecution(root, childId, call.state);
+        }
+      } else if (info === undefined) {
+        yield* writeRules(child, root.policy).pipe(
           Effect.timeout(REQUEST_REPLY_TIMEOUT),
           Effect.ignore({ log: true }),
         );
@@ -3384,9 +3495,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         }
       }
       if (event.type === "session.created" && event.data.parentID !== undefined) {
-        const strayCaller = strays.get(event.data.parentID);
+        const strayCaller =
+          strays.get(event.data.parentID) ?? strayLineage.get(event.data.parentID);
         if (strayCaller !== undefined) {
           strays.set(event.data.sessionID, strayCaller);
+          strayLineage.set(event.data.sessionID, strayCaller);
+          yield* enforceAnnouncedChild(rootOf(strayCaller), strayCaller, event.data);
           return;
         }
         const owner = ownerOf(event.data.parentID);
@@ -3394,6 +3508,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           childOwners.set(event.data.sessionID, owner);
           announced.set(event.data.sessionID, event.data);
           holderOf(event.data.parentID)?.wakes.at(-1)?.children.add(event.data.sessionID);
+          yield* enforceAnnouncedChild(owner, owner, event.data);
         }
         return;
       }
@@ -4091,6 +4206,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       thread: Pick<ThreadState, "directory" | "agent" | "grants">,
       policy: RulesPolicy,
       appThreadId: string | null,
+      deniedServerNames: ReadonlyArray<string> = [],
     ) {
       const plan = policy.interactionMode === "plan";
       const paths =
@@ -4102,11 +4218,19 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         paths,
         policy.runtimeMode === "full-access" ? [] : thread.grants,
         appThreadId === null ? null : yield* mcpServerNameFor(appThreadId),
+        appThreadId === null ? null : yield* harnessMcpServerNameFor(appThreadId),
+        deniedServerNames,
       );
     });
 
     const writeRules = Effect.fnUntraced(function* (state: ThreadState, policy: RulesPolicy) {
-      const rules = yield* rulesFor(state, policy, rootOf(state).providerThread.appThreadId);
+      const root = rootOf(state);
+      const rules = yield* rulesFor(
+        state,
+        policy,
+        root.providerThread.appThreadId,
+        root.mcp?.deniedServerNames ?? [],
+      );
       if (!sameRules(state.rules, rules)) {
         yield* client.session.update({
           sessionID: Session.ID.make(state.sessionId),
@@ -4115,6 +4239,231 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         state.rules = rules;
       }
       state.policy = policy;
+    });
+
+    const enforceChildDeniedRules = Effect.fnUntraced(function* (
+      child: ThreadState,
+      policy: RulesPolicy,
+    ) {
+      const rootId = rootOf(child).sessionId;
+      // Block prompts/steers immediately while revocation RPCs are still in flight.
+      markUnrevokedChild(rootId, child.sessionId);
+      const updated = yield* writeRules(child, policy).pipe(
+        Effect.timeout(REQUEST_REPLY_TIMEOUT),
+        Effect.as(true),
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `Could not apply MCP deny rules to OpenCode child session ${child.sessionId}; interrupting child.`,
+            cause,
+          ).pipe(Effect.as(false)),
+        ),
+      );
+      if (updated) {
+        clearUnrevokedChild(rootId, child.sessionId);
+        return true;
+      }
+      const interrupted = yield* client.session
+        .interrupt({ sessionID: Session.ID.make(child.sessionId) })
+        .pipe(
+          Effect.catchTags({ SessionNotFoundError: () => Effect.void }),
+          Effect.timeout(INTERRUPT_TIMEOUT),
+          Effect.as(true),
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `Could not interrupt OpenCode child session ${child.sessionId} after MCP deny update failed.`,
+              cause,
+            ).pipe(Effect.as(false)),
+          ),
+        );
+      if (interrupted) {
+        clearUnrevokedChild(rootId, child.sessionId);
+      }
+      return interrupted;
+    });
+
+    const enforceUnattachedChildDeniedRules = Effect.fnUntraced(function* (
+      rootState: ThreadState,
+      childId: string,
+      permissions: ReadonlyArray<Rule>,
+    ) {
+      markUnrevokedChild(rootState.sessionId, childId);
+      const updated = yield* client.session
+        .update({ sessionID: Session.ID.make(childId), permissions })
+        .pipe(
+          Effect.timeout(REQUEST_REPLY_TIMEOUT),
+          Effect.as(true),
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `Could not apply MCP deny rules to OpenCode announced child session ${childId}; interrupting child.`,
+              cause,
+            ).pipe(Effect.as(false)),
+          ),
+        );
+      if (updated) {
+        unattachedRules.set(childId, permissions);
+        clearUnrevokedChild(rootState.sessionId, childId);
+        return true;
+      }
+      const interrupted = yield* client.session
+        .interrupt({ sessionID: Session.ID.make(childId) })
+        .pipe(
+          Effect.catchTags({ SessionNotFoundError: () => Effect.void }),
+          Effect.timeout(INTERRUPT_TIMEOUT),
+          Effect.as(true),
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `Could not interrupt OpenCode announced child session ${childId} after MCP deny update failed.`,
+              cause,
+            ).pipe(Effect.as(false)),
+          ),
+        );
+      if (interrupted) {
+        clearUnrevokedChild(rootState.sessionId, childId);
+      }
+      return interrupted;
+    });
+
+    const blockUnrevokedChildExecution = Effect.fnUntraced(function* (
+      rootState: ThreadState,
+      childId: string,
+      caller: ThreadState,
+    ) {
+      markUnrevokedChild(rootState.sessionId, childId);
+      strays.set(childId, caller);
+      strayLineage.set(childId, caller);
+      yield* client.session
+        .interrupt({ sessionID: Session.ID.make(rootState.sessionId) })
+        .pipe(
+          Effect.catchTags({ SessionNotFoundError: () => Effect.void }),
+          Effect.timeout(INTERRUPT_TIMEOUT),
+          Effect.ignore({ log: true }),
+        );
+      yield* Effect.forkIn(stopStrays(rootState), sessionScope);
+      if (rootState.active !== undefined) {
+        yield* finishTurn(rootState, {
+          status: "failed",
+          failure: makeProviderFailure({
+            message: `Could not revoke OpenCode MCP access on child session ${childId}.`,
+            class: "provider_error",
+            retryable: false,
+          }),
+        });
+      }
+    });
+
+    const enforceAnnouncedChild = Effect.fnUntraced(function* (
+      targetRoot: ThreadState,
+      caller: ThreadState,
+      created: EventOf<"session.created">["data"],
+    ) {
+      if ((targetRoot.mcp?.deniedServerNames.length ?? 0) === 0) return;
+      // Register immediately before async `rulesFor` (e.g. `agent.list`) so steers/prompts cannot slip through.
+      markUnrevokedChild(targetRoot.sessionId, created.sessionID);
+      const childRules = yield* rulesFor(
+        {
+          directory: targetRoot.directory,
+          agent: created.agent ?? targetRoot.agent,
+          grants: [],
+        },
+        targetRoot.policy,
+        targetRoot.providerThread.appThreadId,
+        targetRoot.mcp?.deniedServerNames ?? [],
+      );
+      if (sameRules(created.permissions, childRules)) {
+        clearUnrevokedChild(targetRoot.sessionId, created.sessionID);
+        return;
+      }
+      const enforced = yield* enforceUnattachedChildDeniedRules(
+        targetRoot,
+        created.sessionID,
+        childRules,
+      );
+      if (!enforced) {
+        yield* blockUnrevokedChildExecution(targetRoot, created.sessionID, caller);
+      }
+    });
+
+    const assertNoUnrevokedChildren = (rootState: ThreadState) => {
+      const blocked = unrevokedChildrenOf(rootState.sessionId);
+      return blocked.length === 0
+        ? Effect.void
+        : Effect.fail(
+            new ProviderAdapter.ProviderAdapterProtocolError({
+              driver,
+              detail: `Could not revoke OpenCode MCP access on active child session(s): ${blocked.join(", ")}.`,
+            }),
+          );
+    };
+
+    const syncMcpDenyRules = Effect.fnUntraced(function* (
+      rootState: ThreadState,
+      policy: RulesPolicy,
+    ) {
+      const rootExit = yield* Effect.exit(
+        writeRules(rootState, policy).pipe(Effect.timeout(REQUEST_REPLY_TIMEOUT)),
+      );
+      const enforcingDeny = (rootState.mcp?.deniedServerNames.length ?? 0) > 0;
+      const failedChildren: Array<string> = [];
+      const scannedIds = new Set<string>([rootState.sessionId]);
+
+      for (const child of sessionsOf(rootState)) {
+        if (child === rootState) continue;
+        scannedIds.add(child.sessionId);
+        if (enforcingDeny) {
+          const enforced = yield* enforceChildDeniedRules(child, policy);
+          if (!enforced) failedChildren.push(child.sessionId);
+        } else {
+          yield* writeRules(child, policy).pipe(
+            Effect.timeout(REQUEST_REPLY_TIMEOUT),
+            Effect.ignore({ log: true }),
+          );
+        }
+      }
+
+      if (enforcingDeny) {
+        const unattachedIds = new Set<string>();
+        for (const [childId, owner] of childOwners) {
+          if (owner === rootState && !scannedIds.has(childId)) {
+            unattachedIds.add(childId);
+          }
+        }
+        for (const [childId, caller] of strays) {
+          if (rootOf(caller) === rootState && !scannedIds.has(childId)) {
+            unattachedIds.add(childId);
+          }
+        }
+        for (const childId of unrevokedChildrenOf(rootState.sessionId)) {
+          if (!scannedIds.has(childId)) {
+            unattachedIds.add(childId);
+          }
+        }
+        for (const childId of unattachedIds) {
+          const childRules = yield* rulesFor(
+            {
+              directory: rootState.directory,
+              agent: announced.get(childId)?.agent ?? rootState.agent,
+              grants: [],
+            },
+            policy,
+            rootState.providerThread.appThreadId,
+            rootState.mcp?.deniedServerNames ?? [],
+          );
+          const enforced = yield* enforceUnattachedChildDeniedRules(rootState, childId, childRules);
+          if (!enforced) failedChildren.push(childId);
+        }
+      } else {
+        unrevokedMcpChildren.delete(rootState.sessionId);
+      }
+
+      if (failedChildren.length > 0) {
+        return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+          driver,
+          detail: `Could not revoke OpenCode MCP access on active child session(s): ${failedChildren.join(", ")}.`,
+        });
+      }
+      if (Exit.isFailure(rootExit)) {
+        return yield* Effect.failCause(rootExit.cause);
+      }
     });
 
     const writeTitle = Effect.fnUntraced(function* (state: ThreadState, title: string) {
@@ -4352,46 +4701,234 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       return files;
     });
 
+    const trackedKey = (directory: string, serverName: string) => `${directory}\u0000${serverName}`;
+    // Retains registrations whose mcp.remove failed during unloadThread so finalizer still retries them.
+    const orphanedMcpRemovals = new Map<
+      string,
+      { readonly name: string; readonly directory: string }
+    >();
+
     const removeMcp = (mcp: { readonly name: string; readonly directory: string }) =>
       Effect.suspend(() =>
         client.mcp.remove({ server: mcp.name, location: { directory: mcp.directory } }),
-      ).pipe(Effect.timeout("5 seconds"), Effect.ignore({ log: true }));
+      ).pipe(
+        Effect.timeout("5 seconds"),
+        Effect.as(true),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Could not remove OpenCode MCP registration.", cause).pipe(
+            Effect.as(false),
+          ),
+        ),
+      );
 
-    yield* Effect.addFinalizer(() =>
-      Effect.forEach(
-        [...threads.values()].flatMap((state) => (state.mcp === undefined ? [] : [state.mcp])),
-        removeMcp,
-        { concurrency: 8, discard: true },
-      ),
-    );
+    const removeThreadMcpRegistrations = Effect.fnUntraced(function* (
+      mcp: NonNullable<ThreadState["mcp"]>,
+    ) {
+      const remaining = new Map<string, { readonly name: string; readonly directory: string }>();
+      for (const [key, entry] of mcp.trackedServers) {
+        const removed = yield* removeMcp(entry);
+        if (!removed) {
+          remaining.set(key, entry);
+        }
+      }
+      return remaining;
+    });
+
+    yield* Effect.addFinalizer(() => {
+      const toRemove = new Map<string, { readonly name: string; readonly directory: string }>(
+        orphanedMcpRemovals,
+      );
+      for (const state of threads.values()) {
+        const mcp = state.mcp;
+        if (mcp === undefined) continue;
+        for (const [key, entry] of mcp.trackedServers) {
+          toRemove.set(key, entry);
+        }
+      }
+      return Effect.forEach([...toRemove.values()], (entry) => removeMcp(entry), {
+        concurrency: 8,
+        discard: true,
+      });
+    });
 
     const prepareTurn = Effect.fnUntraced(function* (
       sessionId: string,
       state: ThreadState,
       turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
+      revokeOnly = false,
     ) {
       const mcpSession = yield* mcpSessions.read(turnInput.threadId);
       const directory = turnInput.runtimePolicy.cwd ?? host.paths.cwd;
       const name = yield* mcpServerNameFor(turnInput.threadId);
+      const harnessName = yield* harnessMcpServerNameFor(turnInput.threadId);
       // An external server may not reach T3's MCP endpoint, as with 1.x.
       const wanted =
         mcpSession === undefined || connection.external
           ? undefined
-          : { name, directory, credential: mcpSession.authorizationHeader };
+          : {
+              name,
+              harnessName: mcpSession.harnessEndpoint !== undefined ? harnessName : undefined,
+              harnessEndpoint: mcpSession.harnessEndpoint,
+              directory,
+              credential: mcpSession.authorizationHeader,
+            };
+      const previousDeniedNames = state.mcp?.deniedServerNames ?? [];
+      const previousDeniedNameSet = new Set(previousDeniedNames);
+      const carriedTracked = new Map<
+        string,
+        { readonly name: string; readonly directory: string }
+      >();
+      // Keys whose previous registration is stale/orphaned and must stay denied until removed or re-added.
+      const staleUnremovedKeys = new Set<string>();
+      // Reclaim any orphaned removals for this thread (e.g. reload after a failed unload cleanup)
+      // so the next turn retries mcp.remove and denies their tools if removal still fails.
+      for (const [key, entry] of orphanedMcpRemovals) {
+        if (
+          entry.name === name ||
+          entry.name === harnessName ||
+          entry.name.startsWith(`${harnessName}-`)
+        ) {
+          carriedTracked.set(key, entry);
+          staleUnremovedKeys.add(key);
+        }
+      }
       if (
+        wanted !== undefined &&
         state.mcp !== undefined &&
-        (wanted === undefined ||
-          state.mcp.directory !== wanted.directory ||
-          state.mcp.credential !== wanted.credential)
+        (state.mcp.directory !== wanted.directory || state.mcp.credential !== wanted.credential)
       ) {
-        yield* removeMcp(state.mcp);
-        state.mcp = undefined;
+        const previous = state.mcp;
+        const unremoved = yield* removeThreadMcpRegistrations(previous);
+        for (const [key, entry] of unremoved) {
+          carriedTracked.set(key, entry);
+          staleUnremovedKeys.add(key);
+        }
+        state.mcp =
+          unremoved.size > 0
+            ? {
+                ...previous,
+                deniedServerNames: [...new Set([...unremoved.values()].map((e) => e.name))].sort(),
+                trackedServers: unremoved,
+              }
+            : undefined;
       }
       // Idle Location eviction drops runtime MCP servers without clearing T3's cache.
       // Re-adding an unchanged config keeps its existing connection.
       let mcpAvailable = false;
+      let registeredHarnessName: string | undefined;
+      if (wanted === undefined) {
+        if (state.mcp !== undefined) {
+          for (const [key, entry] of state.mcp.trackedServers) {
+            carriedTracked.set(key, entry);
+          }
+        }
+        const stillUnremoved = new Map<
+          string,
+          { readonly name: string; readonly directory: string }
+        >();
+        for (const [key, entry] of carriedTracked) {
+          const removed = yield* removeMcp(entry);
+          if (removed) {
+            orphanedMcpRemovals.delete(key);
+          } else {
+            stillUnremoved.set(key, entry);
+          }
+        }
+        const deniedServerNames = [
+          ...new Set([...stillUnremoved.values()].map((entry) => entry.name)),
+        ].sort();
+        if (stillUnremoved.size > 0) {
+          state.mcp = {
+            name,
+            harnessName: undefined,
+            harnessEndpoint: undefined,
+            nativeServerNames: [],
+            deniedServerNames,
+            trackedServers: stillUnremoved,
+            directory,
+            credential: "",
+          };
+        } else {
+          state.mcp = undefined;
+        }
+        if (deniedServerNames.length > 0 || previousDeniedNames.length > 0) {
+          yield* syncMcpDenyRules(state, turnInput.runtimePolicy);
+        }
+        if (revokeOnly) return;
+      }
       if (wanted !== undefined) {
-        const fresh = state.mcp === undefined;
+        const previousMcp = state.mcp;
+        const fresh = previousMcp === undefined;
+        const trackedServers = new Map<
+          string,
+          { readonly name: string; readonly directory: string }
+        >(carriedTracked);
+        if (previousMcp !== undefined) {
+          for (const [key, entry] of previousMcp.trackedServers) {
+            trackedServers.set(key, entry);
+          }
+        }
+        if (revokeOnly) {
+          const activeKeys = new Set<string>([trackedKey(directory, name)]);
+          if (wanted.harnessEndpoint !== undefined && wanted.harnessName !== undefined) {
+            activeKeys.add(trackedKey(directory, wanted.harnessName));
+          }
+          for (const nativeServer of mcpSession?.nativeMcpServers ?? []) {
+            if (
+              nativeServer.type === "stdio" ||
+              nativeServer.id === name ||
+              nativeServer.id === harnessName ||
+              isReservedHarnessMcpServerId(nativeServer.id)
+            ) {
+              continue;
+            }
+            const scopedNativeName = yield* nativeMcpServerNameFor(harnessName, nativeServer.id);
+            activeKeys.add(trackedKey(directory, scopedNativeName));
+          }
+          const failedRemovalNames = new Set<string>();
+          for (const [key, entry] of trackedServers) {
+            if (activeKeys.has(key)) {
+              // Because revokeOnly skips mcp.add, any stale/unremoved or previously denied entry
+              // sharing an active key MUST stay denied until removed or freshly re-added.
+              if (staleUnremovedKeys.has(key) || previousDeniedNameSet.has(entry.name)) {
+                failedRemovalNames.add(entry.name);
+              }
+              continue;
+            }
+            const removed = yield* removeMcp(entry);
+            if (removed) {
+              trackedServers.delete(key);
+              orphanedMcpRemovals.delete(key);
+            } else {
+              failedRemovalNames.add(entry.name);
+            }
+          }
+          const deniedServerNames = [...failedRemovalNames].sort();
+          if (trackedServers.size > 0) {
+            state.mcp = {
+              name,
+              harnessName:
+                previousMcp?.harnessName !== undefined &&
+                trackedServers.has(trackedKey(previousMcp.directory, previousMcp.harnessName))
+                  ? previousMcp.harnessName
+                  : undefined,
+              harnessEndpoint: previousMcp?.harnessEndpoint,
+              nativeServerNames: previousMcp?.nativeServerNames ?? [],
+              deniedServerNames,
+              trackedServers,
+              directory: previousMcp?.directory ?? directory,
+              credential: previousMcp?.credential ?? "",
+            };
+          } else {
+            state.mcp = undefined;
+          }
+          if (deniedServerNames.length > 0 || previousDeniedNames.length > 0) {
+            yield* syncMcpDenyRules(state, turnInput.runtimePolicy);
+          }
+          return;
+        }
+
+        const replacedKeys = new Set<string>();
         mcpAvailable = yield* client.mcp
           .add({
             server: name,
@@ -4412,7 +4949,146 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               ),
             ),
           );
-        if (mcpAvailable) state.mcp = wanted;
+        if (mcpAvailable) {
+          const key = trackedKey(directory, name);
+          trackedServers.set(key, { name, directory });
+          replacedKeys.add(key);
+        }
+
+        if (wanted.harnessEndpoint !== undefined && wanted.harnessName !== undefined) {
+          const harnessAdded = yield* client.mcp
+            .add({
+              server: wanted.harnessName,
+              location: { directory },
+              config: new Mcp.RemoteConfig({
+                type: "remote",
+                url: wanted.harnessEndpoint,
+                headers: { Authorization: wanted.credential },
+                oauth: false,
+              }),
+            })
+            .pipe(
+              Effect.timeout(INVENTORY_TIMEOUT),
+              Effect.as(true),
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Could not add T3 Harness MCP server to OpenCode.", cause).pipe(
+                  Effect.as(false),
+                ),
+              ),
+            );
+          if (harnessAdded) {
+            registeredHarnessName = wanted.harnessName;
+            const key = trackedKey(directory, wanted.harnessName);
+            trackedServers.set(key, {
+              name: wanted.harnessName,
+              directory,
+            });
+            replacedKeys.add(key);
+          }
+        } else if (previousMcp?.harnessName !== undefined) {
+          const removed = yield* removeMcp({
+            name: previousMcp.harnessName,
+            directory: previousMcp.directory,
+          });
+          if (removed) {
+            trackedServers.delete(trackedKey(previousMcp.directory, previousMcp.harnessName));
+          }
+        }
+
+        const nextNativeNames: Array<string> = [];
+        for (const nativeServer of mcpSession?.nativeMcpServers ?? []) {
+          if (
+            nativeServer.type === "stdio" ||
+            nativeServer.id === name ||
+            nativeServer.id === harnessName ||
+            isReservedHarnessMcpServerId(nativeServer.id)
+          ) {
+            continue;
+          }
+          const scopedNativeName = yield* nativeMcpServerNameFor(harnessName, nativeServer.id);
+          const added = yield* client.mcp
+            .add({
+              server: scopedNativeName,
+              location: { directory },
+              config: new Mcp.RemoteConfig({
+                type: "remote",
+                url: nativeServer.url,
+                headers: nativeServer.headers ? { ...nativeServer.headers } : {},
+                oauth: false,
+              }),
+            })
+            .pipe(
+              Effect.timeout(INVENTORY_TIMEOUT),
+              Effect.as(true),
+              Effect.catchCause((cause) =>
+                Effect.logWarning(
+                  `Could not add native MCP server "${nativeServer.id}" to OpenCode.`,
+                  cause,
+                ).pipe(Effect.as(false)),
+              ),
+            );
+          if (added) {
+            nextNativeNames.push(scopedNativeName);
+            const key = trackedKey(directory, scopedNativeName);
+            trackedServers.set(key, {
+              name: scopedNativeName,
+              directory,
+            });
+            replacedKeys.add(key);
+          }
+        }
+
+        const activeKeys = new Set<string>();
+        activeKeys.add(trackedKey(directory, name));
+        if (wanted.harnessEndpoint !== undefined && wanted.harnessName !== undefined) {
+          activeKeys.add(trackedKey(directory, wanted.harnessName));
+        }
+        for (const nativeName of nextNativeNames) {
+          activeKeys.add(trackedKey(directory, nativeName));
+        }
+        // Retry removal for every tracked registration no longer active on this turn (including
+        // prior turns' failed removals) and drop entries only once mcp.remove actually succeeds.
+        const failedRemovalNames = new Set<string>();
+        for (const [key, entry] of trackedServers) {
+          if (activeKeys.has(key)) {
+            if (staleUnremovedKeys.has(key) && !replacedKeys.has(key)) {
+              failedRemovalNames.add(entry.name);
+            }
+            continue;
+          }
+          const removed = yield* removeMcp(entry);
+          if (removed) {
+            trackedServers.delete(key);
+            orphanedMcpRemovals.delete(key);
+          } else {
+            failedRemovalNames.add(entry.name);
+          }
+        }
+        const deniedServerNames = [...failedRemovalNames].sort();
+
+        if (trackedServers.size > 0) {
+          state.mcp = {
+            name,
+            harnessName:
+              registeredHarnessName ??
+              (previousMcp?.harnessName !== undefined &&
+              trackedServers.has(trackedKey(previousMcp.directory, previousMcp.harnessName))
+                ? previousMcp.harnessName
+                : undefined),
+            harnessEndpoint: registeredHarnessName ? wanted.harnessEndpoint : undefined,
+            nativeServerNames: nextNativeNames,
+            deniedServerNames,
+            trackedServers,
+            directory,
+            credential: wanted.credential,
+          };
+        } else {
+          state.mcp = undefined;
+        }
+        // Immediately tighten/restore OpenCode session permissions if any revoked server failed removal.
+        if (deniedServerNames.length > 0 || previousDeniedNames.length > 0) {
+          yield* syncMcpDenyRules(state, turnInput.runtimePolicy);
+        }
         // Before 2.2.6, OpenCode loads a new server's tools 100 ms after it connects, and a prompt sent sooner lacks them.
         if (mcpAvailable && fresh && compareSemverVersions(connection.version, "2.2.6") < 0) {
           yield* Effect.sleep(MCP_TOOL_RELOAD_SETTLE);
@@ -4428,6 +5104,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         t3OrchestrationSystemPrompt(mcpAvailable, mcpSession?.capabilities?.has("device") === true),
         mcpAvailable
           ? "To wait for a background shell you started (tests, a build), call `t3_background_wait` with its shell ID before you end your turn. Do not mark work you leave running, or PRs."
+          : undefined,
+        turnInput.runtimePolicy.interactionMode === "plan" && registeredHarnessName !== undefined
+          ? T3_CODE_HARNESS_PROPOSE_PLAN_NOTE
           : undefined,
       ]
         .filter((part) => part !== undefined && part.length > 0)
@@ -4510,6 +5189,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         announced.delete(childId);
         childOwners.delete(childId);
         strays.set(childId, caller);
+        strayLineage.set(childId, caller);
         retired.add(childId);
         threads.get(info.parentID ?? "")?.stoppedChildren.add(childId);
       };
@@ -4536,7 +5216,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             Effect.asVoid,
             Effect.catchTags({ SessionNotFoundError: () => Effect.void }),
             Effect.timeout(INTERRUPT_TIMEOUT),
-            Effect.tap(() => Effect.sync(() => strays.delete(childId))),
+            Effect.tap(() =>
+              Effect.sync(() => {
+                strays.delete(childId);
+                clearUnrevokedChild(thread.sessionId, childId);
+              }),
+            ),
             Effect.ignore({ log: true }),
           ),
         { discard: true },
@@ -4703,6 +5388,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         return yield* finishControl;
       }
       if (bare && text === "/compact") {
+        yield* assertNoUnrevokedChildren(state);
         if (!sending()) return;
         return yield* client.session.compact({ sessionID, id }).pipe(Effect.asVoid);
       }
@@ -4719,6 +5405,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           const newest = yield* client.message.list({ sessionID, order: "desc", limit: 1 });
           const before = newest.data[0]?.id ?? null;
           yield* markBefore(sessionId, before);
+          yield* assertNoUnrevokedChildren(state);
           if (!sending()) return;
           if (goalCommand?.type === "pause" || goalCommand?.type === "clear") {
             // OpenCode rejects pausing or clearing a missing goal; Codex treats that as a no-op.
@@ -4775,6 +5462,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const skills = mentions.length === 0 ? [] : yield* skillsMentioned(location, mentions);
       const files = yield* promptFiles(turnInput.message.attachments);
       const messageText = turnInput.resume ? "" : yield* promptText(turnInput);
+      yield* assertNoUnrevokedChildren(state);
       if (!sending()) return;
       return yield* client.session
         .prompt({
@@ -5018,8 +5706,24 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
                 });
                 state.agent = agent;
               }
-              // Refresh stale mode rules; running subagent updates are best effort because they outlive this turn.
-              yield* writeRules(state, turnInput.runtimePolicy);
+              // Bound pre-turn mode rule writes so a hung root update still runs MCP child revocation.
+              const preRuleExit = yield* Effect.exit(
+                writeRules(state, turnInput.runtimePolicy).pipe(
+                  Effect.timeout(REQUEST_REPLY_TIMEOUT),
+                ),
+              );
+              if (Exit.isFailure(preRuleExit)) {
+                if (
+                  state.mcp !== undefined ||
+                  orphanedMcpRemovals.size > 0 ||
+                  unrevokedChildrenOf(state.sessionId).length > 0
+                ) {
+                  yield* prepareTurn(sessionId, state, turnInput, true).pipe(
+                    Effect.ignore({ log: true }),
+                  );
+                }
+                return yield* Effect.failCause(preRuleExit.cause);
+              }
               yield* writeTitle(state, turnInput.appThread.title).pipe(
                 Effect.timeout(REQUEST_REPLY_TIMEOUT),
                 Effect.ignore({ log: true }),
@@ -5039,6 +5743,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               yield* cancelStrandedSteers(state);
               if (stagedReverts.has(sessionId)) yield* clearRevert(sessionId);
               yield* prepareTurn(sessionId, state, turnInput);
+              yield* assertNoUnrevokedChildren(state);
               const turn = yield* begin;
               turn.unsent = true;
               yield* lock.withPermit(takeRunningWake(state));
@@ -5149,6 +5854,20 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             return yield* new ProviderAdapter.ProviderAdapterProtocolError({
               driver: OPENCODE_PROVIDER,
               detail: `OpenCode turn ${steerInput.providerTurnId} is not active`,
+            });
+          }
+          const blockedSteerChildren = unrevokedChildrenOf(state.sessionId);
+          if (blockedSteerChildren.length > 0) {
+            yield* lock.withPermit(
+              Effect.gen(function* () {
+                turn.steers.delete(inboxID);
+                state.strandedSteers.delete(inboxID);
+                if (state.active === turn) yield* endIfSettled(state, turn);
+              }),
+            );
+            return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+              driver,
+              detail: `Could not revoke OpenCode MCP access on active child session(s): ${blockedSteerChildren.join(", ")}.`,
             });
           }
           yield* client.session
@@ -5317,12 +6036,30 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           return;
         }
         threads.delete(nativeId);
+        unrevokedMcpChildren.delete(nativeId);
+        for (const [child, caller] of strayLineage) {
+          if (rootOf(caller) === state) strayLineage.delete(child);
+        }
         for (const [child, owner] of childOwners) {
           if (owner !== state) continue;
           childOwners.delete(child);
+          unattachedRules.delete(child);
           threads.delete(child);
         }
-        if (state.mcp !== undefined) yield* removeMcp(state.mcp);
+        if (state.mcp !== undefined) {
+          const previous = state.mcp;
+          state.mcp = undefined;
+          // Seed orphanedMcpRemovals BEFORE async removals so an outer unload timeout can never drop retries.
+          for (const [key, entry] of previous.trackedServers) {
+            orphanedMcpRemovals.set(key, entry);
+          }
+          for (const [key, entry] of previous.trackedServers) {
+            const removed = yield* removeMcp(entry);
+            if (removed) {
+              orphanedMcpRemovals.delete(key);
+            }
+          }
+        }
       }),
       respondToRuntimeRequest: Effect.fn("OpenCode2Adapter.respondToRuntimeRequest")(
         function* (requestInput) {

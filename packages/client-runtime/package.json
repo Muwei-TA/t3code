@@ -666,6 +666,10 @@
     "./pull-request-references": {
       "types": "./src/pullRequestReferences.ts",
       "default": "./src/pullRequestReferences.ts"
+    },
+    "./state/harness": {
+      "types": "./src/state/harness.ts",
+      "default": "./src/state/harness.ts"
     }
   },
   "scripts": {

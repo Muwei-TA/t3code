@@ -88,7 +88,9 @@ export type T3McpToolSummaryAction =
   | "device"
   | "html-preview"
   | "html-render"
-  | "send-to-user";
+  | "send-to-user"
+  | "propose-plan"
+  | "harness-tool-search";
 
 export interface T3McpToolDefinition {
   readonly displayName: string;
@@ -113,9 +115,16 @@ const T3_MCP_SERVER_ALIASES = new Set([
   "t3code",
   "t3-code-direct",
   "t3_code_direct",
+  "t3-harness",
+  "t3_harness",
 ]);
 
 const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
+  propose_plan: tool(["Propose", "Proposing", "Proposed", "a plan"], "propose-plan"),
+  harness_tool_search: tool(
+    ["Search", "Searching", "Searched", "harness MCP tools"],
+    "harness-tool-search",
+  ),
   link_pull_request: tool(
     ["Link", "Linking", "Linked", "a pull request"],
     "link-pr",

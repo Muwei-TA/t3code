@@ -137,6 +137,7 @@ import {
   type ThreadId,
   resolveIdleCompaction,
   isDelegatedAppThread,
+  isReservedHarnessMcpServerId,
 } from "@t3tools/contracts";
 
 import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
@@ -719,6 +720,16 @@ export const ClaudeProviderCapabilitiesV2 = {
   },
   runtimePolicy: {
     enforcement: "native",
+  },
+  harness: {
+    mcpPassthrough: "stdio+http",
+    mcpListChanged: true,
+    skillMount: "plugin-dir",
+    systemContextMutableMidSession: false,
+    maxSystemContextBytes: null,
+    nativeToolHooks: true,
+    nativeAllowAlways: true,
+    planReadOnlyEnforcement: "native",
   },
 } satisfies OrchestrationV2ProviderCapabilities;
 
@@ -2751,11 +2762,37 @@ export function claudeMcpQueryOverrides(input: {
     return input.allowedTools === undefined ? {} : { allowedTools: input.allowedTools };
   }
   const mcpAllowedTools = input.readOnlySandbox
-    ? CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS
-    : [CLAUDE_T3_MCP_TOOL_WILDCARD];
+    ? [
+        ...CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS,
+        ...(session.harnessEndpoint !== undefined ? ["mcp__t3-harness__propose_plan"] : []),
+      ]
+    : [
+        CLAUDE_T3_MCP_TOOL_WILDCARD,
+        ...(session.harnessEndpoint !== undefined ? ["mcp__t3-harness__*"] : []),
+      ];
+  const nativeEntries = Object.fromEntries(
+    (session.nativeMcpServers ?? [])
+      .filter((server) => !isReservedHarnessMcpServerId(server.id))
+      .map((server) => [
+        server.id,
+        server.type === "stdio"
+          ? {
+              type: "stdio" as const,
+              command: server.command,
+              ...(server.args.length > 0 ? { args: [...server.args] } : {}),
+              ...(server.env ? { env: { ...server.env } } : {}),
+            }
+          : {
+              type: server.type,
+              url: server.url,
+              ...(server.headers ? { headers: { ...server.headers } } : {}),
+            },
+      ]),
+  );
   return {
     allowedTools: Array.from(new Set([...(input.allowedTools ?? []), ...mcpAllowedTools])),
     mcpServers: {
+      ...nativeEntries,
       "t3-code": {
         type: "http",
         url: session.endpoint,
@@ -2764,6 +2801,18 @@ export function claudeMcpQueryOverrides(input: {
         },
         timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
       },
+      ...(session.harnessEndpoint === undefined
+        ? {}
+        : {
+            "t3-harness": {
+              type: "http",
+              url: session.harnessEndpoint,
+              headers: {
+                Authorization: session.authorizationHeader,
+              },
+              timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
+            },
+          }),
     },
   };
 }

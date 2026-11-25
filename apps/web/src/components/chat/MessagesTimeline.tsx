@@ -300,6 +300,9 @@ interface MessagesTimelineProps {
     readonly sourceThreadId: ThreadId;
     readonly runId: RunId;
   }) => Promise<void>;
+  onImplementProposedPlan?: TimelineRowSharedState["onImplementProposedPlan"];
+  onContinuePlanning?: TimelineRowSharedState["onContinuePlanning"];
+  isGitRepo?: boolean;
   supportsConversationRollback: boolean;
   threadStartCheckpointAvailable?: boolean;
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
@@ -404,6 +407,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
   parentThreadLink = null,
   workflowOpening = null,
   onForkFromRun,
+  onImplementProposedPlan,
+  onContinuePlanning,
+  isGitRepo = false,
   supportsConversationRollback,
   threadStartCheckpointAvailable = false,
   availableRevertTurnCounts,
@@ -1149,6 +1155,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     turnItemSource,
     workflowOpening,
     onForkFromRun,
+    onImplementProposedPlan,
+    onContinuePlanning,
+    isGitRepo,
     onToggleTurnFold,
     onToggleAttemptFold,
     onToggleWorkGroup,

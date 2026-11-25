@@ -1,4 +1,5 @@
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import type { HarnessNativeMcpServer } from "@t3tools/provider-core/server/mcpSession";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
@@ -57,6 +58,8 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import * as McpGateway from "../harness/McpGateway.ts";
+import * as ProjectStore from "./ProjectStore.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import {
@@ -330,6 +333,8 @@ interface LiveSessionEntry {
   /** null marks an unknown catalog; undefined means MCP refresh is not configured. */
   readonly openedWithLinkedEnvironments: boolean | null | undefined;
   readonly linkedEnvironmentsByThread: ReadonlyMap<ThreadId, boolean | null>;
+  /** Fingerprint of `t3-harness` active flag + native MCP passthrough servers per attached thread. */
+  readonly harnessFingerprintByThread: ReadonlyMap<ThreadId, string>;
   /** Scope revocation to recorded credential ids so superseded sessions cannot revoke replacements opened before detach. */
   readonly mcpCredentialIdByThread: ReadonlyMap<ThreadId, string>;
   readonly supportsMultipleProviderThreads: boolean;
@@ -475,6 +480,8 @@ export const layerWithOptions = (
       const fileSystem = yield* FileSystem.FileSystem;
       const mcpSessionRegistry = yield* McpSessionRegistry.McpSessionRegistry;
       const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+      const mcpGateway = yield* Effect.serviceOption(McpGateway.McpGateway);
+      const projectStore = yield* Effect.serviceOption(ProjectStore.ProjectStoreV2);
       /** Unreadable settings must preserve explicit browser-access opt-outs. */
       const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
       const projectService = yield* Effect.serviceOption(ProjectService.ProjectService);
@@ -590,6 +597,7 @@ export const layerWithOptions = (
       interface PreparedMcpCredential {
         readonly mcpCredentialId: string | undefined;
         readonly issued: boolean;
+        readonly harnessFingerprint: string;
       }
       /** ACP and OpenCode consume credentials during openSession; reserve them against revocation until publication. */
       const mcpCredentialReservations = new Map<string, number>();
@@ -611,15 +619,94 @@ export const layerWithOptions = (
       const isMcpCredentialReserved = (threadId: ThreadId, mcpCredentialId: string) =>
         (mcpCredentialReservations.get(mcpReservationKey(threadId, mcpCredentialId)) ?? 0) > 0;
       const mcpPrepareLock = yield* KeyedLock.make<ThreadId>();
+      const serializeNativeServers = (servers: ReadonlyArray<HarnessNativeMcpServer>) =>
+        servers
+          .map((server) =>
+            server.type === "stdio"
+              ? [
+                  server.id,
+                  "stdio",
+                  server.command,
+                  server.args.join("\u001f"),
+                  server.cwd ?? "",
+                  Object.entries(server.env ?? {})
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([k, v]) => `${k}=${v}`)
+                    .join("\u001f"),
+                ].join("\u001e")
+              : [
+                  server.id,
+                  server.type,
+                  server.url,
+                  Object.entries(server.headers ?? {})
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([k, v]) => `${k}=${v}`)
+                    .join("\u001f"),
+                ].join("\u001e"),
+          )
+          .join("\u001d");
+      const computeHarnessInjection = Effect.fn("ProviderSessionManager.computeHarnessInjection")(
+        function* (threadId: ThreadId, providerInstanceId: ProviderInstanceId) {
+          const adapterCapabilities = yield* registry.get(providerInstanceId).pipe(
+            Effect.flatMap((adapter) => adapter.getCapabilities()),
+            Effect.option,
+          );
+          const threadRecord = yield* projectionStore.getThread(threadId).pipe(Effect.option);
+          const workspaceRoot = Option.isSome(threadRecord)
+            ? (threadRecord.value.worktreePath ??
+              (Option.isSome(projectStore)
+                ? yield* projectStore.value.get(threadRecord.value.projectId).pipe(
+                    Effect.map((proj) =>
+                      Option.isSome(proj) ? proj.value.workspaceRoot : undefined,
+                    ),
+                    Effect.orElseSucceed(() => undefined),
+                  )
+                : undefined))
+            : undefined;
+          const harnessInjection =
+            Option.isSome(mcpGateway) && Option.isSome(adapterCapabilities)
+              ? yield* mcpGateway.value
+                  .resolveSessionInjection({
+                    workspaceRoot,
+                    interactionMode: Option.isSome(threadRecord)
+                      ? threadRecord.value.interactionMode
+                      : "default",
+                    emitsProposedPlan: adapterCapabilities.value.planning.emitsProposedPlan,
+                    supportsMcpTools: adapterCapabilities.value.tools.supportsMcpTools,
+                    harnessCapabilities: adapterCapabilities.value.harness,
+                  })
+                  .pipe(
+                    Effect.orElseSucceed(() => ({
+                      harnessActive: false,
+                      gatewayServersDigest: "",
+                      nativeMcpServers: [],
+                    })),
+                  )
+              : { harnessActive: false, gatewayServersDigest: "", nativeMcpServers: [] };
+          const nativeServersKey = serializeNativeServers(harnessInjection.nativeMcpServers);
+          const harnessFingerprint = `${harnessInjection.harnessActive ? "1" : "0"}\u0000${harnessInjection.gatewayServersDigest}\u0000${nativeServersKey}`;
+          return {
+            adapterCapabilities,
+            threadRecord,
+            harnessInjection,
+            nativeServersKey,
+            harnessFingerprint,
+          };
+        },
+      );
       /** Serialize prepares per thread so concurrent rotations cannot revoke each other's credentials. */
       const prepareMcpSession = (
         threadId: ThreadId,
         providerInstanceId: ProviderInstanceId,
       ): Effect.Effect<PreparedMcpCredential> =>
         options.configureMcp === false
-          ? mcpSessions
-              .clear(threadId)
-              .pipe(Effect.as<PreparedMcpCredential>({ mcpCredentialId: undefined, issued: false }))
+          ? mcpSessions.clear(threadId).pipe(
+              Effect.as<PreparedMcpCredential>({
+                mcpCredentialId: undefined,
+                issued: false,
+                harnessFingerprint: "0\u0000",
+              }),
+            )
           : mcpPrepareLock.withLock(
               threadId,
               Effect.gen(function* () {
@@ -631,18 +718,30 @@ export const layerWithOptions = (
                 >(["orchestration", "worktree", "pull-requests", "issues"]);
                 if (browserToolsAvailable) capabilities.add("preview");
                 if (deviceToolsAvailable) capabilities.add("device");
-                const backgroundWait = yield* registry.get(providerInstanceId).pipe(
-                  Effect.flatMap((adapter) => adapter.getCapabilities()),
-                  Effect.map((adapter) => adapter.tools.supportsBackgroundWait === true),
-                  Effect.option,
+                const {
+                  adapterCapabilities,
+                  threadRecord,
+                  harnessInjection,
+                  nativeServersKey,
+                  harnessFingerprint,
+                } = yield* computeHarnessInjection(threadId, providerInstanceId);
+                const backgroundWait = Option.map(
+                  adapterCapabilities,
+                  (adapter) => adapter.tools.supportsBackgroundWait === true,
                 );
                 if (Option.getOrElse(backgroundWait, () => false)) {
                   capabilities.add("background-wait");
                 }
-                const subagent = yield* projectionStore.getThread(threadId).pipe(
-                  Effect.map((thread) => thread.lineage.relationshipToParent === "subagent"),
-                  Effect.orElseSucceed(() => false),
-                );
+                if (harnessInjection.harnessActive) {
+                  capabilities.add("harness");
+                }
+                const subagent =
+                  Option.isSome(threadRecord) &&
+                  threadRecord.value.lineage.relationshipToParent === "subagent";
+                const harnessEndpointFor = (baseEndpoint: string) =>
+                  harnessInjection.harnessActive
+                    ? baseEndpoint.replace(/\/mcp$/u, "/mcp/harness")
+                    : undefined;
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before async validation so release cannot revoke between validation and reservation.
@@ -658,19 +757,28 @@ export const layerWithOptions = (
                         ),
                       ),
                     );
+                  const expectedHarnessEndpoint = harnessEndpointFor(existing.endpoint);
+                  const existingNativeKey = serializeNativeServers(existing.nativeMcpServers ?? []);
                   if (
                     resolved !== undefined &&
                     resolved.thread.threadId === threadId &&
                     resolved.thread.providerInstanceId === providerInstanceId &&
                     resolved.capabilities.has("preview") === browserToolsAvailable &&
                     resolved.capabilities.has("device") === deviceToolsAvailable &&
+                    resolved.capabilities.has("harness") === harnessInjection.harnessActive &&
                     // A failed capability read cannot tell that the live credential is wrong.
                     (Option.isNone(backgroundWait) ||
                       resolved.capabilities.has("background-wait") === backgroundWait.value) &&
                     // A credential issued while the lineage read failed is replaced once it works.
-                    (resolved.thread.subagent === true) === subagent
+                    (resolved.thread.subagent === true) === subagent &&
+                    existing.harnessEndpoint === expectedHarnessEndpoint &&
+                    existingNativeKey === nativeServersKey
                   ) {
-                    return { mcpCredentialId: existing.providerSessionId, issued: false };
+                    return {
+                      mcpCredentialId: existing.providerSessionId,
+                      issued: false,
+                      harnessFingerprint,
+                    };
                   }
                   dropMcpCredentialReservation(threadId, existing.providerSessionId);
                 }
@@ -682,8 +790,13 @@ export const layerWithOptions = (
                   capabilities,
                   subagent,
                 });
+                const harnessEndpoint = harnessEndpointFor(credential.config.endpoint);
                 yield* mcpSessions.set({
                   ...credential.config,
+                  ...(harnessEndpoint !== undefined ? { harnessEndpoint } : {}),
+                  ...(harnessInjection.nativeMcpServers.length > 0
+                    ? { nativeMcpServers: harnessInjection.nativeMcpServers }
+                    : {}),
                   hasPendingWake: projectionStore
                     .getThreadRecords(threadId, ["runs", "subagents"])
                     .pipe(
@@ -692,7 +805,11 @@ export const layerWithOptions = (
                     ),
                 });
                 reserveMcpCredential(threadId, credential.config.providerSessionId);
-                return { mcpCredentialId: credential.config.providerSessionId, issued: true };
+                return {
+                  mcpCredentialId: credential.config.providerSessionId,
+                  issued: true,
+                  harnessFingerprint,
+                };
               }),
             );
       const clearMcpSession = (threadId: ThreadId, mcpCredentialId?: string) =>
@@ -1840,12 +1957,15 @@ export const layerWithOptions = (
           loadedProviderThreadKeyByThread.delete(input.threadId);
           const linkedEnvironmentsByThread = new Map(entry.linkedEnvironmentsByThread);
           linkedEnvironmentsByThread.delete(input.threadId);
+          const harnessFingerprintByThread = new Map(entry.harnessFingerprintByThread);
+          harnessFingerprintByThread.delete(input.threadId);
           const updated = new Map(current);
           updated.set(key, {
             ...entry,
             attachedThreadIds,
             loadedProviderThreadKeyByThread,
             linkedEnvironmentsByThread,
+            harnessFingerprintByThread,
           });
           return updated;
         });
@@ -1954,8 +2074,14 @@ export const layerWithOptions = (
                   if (entry === undefined) return current;
                   const mcpCredentialIdByThread = new Map(entry.mcpCredentialIdByThread);
                   mcpCredentialIdByThread.set(input.threadId, mcpCredentialId);
+                  const harnessFingerprintByThread = new Map(entry.harnessFingerprintByThread);
+                  harnessFingerprintByThread.set(input.threadId, prepared.harnessFingerprint);
                   const updated = new Map(current);
-                  updated.set(key, { ...entry, mcpCredentialIdByThread });
+                  updated.set(key, {
+                    ...entry,
+                    mcpCredentialIdByThread,
+                    harnessFingerprintByThread,
+                  });
                   return updated;
                 });
               }
@@ -2392,6 +2518,82 @@ export const layerWithOptions = (
           }),
         );
       });
+
+      /**
+       * Reopens an idle session when Harness MCP servers, native passthrough entries, or
+       * Plan mode fallback state changed so the provider picks up new registrations and drops revoked tokens.
+       */
+      const releaseForHarnessChanges = Effect.fn("ProviderSessionManager.releaseForHarnessChanges")(
+        function* (
+          entry: LiveSessionEntry,
+          threadId: ThreadId,
+          providerInstanceId: ProviderInstanceId,
+        ) {
+          if (
+            options.configureMcp === false ||
+            Option.isNone(mcpGateway) ||
+            entry.runtime.canResumeAfterRestart === false ||
+            entry.busyTurns.size > 0 ||
+            !entry.attachedThreadIds.has(threadId)
+          ) {
+            return;
+          }
+          const recordedFingerprint = entry.harnessFingerprintByThread.get(threadId);
+          const { harnessFingerprint: nextFingerprint } = yield* computeHarnessInjection(
+            threadId,
+            providerInstanceId,
+          );
+          if (recordedFingerprint === nextFingerprint) {
+            return;
+          }
+          const providerSessionId = entry.runtime.providerSessionId;
+          const generation = entry.idleGeneration;
+          const hasPendingWork =
+            entry.runtime.hasPendingBackgroundWork === undefined
+              ? false
+              : yield* entry.runtime.hasPendingBackgroundWork.pipe(
+                  Effect.catchCause(() => Effect.succeed(true)),
+                );
+          if (hasPendingWork) return;
+          const hasUnfinishedRecords = Effect.forEach(entry.attachedThreadIds, (attachedId) =>
+            projectionStore.getThreadRecords(attachedId, ["runtimeRequests", "providerThreads"], {
+              runtimeRequestStatuses: ["pending"],
+            }),
+          ).pipe(
+            Effect.map((projections) =>
+              projections.some(
+                (projection) =>
+                  projection.runtimeRequests.some(
+                    (request) =>
+                      request.responseCapability.type === "live" &&
+                      request.responseCapability.providerSessionId === providerSessionId,
+                  ) ||
+                  projection.providerThreads.some(
+                    (providerThread) =>
+                      providerThread.providerSessionId === providerSessionId &&
+                      (providerThread.pendingBackgroundTasks ?? []).length > 0,
+                  ),
+              ),
+            ),
+            Effect.orElseSucceed(() => true),
+          );
+          yield* releaseEntry({
+            providerSessionId,
+            reason: "idle_timeout",
+            detail:
+              "Harness MCP or Plan mode configuration changed; reopening the provider session.",
+            onlyIfIdleGeneration: generation,
+            keepIf: hasUnfinishedRecords,
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("orchestration-v2.driver-session.harness-reopen-failed", {
+                providerSessionId,
+                cause,
+              }),
+            ),
+          );
+        },
+      );
 
       /** An exclusive runtime configures MCP at open, so it reopens once nothing would be lost. */
       const releaseForLinkedEnvironments = Effect.fn(
@@ -3229,6 +3431,14 @@ export const layerWithOptions = (
               const key = sessionKey(input.providerSessionId);
               const live = (yield* Ref.get(sessions)).get(key);
               if (live !== undefined) yield* releaseForLinkedEnvironments(live);
+              const liveAfterLinks = (yield* Ref.get(sessions)).get(key);
+              if (liveAfterLinks !== undefined) {
+                yield* releaseForHarnessChanges(
+                  liveAfterLinks,
+                  input.threadId,
+                  input.modelSelection.instanceId,
+                );
+              }
               const existing = (yield* Ref.get(sessions)).get(key);
               if (existing !== undefined) {
                 const attached = existing.attachedThreadIds.has(input.threadId);
@@ -3340,6 +3550,9 @@ export const layerWithOptions = (
                 loadedProviderThreadKeyByThread: new Map(),
                 openedWithLinkedEnvironments,
                 linkedEnvironmentsByThread: new Map(),
+                harnessFingerprintByThread: new Map([
+                  [input.threadId, prepared.harnessFingerprint],
+                ]),
                 mcpCredentialIdByThread:
                   mcpCredentialId === undefined
                     ? new Map()

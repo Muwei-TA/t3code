@@ -474,6 +474,7 @@ interface ThreadWorkLogProps {
   readonly activities: ReadonlyArray<ThreadFeedActivity>;
   readonly anchorKey: string;
   readonly environmentId: EnvironmentId;
+  readonly threadId?: import("@t3tools/contracts").ThreadId | undefined;
   readonly workspaceRoot?: string | null | undefined;
   readonly copiedRowId: string | null;
   readonly expandedRows: Readonly<Record<string, boolean>>;
@@ -518,6 +519,8 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
     return (
       <ProposedPlanCard
         environmentId={props.environmentId}
+        threadId={props.threadId}
+        planId={plan.planId}
         workspaceRoot={props.workspaceRoot}
         markdown={plan.markdown}
         renderMarkdown={props.renderReasoning}

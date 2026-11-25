@@ -428,6 +428,29 @@ export const OrchestrationV2IdentityCapabilities = Schema.Struct({
 });
 export type OrchestrationV2IdentityCapabilities = typeof OrchestrationV2IdentityCapabilities.Type;
 
+export const OrchestrationV2HarnessCapabilities = Schema.Struct({
+  mcpPassthrough: Schema.Literals(["none", "stdio", "http", "stdio+http"]),
+  mcpListChanged: Schema.Boolean,
+  skillMount: Schema.Literals(["none", "plugin-dir", "managed-home"]),
+  systemContextMutableMidSession: Schema.Boolean,
+  maxSystemContextBytes: Schema.NullOr(PositiveInt),
+  nativeToolHooks: Schema.Boolean,
+  nativeAllowAlways: Schema.Boolean,
+  planReadOnlyEnforcement: Schema.optionalKey(Schema.Literals(["native", "advisory"])),
+});
+export type OrchestrationV2HarnessCapabilities = typeof OrchestrationV2HarnessCapabilities.Type;
+
+export const DEFAULT_HARNESS_CAPABILITIES: OrchestrationV2HarnessCapabilities = {
+  mcpPassthrough: "none",
+  mcpListChanged: false,
+  skillMount: "none",
+  systemContextMutableMidSession: false,
+  maxSystemContextBytes: null,
+  nativeToolHooks: false,
+  nativeAllowAlways: false,
+  planReadOnlyEnforcement: "advisory",
+};
+
 export const OrchestrationV2ProviderCapabilities = Schema.Struct({
   sessions: OrchestrationV2SessionCapabilities,
   threads: OrchestrationV2ThreadCapabilities,
@@ -443,6 +466,9 @@ export const OrchestrationV2ProviderCapabilities = Schema.Struct({
   // Replay defaults old events to the weaker client-boundary guarantee.
   runtimePolicy: OrchestrationV2RuntimePolicyCapabilities.pipe(
     Schema.withDecodingDefault(Effect.succeed({ enforcement: "client-boundary" as const })),
+  ),
+  harness: OrchestrationV2HarnessCapabilities.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HARNESS_CAPABILITIES)),
   ),
 });
 export type OrchestrationV2ProviderCapabilities = typeof OrchestrationV2ProviderCapabilities.Type;
@@ -3829,6 +3855,15 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     runId: RunId,
     value: Schema.Json,
+  }),
+  // Emitted by the `/mcp/harness` `propose_plan` tool for providers without native plan cards.
+  Schema.Struct({
+    type: Schema.Literal("plan.propose"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    providerInstanceId: ProviderInstanceId,
+    markdown: TrimmedNonEmptyString.check(Schema.isMaxLength(200_000)),
   }),
   // Guest share commands the server issues after checking T3 Connect and the guest token.
   Schema.Struct({

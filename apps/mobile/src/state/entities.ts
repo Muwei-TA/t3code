@@ -12,6 +12,8 @@ import {
   EnvironmentId,
   ThreadId,
   type ComposerContextRecord,
+  type OrchestrationV2PlanArtifact,
+  type PlanId,
   type ScopedProjectRef,
   type ScopedThreadRef,
   type ServerConfig,
@@ -334,5 +336,18 @@ export function useThreadReportedModelSelection(ref: ScopedThreadRef | null) {
   return useAtomValue(
     ref === null ? EMPTY_THREAD_ATOM : environmentThreadDetails.threadAtom(ref),
     selectReportedModelSelection,
+  );
+}
+
+export function useThreadProposedPlanStatus(
+  ref: ScopedThreadRef | null,
+  planId: PlanId | undefined,
+): OrchestrationV2PlanArtifact["status"] | null {
+  return useAtomValue(
+    ref === null ? EMPTY_THREAD_ATOM : environmentThreadDetails.threadAtom(ref),
+    (thread) => {
+      if (thread === null || planId === undefined) return null;
+      return thread.projection.plans.find((plan) => plan.id === planId)?.status ?? null;
+    },
   );
 }

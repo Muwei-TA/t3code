@@ -136,6 +136,14 @@ const SETTINGS_SEARCH_TERMS = {
     msg("login", { $context: "settings search keyword" }),
     msg("auth", { $context: "settings search keyword" }),
   ],
+  SettingsHarness: [
+    "mcp",
+    msg("harness", { $context: "settings search keyword" }),
+    msg("servers", { $context: "settings search keyword" }),
+    msg("stdio", { $context: "settings search keyword" }),
+    msg("import", { $context: "settings search keyword" }),
+    msg("tools", { $context: "settings search keyword" }),
+  ],
   SettingsEnvironmentSourceControl: [
     "git",
     msg("pull requests", { $context: "settings search keyword" }),

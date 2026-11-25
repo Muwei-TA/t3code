@@ -151,6 +151,8 @@ const CODEX_CLI_VERSION_PATTERN = /(?:^|\s)v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)
 const CODEX_PRESENTATION = {
   displayName: "Codex",
   showInteractionModeToggle: true,
+  harnessPlanMode: "native",
+  planReadOnlyEnforcement: "native",
   reportsContextWindow: true,
 } as const;
 

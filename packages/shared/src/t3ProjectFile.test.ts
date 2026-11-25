@@ -29,4 +29,33 @@ describe("parseT3ProjectFile", () => {
       }`),
     ).toEqual({ defaultThreadEnvMode: "worktree" });
   });
+
+  it("isolates an invalid harness section so project settings stay intact", () => {
+    expect(
+      parseT3ProjectFile(`{
+        "defaultThreadEnvMode": "worktree",
+        "worktreeSubmodules": "none",
+        "harness": {
+          "mcpServers": {
+            "bad": {
+              "enabled": true,
+              "transport": {
+                "type": "http",
+                "url": "https://alice:secret@bad.example.com:99999/mcp"
+              }
+            }
+          }
+        }
+      }`),
+    ).toEqual({
+      defaultThreadEnvMode: "worktree",
+      worktreeSubmodules: "none",
+    });
+
+    expect(
+      parseT3ProjectFile(`{
+        "worktreeSubmodules": "invalid-mode"
+      }`),
+    ).toBeNull();
+  });
 });

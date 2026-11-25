@@ -33,8 +33,9 @@ export class T3ProjectFileLoader extends Context.Service<
   }
 >()("t3/project/T3ProjectFileLoader") {}
 
+// Log only safe metadata (never raw SchemaError causes) so invalid t3.json URLs with credentials never leak into server logs.
 const logT3ProjectFileLoadError = (error: T3ProjectFileLoadError) =>
-  Effect.logWarning(error).pipe(
+  Effect.logWarning(error.message).pipe(
     Effect.annotateLogs({
       operation: error.operation,
       workspaceRoot: error.workspaceRoot,

@@ -7,6 +7,24 @@ import type * as Effect from "effect/Effect";
  */
 export const MCP_TOOL_EXPOSURE_HEADER = "t3-tool-exposure";
 
+export interface HarnessNativeStdioMcpServer {
+  readonly id: string;
+  readonly type: "stdio";
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd?: string | undefined;
+  readonly env?: Readonly<Record<string, string>> | undefined;
+}
+
+export interface HarnessNativeHttpMcpServer {
+  readonly id: string;
+  readonly type: "http" | "sse";
+  readonly url: string;
+  readonly headers?: Readonly<Record<string, string>> | undefined;
+}
+
+export type HarnessNativeMcpServer = HarnessNativeStdioMcpServer | HarnessNativeHttpMcpServer;
+
 export interface McpProviderSessionConfig {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
@@ -14,6 +32,10 @@ export interface McpProviderSessionConfig {
   readonly providerInstanceId: ProviderInstanceId;
   readonly endpoint: string;
   readonly authorizationHeader: string;
+  /** Independent `/mcp/harness` gateway endpoint; omitted when no harness tools are active for this thread. */
+  readonly harnessEndpoint?: string | undefined;
+  /** User-selected native passthrough servers, already trust-checked and secret-resolved for this session. */
+  readonly nativeMcpServers?: ReadonlyArray<HarnessNativeMcpServer> | undefined;
   /** Omit preview_* instructions when the user withholds agent browser access. */
   readonly browserToolsAvailable: boolean;
   readonly capabilities?: ReadonlySet<string>;

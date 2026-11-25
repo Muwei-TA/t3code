@@ -31,6 +31,7 @@ import {
   type ServerProviderModel,
   type ServerProviderSkill,
   type ThreadId,
+  isReservedHarnessMcpServerId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -180,6 +181,16 @@ export const CursorProviderCapabilitiesV2 = {
   runtimePolicy: {
     enforcement: "native",
   },
+  harness: {
+    mcpPassthrough: "stdio+http",
+    mcpListChanged: false,
+    skillMount: "none",
+    systemContextMutableMidSession: false,
+    maxSystemContextBytes: null,
+    nativeToolHooks: false,
+    nativeAllowAlways: false,
+    planReadOnlyEnforcement: "native",
+  },
 } satisfies OrchestrationV2ProviderCapabilities;
 
 export interface CursorRuntimeAgentPolicy {
@@ -219,7 +230,26 @@ export function cursorMcpServers(
   if (session === undefined) {
     return undefined;
   }
+  const nativeEntries = Object.fromEntries(
+    (session.nativeMcpServers ?? [])
+      .filter((server) => !isReservedHarnessMcpServerId(server.id))
+      .map((server): [string, McpServerConfig] => [
+        server.id,
+        server.type === "stdio"
+          ? {
+              command: server.command,
+              ...(server.args.length > 0 ? { args: [...server.args] } : {}),
+              ...(server.env ? { env: { ...server.env } } : {}),
+            }
+          : {
+              type: "http",
+              url: server.url,
+              ...(server.headers ? { headers: { ...server.headers } } : {}),
+            },
+      ]),
+  );
   return {
+    ...nativeEntries,
     "t3-code": {
       type: "http",
       url: session.endpoint,
@@ -227,6 +257,17 @@ export function cursorMcpServers(
         Authorization: session.authorizationHeader,
       },
     },
+    ...(session.harnessEndpoint === undefined
+      ? {}
+      : {
+          "t3-harness": {
+            type: "http",
+            url: session.harnessEndpoint,
+            headers: {
+              Authorization: session.authorizationHeader,
+            },
+          },
+        }),
   };
 }
 

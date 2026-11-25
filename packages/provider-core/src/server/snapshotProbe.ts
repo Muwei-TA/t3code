@@ -110,6 +110,8 @@ export interface ServerProviderPresentation {
   readonly displayName: string;
   readonly badgeLabel?: string;
   readonly showInteractionModeToggle?: boolean;
+  readonly harnessPlanMode?: "native" | "harness-propose-plan" | "none";
+  readonly planReadOnlyEnforcement?: "native" | "advisory";
   readonly reportsContextWindow?: boolean;
   readonly supportedRuntimeModes?: ReadonlyArray<RuntimeMode>;
   readonly supportsConversationRollback?: boolean;
@@ -313,6 +315,12 @@ export function buildServerProvider(input: {
     ...(input.presentation.badgeLabel ? { badgeLabel: input.presentation.badgeLabel } : {}),
     ...(typeof input.presentation.showInteractionModeToggle === "boolean"
       ? { showInteractionModeToggle: input.presentation.showInteractionModeToggle }
+      : {}),
+    ...(input.presentation.harnessPlanMode !== undefined
+      ? { harnessPlanMode: input.presentation.harnessPlanMode }
+      : {}),
+    ...(input.presentation.planReadOnlyEnforcement !== undefined
+      ? { planReadOnlyEnforcement: input.presentation.planReadOnlyEnforcement }
       : {}),
     ...(typeof input.presentation.reportsContextWindow === "boolean"
       ? { reportsContextWindow: input.presentation.reportsContextWindow }

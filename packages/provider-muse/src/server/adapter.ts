@@ -23,6 +23,7 @@ import {
   type RuntimeRequestId,
   type ServerProviderModel,
   type ThreadId,
+  isReservedHarnessMcpServerId,
 } from "@t3tools/contracts";
 import type { MuseSettings } from "../settings.ts";
 import { AgentScope } from "@t3tools/shared/AgentScope";
@@ -42,6 +43,7 @@ import * as Stream from "effect/Stream";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import { T3_CODE_HARNESS_PLAN_MODE_INSTRUCTIONS } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import { museModelCapabilities, resolveMuseReasoningEffort } from "./modelCatalog.ts";
 import {
@@ -198,6 +200,16 @@ const MuseProviderCapabilitiesV2 = {
     nativeItemIds: "strong",
     nativeRequestIds: "strong",
   },
+  harness: {
+    mcpPassthrough: "http",
+    mcpListChanged: false,
+    skillMount: "none",
+    systemContextMutableMidSession: false,
+    maxSystemContextBytes: null,
+    nativeToolHooks: false,
+    nativeAllowAlways: false,
+    planReadOnlyEnforcement: "advisory",
+  },
 } satisfies OrchestrationV2ProviderCapabilities;
 
 export interface MuseAdapterV2Options {
@@ -317,8 +329,6 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
       input: ProviderAdapter.ProviderAdapterV2OpenSessionInput,
     ) {
       if (!options.settings.enabled) return yield* protocolError("Muse Code is disabled");
-      if (input.runtimePolicy.interactionMode === "plan")
-        return yield* protocolError("Muse Code does not support dedicated Plan mode");
       const scope = yield* Effect.scope;
       // Native realpath also corrects filesystem case, which Muse validates.
       const requestedCwd = input.runtimePolicy.cwd ?? providerHost.paths.cwd;
@@ -1940,6 +1950,22 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
           const config = mcpSession
             ? {
                 mcpServers: {
+                  ...Object.fromEntries(
+                    (mcpSession.nativeMcpServers ?? [])
+                      .filter(
+                        (server): server is McpProviderSession.HarnessNativeHttpMcpServer =>
+                          server.type !== "stdio" && !isReservedHarnessMcpServerId(server.id),
+                      )
+                      .map((server) => [
+                        server.id,
+                        {
+                          transport: "streamableHttp",
+                          mode: "optional",
+                          url: server.url,
+                          ...(server.headers ? { headers: { ...server.headers } } : {}),
+                        },
+                      ]),
+                  ),
                   // Muse's required default fails runs if T3 tools are unreachable; make them optional.
                   "t3-code": {
                     transport: "streamableHttp",
@@ -1947,6 +1973,16 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                     url: mcpSession.endpoint,
                     headers: { Authorization: mcpSession.authorizationHeader },
                   },
+                  ...(mcpSession.harnessEndpoint === undefined
+                    ? {}
+                    : {
+                        "t3-harness": {
+                          transport: "streamableHttp",
+                          mode: "optional",
+                          url: mcpSession.harnessEndpoint,
+                          headers: { Authorization: mcpSession.authorizationHeader },
+                        },
+                      }),
                 },
               }
             : undefined;
@@ -2087,8 +2123,6 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
             detail: "Muse already has an active turn; queue through the orchestrator",
             reason: "previous_turn_active",
           });
-        if (turnInput.runtimePolicy.interactionMode === "plan")
-          return yield* protocolError("Muse does not support dedicated Plan mode");
         if (turnInput.runtimePolicy.runtimeMode !== input.runtimePolicy.runtimeMode)
           return yield* protocolError("Runtime policy changes require a fresh Muse host");
         const continuation =
@@ -2192,13 +2226,18 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                 input: [
                   {
                     type: "text",
-                    text: buildRuntimeInstructions({
-                      agentFeedback: hasT3Mcp ? (turnInput.agentFeedback ?? "off") : "off",
-                      harness: "Muse Code",
-                      model: session.model ?? undefined,
-                      reasoningEffort: effort,
-                      runtimePolicy: turnInput.runtimePolicy,
-                    }),
+                    text: [
+                      buildRuntimeInstructions({
+                        agentFeedback: hasT3Mcp ? (turnInput.agentFeedback ?? "off") : "off",
+                        harness: "Muse Code",
+                        model: session.model ?? undefined,
+                        reasoningEffort: effort,
+                        runtimePolicy: turnInput.runtimePolicy,
+                      }),
+                      ...(turnInput.runtimePolicy.interactionMode === "plan"
+                        ? [T3_CODE_HARNESS_PLAN_MODE_INSTRUCTIONS]
+                        : []),
+                    ].join("\n\n"),
                   },
                   ...parts,
                 ],

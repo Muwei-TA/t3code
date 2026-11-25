@@ -102,6 +102,7 @@ import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppea
 import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsClientStorageRouteScreen";
 import { SettingsDiagnosticsRouteScreen } from "./features/diagnostics/SettingsDiagnosticsRouteScreen";
 import { SettingsProviderAccountsRouteScreen } from "./features/settings/SettingsProviderAccountsRouteScreen";
+import { SettingsHarnessRouteScreen } from "./features/settings/SettingsHarnessRouteScreen";
 import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteScreen";
 import { SettingsEnvironmentDetailRouteScreen } from "./features/settings/SettingsEnvironmentDetailRouteScreen";
 import {
@@ -179,6 +180,7 @@ const ROUTE_TITLES: Readonly<Record<string, string>> = {
   SettingsWorktrees: msg("Worktrees"),
   SettingsLabs: msg("Labs"),
   SettingsProviderAccounts: msg("Providers"),
+  SettingsHarness: msg("Harness & MCP"),
   SettingsEnvironmentMaintenance: msg("Maintenance"),
   SettingsNotifications: msg("Notifications"),
   SettingsThreads: msg("Threads"),
@@ -288,6 +290,11 @@ const SETTINGS_SCREENS = {
   SettingsProviderAccounts: createNativeStackScreen({
     screen: SettingsProviderAccountsRouteScreen,
     linking: "settings/provider-accounts",
+    options: settingsPage(),
+  }),
+  SettingsHarness: createNativeStackScreen({
+    screen: SettingsHarnessRouteScreen,
+    linking: "settings/harness",
     options: settingsPage(),
   }),
   SettingsEnvironmentMaintenance: createNativeStackScreen({

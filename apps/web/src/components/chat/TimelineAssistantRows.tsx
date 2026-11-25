@@ -370,12 +370,18 @@ export function ProposedPlanTimelineRow({
   return (
     <div className="min-w-0 px-1 py-0.5">
       <ProposedPlanCard
+        planId={row.proposedPlan.id}
+        planStatus={row.proposedPlan.status}
         planMarkdown={row.proposedPlan.planMarkdown}
         environmentId={ctx.activeThreadEnvironmentId}
         threadRef={ctx.threadRef ?? undefined}
         cwd={ctx.markdownCwd}
         workspaceRoot={ctx.workspaceRoot}
+        isGitRepo={ctx.isGitRepo === true}
         findActive={ctx.findActive}
+        canOperateThread={ctx.canOperateThread}
+        onImplementPlan={ctx.onImplementProposedPlan}
+        onContinuePlanning={ctx.onContinuePlanning}
       />
     </div>
   );

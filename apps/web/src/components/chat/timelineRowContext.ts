@@ -11,6 +11,7 @@ import {
   type EnvironmentId,
   type MessageId,
   type OrchestrationV2TurnItem,
+  type PlanId,
   type RunAttemptId,
   type ScopedThreadRef,
   type ServerProviderSkill,
@@ -95,6 +96,16 @@ export interface TimelineRowSharedState {
   onForkFromRun:
     | ((input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => Promise<void>)
     | undefined;
+  onImplementProposedPlan?:
+    | ((input: {
+        readonly planId: PlanId;
+        readonly planMarkdown: string;
+        readonly freshContext?: boolean;
+        readonly inNewWorktree?: boolean;
+      }) => Promise<void>)
+    | undefined;
+  onContinuePlanning?: (() => void) | undefined;
+  isGitRepo?: boolean;
   onToggleTurnFold: (runId: RunId) => void;
   onToggleAttemptFold: (attemptId: RunAttemptId) => void;
   onFileOpen: (attachment: ChatFileAttachment) => void;

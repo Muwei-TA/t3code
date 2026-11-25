@@ -723,3 +723,86 @@ describe("Pi skill references", () => {
     }
   });
 });
+
+describe("Pi harness dynamic discovery and approval gating", () => {
+  it("refreshes harness tools on before_agent_start and after harness_tool_search, and never auto-bypasses third-party readOnlyHint in approval-required mode", async () => {
+    let available: Array<{
+      readonly name: string;
+      readonly description?: string;
+      readonly annotations?: { readonly readOnlyHint?: boolean };
+    }> = [{ name: "harness_tool_search", annotations: { readOnlyHint: true } }];
+
+    const bridge = await loadMcpBridge({
+      modern: true,
+      activatesOnRegistration: true,
+      runtimeMode: "approval-required",
+      harnessTools: () => available,
+    });
+
+    assert.include(bridge.getActiveTools(), "mcp__t3-harness__harness_tool_search");
+    assert.notInclude(bridge.getActiveTools(), "mcp__t3-harness__propose_plan");
+
+    // Switching to Plan mode exposes `propose_plan` on the very next turn via before_agent_start.
+    available = [
+      { name: "propose_plan", annotations: { readOnlyHint: true } },
+      { name: "harness_tool_search", annotations: { readOnlyHint: true } },
+    ];
+    await bridge.handlers.get("before_agent_start")!(
+      { systemPrompt: "base" },
+      { ui: { notify: assert.fail } },
+    );
+    assert.include(bridge.getActiveTools(), "mcp__t3-harness__propose_plan");
+
+    // Calling harness_tool_search dynamically loads newly discovered third-party tools.
+    available = [
+      { name: "propose_plan", annotations: { readOnlyHint: true } },
+      { name: "harness_tool_search", annotations: { readOnlyHint: true } },
+      { name: "github__read_issue", annotations: { readOnlyHint: true } },
+    ];
+    await bridge.callModelTool("mcp__t3-harness__harness_tool_search", { query: "github" });
+    assert.include(bridge.getActiveTools(), "mcp__t3-harness__github__read_issue");
+
+    // In approval-required mode, T3-owned `propose_plan` skips confirmation,
+    // while third-party `github__read_issue` STILL asks for confirmation despite readOnlyHint: true.
+    const toolCallHook = bridge.handlers.get("tool_call") as unknown as (
+      event: { toolName: string; input: Record<string, unknown> },
+      ctx: { ui: { confirm: (title: string, body: string) => Promise<boolean> } },
+    ) => Promise<{ block?: boolean } | undefined>;
+    let confirmCalls = 0;
+    const proposeRes = await toolCallHook(
+      { toolName: "mcp__t3-harness__propose_plan", input: { markdown: "# Plan" } },
+      {
+        ui: {
+          confirm: async () => {
+            confirmCalls += 1;
+            return true;
+          },
+        },
+      },
+    );
+    assert.isUndefined(proposeRes);
+    assert.equal(confirmCalls, 0);
+
+    const thirdPartyRes = await toolCallHook(
+      { toolName: "mcp__t3-harness__github__read_issue", input: {} },
+      {
+        ui: {
+          confirm: async () => {
+            confirmCalls += 1;
+            return false;
+          },
+        },
+      },
+    );
+    assert.equal(confirmCalls, 1);
+    assert.equal(thirdPartyRes?.block, true);
+
+    // Leaving Plan mode removes `propose_plan` from active tools on the next turn.
+    available = [{ name: "harness_tool_search", annotations: { readOnlyHint: true } }];
+    await bridge.handlers.get("before_agent_start")!(
+      { systemPrompt: "base" },
+      { ui: { notify: assert.fail } },
+    );
+    assert.notInclude(bridge.getActiveTools(), "mcp__t3-harness__propose_plan");
+  });
+});

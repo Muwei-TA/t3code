@@ -52,7 +52,9 @@ import { grokProbeEnvironment } from "./probeEnvironment.ts";
 const GROK_PRESENTATION = {
   displayName: "Grok",
   supportsConversationRollback: false,
-  showInteractionModeToggle: false,
+  showInteractionModeToggle: true,
+  harnessPlanMode: "harness-propose-plan",
+  planReadOnlyEnforcement: "advisory",
   supportedRuntimeModes: GROK_SUPPORTED_RUNTIME_MODES,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({

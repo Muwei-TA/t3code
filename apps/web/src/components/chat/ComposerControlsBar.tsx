@@ -3,9 +3,9 @@ import type { PromptUltrathink } from "./TraitsPicker";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { type AppModelOption } from "../../modelSelection";
 import { useGT, useMessages } from "gt-react";
-import { CircleAlertIcon } from "lucide-react";
+import { CircleAlertIcon, MapIcon } from "lucide-react";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
-import { ComposerControl } from "./ComposerControl";
+import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
 import {
   ComposerFooterModeControls,
   ComposerModelPicker,
@@ -16,9 +16,13 @@ import {
   type ModelSelection,
   type ProviderDriverKind,
   type ProviderInstanceId,
+  type ProviderInteractionMode,
   type RuntimeMode,
   type ServerProvider,
+  type ThreadId,
 } from "@t3tools/contracts";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ThreadContextInspectorButton } from "./ThreadContextInspectorButton";
 import type { EffortDisplay } from "@t3tools/contracts/settings";
 import { cn } from "~/lib/utils";
 import { resolveComposerTraitsInput } from "./composerProviderState";
@@ -42,6 +46,7 @@ const MODEL_TRIGGER_STATES = "data-popup-open:bg-accent data-popup-open:text-for
 
 export function ComposerControlsBar(props: {
   environmentId: EnvironmentId;
+  activeThreadId: ThreadId | null;
   workspaceCwd: string | null;
   routeKind: ChatComposerProps["routeKind"];
   routeThreadRef: ChatComposerProps["routeThreadRef"];
@@ -61,6 +66,10 @@ export function ComposerControlsBar(props: {
   defaultRuntimeMode: RuntimeMode | undefined;
   compatibleRuntimeModeOptions: ReadonlyArray<RuntimeModeOption>;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
+  interactionMode: ProviderInteractionMode;
+  showPlanModeToggle: boolean;
+  planReadOnlyEnforcement: "native" | "advisory" | "none";
+  handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
   composerControlsCollapsed: boolean;
   composerControlsHidden: boolean;
   restingHiddenBlockCount: number;
@@ -90,6 +99,7 @@ export function ComposerControlsBar(props: {
 }) {
   const {
     environmentId,
+    activeThreadId,
     routeKind,
     routeThreadRef,
     draftId,
@@ -105,6 +115,10 @@ export function ComposerControlsBar(props: {
     defaultRuntimeMode,
     compatibleRuntimeModeOptions,
     handleRuntimeModeChange,
+    interactionMode,
+    showPlanModeToggle,
+    planReadOnlyEnforcement,
+    handleInteractionModeChange,
     composerControlsCollapsed,
     composerControlsHidden,
     restingHiddenBlockCount: measuredHiddenBlockCount,
@@ -248,6 +262,19 @@ export function ComposerControlsBar(props: {
       onOpenProviderSetup={onOpenProviderSetup}
     />
   );
+  const isPlanMode = interactionMode === "plan";
+  const planModeTooltip = isPlanMode
+    ? planReadOnlyEnforcement === "advisory"
+      ? gt(
+          "Plan mode active (advisory read-only): T3 harness MCP write tools are blocked; native provider tools follow provider instructions. Click to return to Build mode.",
+        )
+      : gt(
+          "Plan mode active: read-only planning before implementation. Click to return to Build mode.",
+        )
+    : planReadOnlyEnforcement === "advisory"
+      ? gt("Switch to Plan mode (advisory read-only with structured plan output)")
+      : gt("Switch to Plan mode");
+
   return showProviderUnavailable ? (
     <ComposerControl
       type="button"
@@ -266,6 +293,49 @@ export function ComposerControlsBar(props: {
   ) : (
     <>
       {composerModelPicker}
+
+      {showPlanModeToggle && !composerControlsHidden ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <ComposerControl
+                type="button"
+                size={controlSize}
+                aria-pressed={isPlanMode}
+                aria-label={
+                  isPlanMode
+                    ? gt("Plan mode active, switch to Build mode")
+                    : gt("Switch to Plan mode")
+                }
+                data-composer-plan-mode={isPlanMode ? "plan" : "default"}
+                className={cn("shrink-0", isPlanMode && "bg-accent text-foreground")}
+                onClick={() => handleInteractionModeChange(isPlanMode ? "default" : "plan")}
+              />
+            }
+          >
+            <ComposerControlIcon
+              icon={MapIcon}
+              size={controlSize}
+              {...(isPlanMode ? { className: "text-current" } : {})}
+            />
+            <span data-composer-control-label>
+              {isPlanMode && planReadOnlyEnforcement === "advisory"
+                ? gt("Plan (advisory)")
+                : gt("Plan", { $context: "composer mode toggle" })}
+            </span>
+          </TooltipTrigger>
+          <TooltipPopup side="top">{planModeTooltip}</TooltipPopup>
+        </Tooltip>
+      ) : null}
+
+      {!composerControlsHidden && routeKind === "server" && activeThreadId !== null ? (
+        <ThreadContextInspectorButton
+          environmentId={environmentId}
+          threadId={activeThreadId}
+          interactionMode={interactionMode}
+          size={controlSize}
+        />
+      ) : null}
 
       <>
         {restingBlockDefs.map((def, index) => {

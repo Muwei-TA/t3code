@@ -48,6 +48,7 @@ import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { providerMessageTextWithAttachmentPaths } from "@t3tools/provider-core/server/attachmentPrompt";
 import { mcpToolPresentation } from "@t3tools/provider-core/server/mcpToolPresentation";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import { T3_CODE_HARNESS_PLAN_MODE_INSTRUCTIONS } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { parsePiCompactCommand, type PiCompactCommand } from "./commands.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -194,6 +195,16 @@ const PiProviderCapabilitiesV2 = {
     nativeTurnIds: "weak",
     nativeItemIds: "strong",
     nativeRequestIds: "strong",
+  },
+  harness: {
+    mcpPassthrough: "none",
+    mcpListChanged: false,
+    skillMount: "none",
+    systemContextMutableMidSession: true,
+    maxSystemContextBytes: null,
+    nativeToolHooks: false,
+    nativeAllowAlways: false,
+    planReadOnlyEnforcement: "advisory",
   },
 } satisfies OrchestrationV2ProviderCapabilities;
 
@@ -3536,12 +3547,17 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                     kind: "turn_start",
                   });
                 } else if (payload !== null) {
+                  const message =
+                    turnInput.runtimePolicy.interactionMode === "plan" &&
+                    !payload.message.trimStart().startsWith("/")
+                      ? `<t3_code_instructions>\n${T3_CODE_HARNESS_PLAN_MODE_INSTRUCTIONS}\n</t3_code_instructions>\n\n<user_request>\n${payload.message}\n</user_request>`
+                      : payload.message;
                   yield* sendPrompt({
                     providerTurnId: providerTurn.id,
                     kind: "turn_start",
                     record: {
                       type: "prompt",
-                      message: payload.message,
+                      message,
                       streamingBehavior: "steer",
                       ...(payload.images.length === 0 ? {} : { images: payload.images }),
                     },

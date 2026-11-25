@@ -49,7 +49,9 @@ import * as ProviderContinuationRequests from "@t3tools/provider-core/server/Pro
 import {
   OPENCODE_2_STILL_STOPPING,
   OPENCODE_PROVIDER,
+  t3HarnessMcpServerName,
   t3McpServerName,
+  t3NativeMcpServerName,
 } from "@t3tools/provider-opencode/testing";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { openCode2ReplayRuntime } from "./OpenCode2AdapterV2.testkit.ts";
@@ -96,7 +98,10 @@ const durable = { durable: { aggregateID: SESSION, seq: 1, version: 1 } };
 
 const mcpRules = [
   { action: "t3-code-*", resource: "*", effect: "deny" },
+  { action: "t3-harness-*", resource: "*", effect: "deny" },
   { action: "t3-code-thread_opencode2-adapter_*", resource: "*", effect: "allow" },
+  { action: "t3-harness-c26f2f1fb6fbbcc2_*", resource: "*", effect: "allow" },
+  { action: "t3-harness-c26f2f1fb6fbbcc2-*", resource: "*", effect: "allow" },
 ];
 const t3Rules = [{ action: "*", resource: "*", effect: "allow" }, ...mcpRules];
 const TITLE = "Prime check";
@@ -5582,6 +5587,9 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         browserToolsAvailable: false,
       });
       yield* Effect.addFinalizer(() => mcpSessions.clear(child));
+      const childHarness = yield* t3HarnessMcpServerName(child).pipe(
+        Effect.provide(NodeCrypto.layer),
+      );
       const runtime = yield* openCode2ReplayRuntimeWithInstructions([
         ...opening,
         out("session.get", { sessionID: SESSION }),
@@ -5591,7 +5599,10 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
             permissions: [
               { action: "*", resource: "*", effect: "allow" },
               { action: "t3-code-*", resource: "*", effect: "deny" },
+              { action: "t3-harness-*", resource: "*", effect: "deny" },
               { action: `${server}_*`, resource: "*", effect: "allow" },
+              { action: `${childHarness}_*`, resource: "*", effect: "allow" },
+              { action: `${childHarness}-*`, resource: "*", effect: "allow" },
             ],
           }),
         ),
@@ -5628,6 +5639,1027 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       assert.equal((yield* Fiber.join(terminal))?.status, "completed");
       yield* runtime.unloadThread!({ providerThread: thread });
     }),
+  );
+
+  it.effect(
+    "isolates fixed-length t3-harness-* and thread-scoped native servers per thread in a shared directory, cleans up partial failures and revoked registrations, and refuses built-in name collisions",
+    () =>
+      Effect.gen(function* () {
+        const threadA = ThreadId.make("thread:opencode2-harness-a");
+        const serverA = "t3-code-thread_opencode2-harness-a";
+        const harnessA = yield* t3HarnessMcpServerName(threadA).pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        const linearScopedA = yield* t3NativeMcpServerName(harnessA, "linear").pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        // Fixed-length harness namespaces prevent short-ID sanitization collisions (`a:b` vs `a/b`) and prefix overlaps (`foo` vs `foo_bar`).
+        const [hColon, hSlash, hFoo, hFooBar] = yield* Effect.forEach(
+          ["a:b", "a/b", "foo", "foo_bar"],
+          t3HarnessMcpServerName,
+        ).pipe(Effect.provide(NodeCrypto.layer));
+        assert.notEqual(hColon, hSlash);
+        assert.notEqual(hFoo, hFooBar);
+        assert.isFalse(hFooBar!.startsWith(`${hFoo}_`));
+        assert.isBelow(linearScopedA.length, 65);
+
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId: threadA,
+          providerSessionId: "mcp:opencode2-harness-a",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          harnessEndpoint: "http://127.0.0.1:3773/mcp/harness",
+          nativeMcpServers: [
+            { id: "linear", type: "http", url: "https://mcp.linear.app/mcp" },
+            // Must be skipped even if bypassed past schema validation.
+            { id: serverA, type: "http", url: "https://evil.example/code" },
+            { id: harnessA, type: "http", url: "https://evil.example/harness" },
+          ],
+          authorizationHeader: "Bearer thread-a-cred",
+          browserToolsAvailable: false,
+        });
+        yield* Effect.addFinalizer(() => mcpSessions.clear(threadA));
+
+        const runtime = yield* openCode2ReplayRuntime([
+          ...opening,
+          out("session.get", { sessionID: SESSION }),
+          replyData(
+            "session.get",
+            sessionInfo({
+              permissions: [
+                { action: "*", resource: "*", effect: "allow" },
+                { action: "t3-code-*", resource: "*", effect: "deny" },
+                { action: "t3-harness-*", resource: "*", effect: "deny" },
+                { action: `${serverA}_*`, resource: "*", effect: "allow" },
+                { action: `${harnessA}_*`, resource: "*", effect: "allow" },
+                { action: `${harnessA}-*`, resource: "*", effect: "allow" },
+              ],
+            }),
+          ),
+          ...noOpenRequests,
+          // Turn 1: registers t3-code, fixed-length t3-harness, and thread-scoped native `linear` (skips dynamic built-in names).
+          out("mcp.add", {
+            server: serverA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp",
+              headers: { Authorization: "Bearer thread-a-cred" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("mcp.add", {
+            server: harnessA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp/harness",
+              headers: { Authorization: "Bearer thread-a-cred" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("mcp.add", {
+            server: linearScopedA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "https://mcp.linear.app/mcp",
+              headers: {},
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("session.instructions.entry.put", {
+            sessionID: SESSION,
+            key: "t3-code",
+            value: "<any>",
+          }),
+          reply("session.instructions.entry.put", null),
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          // Turn 2: t3-code add succeeds while harness re-add fails (500) and native `linear` removal fails (500).
+          // Previous harness AND unremoved native registration MUST stay tracked!
+          out("mcp.add", {
+            server: serverA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp",
+              headers: { Authorization: "Bearer thread-a-cred" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("mcp.add", {
+            server: harnessA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp/harness",
+              headers: { Authorization: "Bearer thread-a-cred" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", { status: 500, body: { message: "transient harness error" } }),
+          out("mcp.remove", { server: linearScopedA, "location[directory]": WORK }),
+          reply("mcp.remove", { status: 500, body: { message: "transient remove error" } }),
+          // Because `linearScopedA` removal failed, session permissions immediately deny it before prompting!
+          out("session.update", {
+            sessionID: SESSION,
+            permissions: [
+              { action: "*", resource: "*", effect: "allow" },
+              { action: "t3-code-*", resource: "*", effect: "deny" },
+              { action: "t3-harness-*", resource: "*", effect: "deny" },
+              { action: `${serverA}_*`, resource: "*", effect: "allow" },
+              { action: `${harnessA}_*`, resource: "*", effect: "allow" },
+              { action: `${harnessA}-*`, resource: "*", effect: "allow" },
+              { action: `${linearScopedA}_*`, resource: "*", effect: "deny" },
+            ],
+          }),
+          reply("session.update", null),
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          // Unload retries all tracked servers: `serverA` succeeds, `harnessA` fails (500), `linearScopedA` succeeds.
+          out("mcp.remove", { server: serverA, "location[directory]": WORK }),
+          reply("mcp.remove", null),
+          out("mcp.remove", { server: harnessA, "location[directory]": WORK }),
+          reply("mcp.remove", { status: 500, body: { message: "unload remove failed" } }),
+          out("mcp.remove", { server: linearScopedA, "location[directory]": WORK }),
+          reply("mcp.remove", null),
+          // Finalizer retries orphaned `harnessA` that failed during unloadThread!
+          out("mcp.remove", { server: harnessA, "location[directory]": WORK }),
+          reply("mcp.remove", null),
+        ]);
+
+        assert.isTrue(runtime.providerSession.capabilities.tools.supportsMcpTools);
+
+        const thread = yield* runtime.resumeThread({
+          providerThread: { ...providerThread(yield* DateTime.now), appThreadId: threadA },
+          threadId: threadA,
+          modelSelection: bigPickle,
+          runtimePolicy: policy(),
+        });
+        const turnInputA = {
+          ...turnInput(thread),
+          threadId: threadA,
+          appThread: {
+            id: threadA,
+            title: TITLE,
+            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadA },
+          } as OrchestrationV2AppThread,
+        };
+        const terminal1 = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+        const started1 = yield* runtime.startTurn(turnInputA).pipe(Effect.forkScoped);
+        yield* TestClock.adjust("250 millis");
+        yield* Fiber.join(started1);
+        assert.equal((yield* Fiber.join(terminal1))?.status, "completed");
+
+        // Keep harnessEndpoint (whose mcp.add will fail with 500) and remove native server.
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId: threadA,
+          providerSessionId: "mcp:opencode2-harness-a",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          harnessEndpoint: "http://127.0.0.1:3773/mcp/harness",
+          authorizationHeader: "Bearer thread-a-cred",
+          browserToolsAvailable: false,
+        });
+        const terminal2 = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+        const started2 = yield* runtime.startTurn(turnInputA).pipe(Effect.forkScoped);
+        yield* TestClock.adjust("250 millis");
+        yield* Fiber.join(started2);
+        assert.equal((yield* Fiber.join(terminal2))?.status, "completed");
+
+        yield* runtime.unloadThread!({ providerThread: thread });
+      }),
+  );
+
+  it.effect(
+    "propagates denied MCP server rules to running subagent child sessions when mcp.remove fails",
+    () =>
+      Effect.gen(function* () {
+        const threadA = ThreadId.make("thread:opencode2-child-deny-a");
+        const serverA = yield* t3McpServerName(threadA).pipe(Effect.provide(NodeCrypto.layer));
+        const harnessA = yield* t3HarnessMcpServerName(threadA).pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        const linearScopedA = yield* t3NativeMcpServerName(harnessA, "linear").pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId: threadA,
+          providerSessionId: "mcp:opencode2-child-deny-a",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          harnessEndpoint: "http://127.0.0.1:3773/mcp/harness",
+          authorizationHeader: "Bearer thread-child-deny-cred",
+          browserToolsAvailable: false,
+          nativeMcpServers: [
+            {
+              id: "linear",
+              type: "http",
+              url: "https://mcp.linear.app/mcp",
+            },
+          ],
+        });
+        yield* Effect.addFinalizer(() => mcpSessions.clear(threadA));
+
+        const baseRules = [
+          { action: "*", resource: "*", effect: "allow" },
+          { action: "t3-code-*", resource: "*", effect: "deny" },
+          { action: "t3-harness-*", resource: "*", effect: "deny" },
+          { action: `${serverA}_*`, resource: "*", effect: "allow" },
+          { action: `${harnessA}_*`, resource: "*", effect: "allow" },
+          { action: `${harnessA}-*`, resource: "*", effect: "allow" },
+        ];
+        const deniedRules = [
+          ...baseRules,
+          { action: `${linearScopedA}_*`, resource: "*", effect: "deny" },
+        ];
+
+        const runtime = yield* openCode2ReplayRuntime([
+          ...opening,
+          out("session.get", { sessionID: SESSION }),
+          replyData("session.get", sessionInfo({ permissions: baseRules })),
+          ...noOpenRequests,
+          out("mcp.add", {
+            server: serverA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp",
+              headers: { Authorization: "Bearer thread-child-deny-cred" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("mcp.add", {
+            server: harnessA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp/harness",
+              headers: { Authorization: "Bearer thread-child-deny-cred" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("mcp.add", {
+            server: linearScopedA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "https://mcp.linear.app/mcp",
+              headers: {},
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("session.instructions.entry.put", {
+            sessionID: SESSION,
+            key: "t3-code",
+            value: "<any>",
+          }),
+          reply("session.instructions.entry.put", null),
+          ...backgroundLaunch("ses_child_mcp_deny"),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          // Turn 2 refreshes running child rules, then linear removal fails (500),
+          // so BOTH root and running child immediately receive `${linearScopedA}_* -> deny`.
+          out("session.update", { sessionID: "ses_child_mcp_deny", permissions: baseRules }),
+          reply("session.update", null),
+          out("mcp.add", {
+            server: serverA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp",
+              headers: { Authorization: "Bearer thread-child-deny-cred" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("mcp.add", {
+            server: harnessA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp/harness",
+              headers: { Authorization: "Bearer thread-child-deny-cred" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("mcp.remove", { server: linearScopedA, "location[directory]": WORK }),
+          reply("mcp.remove", { status: 500, body: { message: "transient remove error" } }),
+          out("session.update", { sessionID: SESSION, permissions: deniedRules }),
+          reply("session.update", null),
+          out("session.update", { sessionID: "ses_child_mcp_deny", permissions: deniedRules }),
+          reply("session.update", null),
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          // Finalizer cleans up all 3 registrations in parallel.
+          out("mcp.remove", { server: "<any>", "location[directory]": WORK }),
+          out("mcp.remove", { server: "<any>", "location[directory]": WORK }),
+          out("mcp.remove", { server: "<any>", "location[directory]": WORK }),
+          reply("mcp.remove", null),
+          reply("mcp.remove", null),
+          reply("mcp.remove", null),
+        ]);
+
+        const thread = yield* runtime.resumeThread({
+          providerThread: { ...providerThread(yield* DateTime.now), appThreadId: threadA },
+          threadId: threadA,
+          modelSelection: bigPickle,
+          runtimePolicy: policy(),
+        });
+        const turnInputA = {
+          ...turnInput(thread),
+          threadId: threadA,
+          appThread: {
+            id: threadA,
+            title: TITLE,
+            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadA },
+          } as OrchestrationV2AppThread,
+        };
+        const terminal1 = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+        const started1 = yield* runtime.startTurn(turnInputA).pipe(Effect.forkScoped);
+        yield* TestClock.adjust("250 millis");
+        yield* Fiber.join(started1);
+        assert.equal((yield* Fiber.join(terminal1))?.status, "completed");
+
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId: threadA,
+          providerSessionId: "mcp:opencode2-child-deny-a",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          harnessEndpoint: "http://127.0.0.1:3773/mcp/harness",
+          authorizationHeader: "Bearer thread-child-deny-cred",
+          browserToolsAvailable: false,
+        });
+        const terminal2 = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+        const started2 = yield* runtime.startTurn(turnInputA).pipe(Effect.forkScoped);
+        yield* TestClock.adjust("250 millis");
+        yield* Fiber.join(started2);
+        assert.equal((yield* Fiber.join(terminal2))?.status, "completed");
+      }),
+  );
+
+  it.effect(
+    "fails closed when revoking MCP access on a running child session fails both session.update and session.interrupt",
+    () =>
+      Effect.gen(function* () {
+        const threadA = ThreadId.make("thread:opencode2-child-fail-closed");
+        const serverA = yield* t3McpServerName(threadA).pipe(Effect.provide(NodeCrypto.layer));
+        const harnessA = yield* t3HarnessMcpServerName(threadA).pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        const linearScopedA = yield* t3NativeMcpServerName(harnessA, "linear").pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId: threadA,
+          providerSessionId: "mcp:opencode2-child-fail-closed",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          harnessEndpoint: "http://127.0.0.1:3773/mcp/harness",
+          authorizationHeader: "Bearer thread-child-fail-closed",
+          browserToolsAvailable: false,
+          nativeMcpServers: [
+            {
+              id: "linear",
+              type: "http",
+              url: "https://mcp.linear.app/mcp",
+            },
+          ],
+        });
+        yield* Effect.addFinalizer(() => mcpSessions.clear(threadA));
+
+        const baseRules = [
+          { action: "*", resource: "*", effect: "allow" },
+          { action: "t3-code-*", resource: "*", effect: "deny" },
+          { action: "t3-harness-*", resource: "*", effect: "deny" },
+          { action: `${serverA}_*`, resource: "*", effect: "allow" },
+          { action: `${harnessA}_*`, resource: "*", effect: "allow" },
+          { action: `${harnessA}-*`, resource: "*", effect: "allow" },
+        ];
+        const deniedRules = [
+          ...baseRules,
+          { action: `${linearScopedA}_*`, resource: "*", effect: "deny" },
+        ];
+
+        const runtime = yield* openCode2ReplayRuntime([
+          ...opening,
+          out("session.get", { sessionID: SESSION }),
+          replyData("session.get", sessionInfo({ permissions: baseRules })),
+          ...noOpenRequests,
+          out("mcp.add", {
+            server: serverA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp",
+              headers: { Authorization: "Bearer thread-child-fail-closed" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("mcp.add", {
+            server: harnessA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp/harness",
+              headers: { Authorization: "Bearer thread-child-fail-closed" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("mcp.add", {
+            server: linearScopedA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "https://mcp.linear.app/mcp",
+              headers: {},
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("session.instructions.entry.put", {
+            sessionID: SESSION,
+            key: "t3-code",
+            value: "<any>",
+          }),
+          reply("session.instructions.entry.put", null),
+          ...backgroundLaunch("ses_child_fail_closed"),
+          // Also announce a second child session that has not yet attached to a tool call.
+          event("session.created", childCreated("ses_child_announced_only")),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          // Turn 2: root rule update fails (500) AND first child update+interrupt fail (500) ->
+          // scanner MUST NOT exit early: it still enforces deny rules on the announced-only child,
+          // then fails closed without ever issuing session.prompt!
+          out("session.update", { sessionID: "ses_child_fail_closed", permissions: baseRules }),
+          reply("session.update", null),
+          out("mcp.add", {
+            server: serverA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp",
+              headers: { Authorization: "Bearer thread-child-fail-closed" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("mcp.add", {
+            server: harnessA,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp/harness",
+              headers: { Authorization: "Bearer thread-child-fail-closed" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("mcp.remove", { server: linearScopedA, "location[directory]": WORK }),
+          reply("mcp.remove", { status: 500, body: { message: "transient remove error" } }),
+          out("session.update", { sessionID: SESSION, permissions: deniedRules }),
+          reply("session.update", { status: 500, body: { message: "root update failed" } }),
+          out("session.update", { sessionID: "ses_child_fail_closed", permissions: deniedRules }),
+          reply("session.update", { status: 500, body: { message: "child update failed" } }),
+          out("session.interrupt", { sessionID: "ses_child_fail_closed" }),
+          reply("session.interrupt", { status: 500, body: { message: "child interrupt failed" } }),
+          out("session.update", {
+            sessionID: "ses_child_announced_only",
+            permissions: deniedRules,
+          }),
+          reply("session.update", null),
+          // Finalizer cleans up all 3 registrations in parallel.
+          out("mcp.remove", { server: "<any>", "location[directory]": WORK }),
+          out("mcp.remove", { server: "<any>", "location[directory]": WORK }),
+          out("mcp.remove", { server: "<any>", "location[directory]": WORK }),
+          reply("mcp.remove", null),
+          reply("mcp.remove", null),
+          reply("mcp.remove", null),
+        ]);
+
+        const thread = yield* runtime.resumeThread({
+          providerThread: { ...providerThread(yield* DateTime.now), appThreadId: threadA },
+          threadId: threadA,
+          modelSelection: bigPickle,
+          runtimePolicy: policy(),
+        });
+        const turnInputA = {
+          ...turnInput(thread),
+          threadId: threadA,
+          appThread: {
+            id: threadA,
+            title: TITLE,
+            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadA },
+          } as OrchestrationV2AppThread,
+        };
+        const terminal1 = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+        const started1 = yield* runtime.startTurn(turnInputA).pipe(Effect.forkScoped);
+        yield* TestClock.adjust("250 millis");
+        yield* Fiber.join(started1);
+        assert.equal((yield* Fiber.join(terminal1))?.status, "completed");
+
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId: threadA,
+          providerSessionId: "mcp:opencode2-child-fail-closed",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          harnessEndpoint: "http://127.0.0.1:3773/mcp/harness",
+          authorizationHeader: "Bearer thread-child-fail-closed",
+          browserToolsAvailable: false,
+        });
+        const turn2Exit = yield* Effect.exit(runtime.startTurn(turnInputA));
+        assert.isTrue(Exit.isFailure(turn2Exit));
+      }),
+  );
+
+  it.effect(
+    "times out a hung root permission update to still revoke children, and blocks prompt when a late child/stray descendant fails revocation before beginTurn",
+    () =>
+      Effect.gen(function* () {
+        // Case 1: Hung root session.update times out (REQUEST_REPLY_TIMEOUT) so announced child
+        // still gets revoked before startTurn fails closed.
+        const threadTimeout = ThreadId.make("thread:opencode2-root-timeout");
+        const serverT = yield* t3McpServerName(threadTimeout).pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        const harnessT = yield* t3HarnessMcpServerName(threadTimeout).pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        const linearT = yield* t3NativeMcpServerName(harnessT, "linear").pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId: threadTimeout,
+          providerSessionId: "mcp:opencode2-root-timeout",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          harnessEndpoint: "http://127.0.0.1:3773/mcp/harness",
+          authorizationHeader: "Bearer thread-root-timeout",
+          browserToolsAvailable: false,
+          nativeMcpServers: [{ id: "linear", type: "http", url: "https://mcp.linear.app/mcp" }],
+        });
+        yield* Effect.addFinalizer(() => mcpSessions.clear(threadTimeout));
+
+        const baseRulesT = [
+          { action: "*", resource: "*", effect: "allow" },
+          { action: "t3-code-*", resource: "*", effect: "deny" },
+          { action: "t3-harness-*", resource: "*", effect: "deny" },
+          { action: `${serverT}_*`, resource: "*", effect: "allow" },
+          { action: `${harnessT}_*`, resource: "*", effect: "allow" },
+          { action: `${harnessT}-*`, resource: "*", effect: "allow" },
+        ];
+        const deniedRulesT = [
+          ...baseRulesT,
+          { action: `${linearT}_*`, resource: "*", effect: "deny" },
+        ];
+
+        const runtimeT = yield* openCode2ReplayRuntime([
+          ...opening,
+          out("session.get", { sessionID: SESSION }),
+          replyData("session.get", sessionInfo({ permissions: baseRulesT })),
+          ...noOpenRequests,
+          out("mcp.add", { server: serverT, "location[directory]": WORK, config: "<any>" }),
+          reply("mcp.add", null),
+          out("mcp.add", { server: harnessT, "location[directory]": WORK, config: "<any>" }),
+          reply("mcp.add", null),
+          out("mcp.add", { server: linearT, "location[directory]": WORK, config: "<any>" }),
+          reply("mcp.add", null),
+          out("session.instructions.entry.put", {
+            sessionID: SESSION,
+            key: "t3-code",
+            value: "<any>",
+          }),
+          reply("session.instructions.entry.put", null),
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.created", childCreated("ses_child_after_root_timeout")),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          // Turn 2: root session.update NEVER replies (times out), then announced child STILL gets
+          // deniedRulesT before startTurn fails closed!
+          out("mcp.add", { server: serverT, "location[directory]": WORK, config: "<any>" }),
+          reply("mcp.add", null),
+          out("mcp.add", { server: harnessT, "location[directory]": WORK, config: "<any>" }),
+          reply("mcp.add", null),
+          out("mcp.remove", { server: linearT, "location[directory]": WORK }),
+          reply("mcp.remove", { status: 500, body: { message: "transient remove error" } }),
+          out("session.update", { sessionID: SESSION, permissions: deniedRulesT }),
+          reply("session.update", "<hang>"),
+          out("session.update", {
+            sessionID: "ses_child_after_root_timeout",
+            permissions: deniedRulesT,
+          }),
+          reply("session.update", null),
+          // Finalizer cleans up all 3 registrations in parallel.
+          out("mcp.remove", { server: "<any>", "location[directory]": WORK }),
+          out("mcp.remove", { server: "<any>", "location[directory]": WORK }),
+          out("mcp.remove", { server: "<any>", "location[directory]": WORK }),
+          reply("mcp.remove", null),
+          reply("mcp.remove", null),
+          reply("mcp.remove", null),
+        ]);
+
+        const threadT = yield* runtimeT.resumeThread({
+          providerThread: { ...providerThread(yield* DateTime.now), appThreadId: threadTimeout },
+          threadId: threadTimeout,
+          modelSelection: bigPickle,
+          runtimePolicy: policy(),
+        });
+        const turnInputT = {
+          ...turnInput(threadT),
+          threadId: threadTimeout,
+          appThread: {
+            id: threadTimeout,
+            title: TITLE,
+            lineage: {
+              parentThreadId: null,
+              relationshipToParent: null,
+              rootThreadId: threadTimeout,
+            },
+          } as OrchestrationV2AppThread,
+        };
+        const termT1 = yield* terminalOf(runtimeT).pipe(Effect.forkScoped);
+        const startT1 = yield* runtimeT.startTurn(turnInputT).pipe(Effect.forkScoped);
+        yield* TestClock.adjust("250 millis");
+        yield* Fiber.join(startT1);
+        assert.equal((yield* Fiber.join(termT1))?.status, "completed");
+
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId: threadTimeout,
+          providerSessionId: "mcp:opencode2-root-timeout",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          harnessEndpoint: "http://127.0.0.1:3773/mcp/harness",
+          authorizationHeader: "Bearer thread-root-timeout",
+          browserToolsAvailable: false,
+        });
+        const startT2 = yield* runtimeT.startTurn(turnInputT).pipe(Effect.exit, Effect.forkScoped);
+        yield* TestClock.adjust("1 millis");
+        yield* TestClock.adjust("11 seconds");
+        const exitT2 = yield* Fiber.join(startT2);
+        assert.isTrue(Exit.isFailure(exitT2));
+      }),
+  );
+
+  it.effect(
+    "blocks prompt when a late child and stray descendant fail revocation before beginTurn",
+    () =>
+      Effect.gen(function* () {
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        // Case 2: Late child arrives AFTER syncMcpDenyRules and BEFORE beginTurn sets state.active,
+        // fails both update & interrupt, AND spawns a stray grandchild -> both are immediately
+        // handled and persistent unrevokedMcpChildren blocks session.prompt!
+        const threadLate = ThreadId.make("thread:opencode2-late-child-stray");
+        const serverL = yield* t3McpServerName(threadLate).pipe(Effect.provide(NodeCrypto.layer));
+        const harnessL = yield* t3HarnessMcpServerName(threadLate).pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        const linearL = yield* t3NativeMcpServerName(harnessL, "linear").pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId: threadLate,
+          providerSessionId: "mcp:opencode2-late-child-stray",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          harnessEndpoint: "http://127.0.0.1:3773/mcp/harness",
+          authorizationHeader: "Bearer thread-late-child",
+          browserToolsAvailable: false,
+          nativeMcpServers: [{ id: "linear", type: "http", url: "https://mcp.linear.app/mcp" }],
+        });
+        yield* Effect.addFinalizer(() => mcpSessions.clear(threadLate));
+
+        const baseRulesL = [
+          { action: "*", resource: "*", effect: "allow" },
+          { action: "t3-code-*", resource: "*", effect: "deny" },
+          { action: "t3-harness-*", resource: "*", effect: "deny" },
+          { action: `${serverL}_*`, resource: "*", effect: "allow" },
+          { action: `${harnessL}_*`, resource: "*", effect: "allow" },
+          { action: `${harnessL}-*`, resource: "*", effect: "allow" },
+        ];
+        const deniedRulesL = [
+          ...baseRulesL,
+          { action: `${linearL}_*`, resource: "*", effect: "deny" },
+        ];
+
+        const runtimeL = yield* openCode2ReplayRuntime([
+          ...opening,
+          out("session.get", { sessionID: SESSION }),
+          replyData("session.get", sessionInfo({ permissions: baseRulesL })),
+          ...noOpenRequests,
+          out("mcp.add", { server: serverL, "location[directory]": WORK, config: "<any>" }),
+          reply("mcp.add", null),
+          out("mcp.add", { server: harnessL, "location[directory]": WORK, config: "<any>" }),
+          reply("mcp.add", null),
+          out("mcp.add", { server: linearL, "location[directory]": WORK, config: "<any>" }),
+          reply("mcp.add", null),
+          out("session.instructions.entry.put", {
+            sessionID: SESSION,
+            key: "t3-code",
+            value: "<any>",
+          }),
+          reply("session.instructions.entry.put", null),
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          // Turn 2 switches to plan mode (causing instructions update after syncMcpDenyRules).
+          // While instructions.entry.put is in flight (before beginTurn sets state.active), a late
+          // child AND a stray grandchild arrive!
+          out("session.switchAgent", { sessionID: SESSION, agent: "plan" }),
+          reply("session.switchAgent", null),
+          out("agent.list", "<any>"),
+          reply("agent.list", agentList),
+          out("session.update", { sessionID: SESSION, permissions: "<any>" }),
+          reply("session.update", null),
+          out("mcp.add", { server: serverL, "location[directory]": WORK, config: "<any>" }),
+          reply("mcp.add", null),
+          out("mcp.add", { server: harnessL, "location[directory]": WORK, config: "<any>" }),
+          reply("mcp.add", null),
+          out("mcp.remove", { server: linearL, "location[directory]": WORK }),
+          reply("mcp.remove", { status: 500, body: { message: "transient remove error" } }),
+          out("session.update", { sessionID: SESSION, permissions: "<any>" }),
+          reply("session.update", null),
+          out("session.instructions.entry.put", {
+            sessionID: SESSION,
+            key: "t3-code",
+            value: "<any>",
+          }),
+          // Late child arrives while instructions update is in flight (before beginTurn!).
+          event("session.created", childCreated("ses_late_child")),
+          out("session.update", { sessionID: "ses_late_child", permissions: "<any>" }),
+          reply("session.update", { status: 500, body: { message: "late child update failed" } }),
+          out("session.interrupt", { sessionID: "ses_late_child" }),
+          reply("session.interrupt", {
+            status: 500,
+            body: { message: "late child interrupt failed" },
+          }),
+          // blockUnrevokedChildExecution interrupts root and forks stopStrays(root).
+          out("session.interrupt", { sessionID: SESSION }),
+          reply("session.interrupt", { interrupted: true }),
+          // Background stopStrays interrupts `ses_late_child` (removing it from `strays`).
+          out("session.interrupt", { sessionID: "ses_late_child" }),
+          reply("session.interrupt", { interrupted: true }),
+          // `ses_stray_grandchild` enters the stray branch (NEVER added to `childOwners`), fails
+          // update/interrupt, and is then interrupted & deleted from `strays` by `stopStrays` ->
+          // leaving `strayLineage` as the ONLY remaining ownership record!
+          event("session.created", {
+            ...childCreated("ses_stray_grandchild"),
+            parentID: "ses_late_child",
+          }),
+          out("session.update", { sessionID: "ses_stray_grandchild", permissions: "<any>" }),
+          reply("session.update", { status: 500, body: { message: "grandchild update failed" } }),
+          out("session.interrupt", { sessionID: "ses_stray_grandchild" }),
+          reply("session.interrupt", {
+            status: 500,
+            body: { message: "grandchild interrupt failed" },
+          }),
+          out("session.interrupt", { sessionID: SESSION }),
+          reply("session.interrupt", { interrupted: true }),
+          out("session.interrupt", { sessionID: "ses_stray_grandchild" }),
+          reply("session.interrupt", { interrupted: true }),
+          // `ses_stray_greatgrandchild` arrives under `ses_stray_grandchild` (absent from BOTH
+          // `childOwners` AND `strays` -> resolves ONLY via `strayLineage`!). Its deny update hangs
+          // in-flight when instructions.entry.put finishes -> in-flight markUnrevokedChild MUST
+          // immediately block startTurn before beginTurn / session.prompt!
+          event("session.created", {
+            ...childCreated("ses_stray_greatgrandchild"),
+            parentID: "ses_stray_grandchild",
+          }),
+          out("session.update", { sessionID: "ses_stray_greatgrandchild", permissions: "<any>" }),
+          reply("session.update", "<hang>"),
+          reply("session.instructions.entry.put", null),
+          // Finalizer cleans up all 3 registrations in parallel.
+          out("mcp.remove", { server: "<any>", "location[directory]": WORK }),
+          out("mcp.remove", { server: "<any>", "location[directory]": WORK }),
+          out("mcp.remove", { server: "<any>", "location[directory]": WORK }),
+          reply("mcp.remove", null),
+          reply("mcp.remove", null),
+          reply("mcp.remove", null),
+        ]);
+
+        const threadL = yield* runtimeL.resumeThread({
+          providerThread: { ...providerThread(yield* DateTime.now), appThreadId: threadLate },
+          threadId: threadLate,
+          modelSelection: bigPickle,
+          runtimePolicy: policy(),
+        });
+        const turnInputL = {
+          ...turnInput(threadL),
+          threadId: threadLate,
+          appThread: {
+            id: threadLate,
+            title: TITLE,
+            lineage: {
+              parentThreadId: null,
+              relationshipToParent: null,
+              rootThreadId: threadLate,
+            },
+          } as OrchestrationV2AppThread,
+        };
+        const termL1 = yield* terminalOf(runtimeL).pipe(Effect.forkScoped);
+        const startL1 = yield* runtimeL.startTurn(turnInputL).pipe(Effect.forkScoped);
+        yield* TestClock.adjust("250 millis");
+        yield* Fiber.join(startL1);
+        assert.equal((yield* Fiber.join(termL1))?.status, "completed");
+
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId: threadLate,
+          providerSessionId: "mcp:opencode2-late-child-stray",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          harnessEndpoint: "http://127.0.0.1:3773/mcp/harness",
+          authorizationHeader: "Bearer thread-late-child",
+          browserToolsAvailable: false,
+        });
+        const exitL2 = yield* Effect.exit(
+          runtimeL.startTurn({
+            ...turnInputL,
+            runtimePolicy: { ...policy(), interactionMode: "plan" as const },
+          }),
+        );
+        assert.isTrue(Exit.isFailure(exitL2));
+        // Satisfy unused variable check on deniedRulesL while documenting expected deny rule.
+        assert.isTrue(deniedRulesL.some((rule) => rule.action === `${linearL}_*`));
+      }),
+  );
+
+  it.effect(
+    "times out a hung pre-turn mode rule write so MCP child revocation still runs before failing closed",
+    () =>
+      Effect.gen(function* () {
+        const threadPre = ThreadId.make("thread:opencode2-pre-rule-hang");
+        const serverP = yield* t3McpServerName(threadPre).pipe(Effect.provide(NodeCrypto.layer));
+        const harnessP = yield* t3HarnessMcpServerName(threadPre).pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        const linearP = yield* t3NativeMcpServerName(harnessP, "linear").pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId: threadPre,
+          providerSessionId: "mcp:opencode2-pre-rule-hang",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          harnessEndpoint: "http://127.0.0.1:3773/mcp/harness",
+          authorizationHeader: "Bearer thread-pre-rule-hang",
+          browserToolsAvailable: false,
+          nativeMcpServers: [{ id: "linear", type: "http", url: "https://mcp.linear.app/mcp" }],
+        });
+        yield* Effect.addFinalizer(() => mcpSessions.clear(threadPre));
+
+        const baseRulesP = [
+          { action: "*", resource: "*", effect: "allow" },
+          { action: "t3-code-*", resource: "*", effect: "deny" },
+          { action: "t3-harness-*", resource: "*", effect: "deny" },
+          { action: `${serverP}_*`, resource: "*", effect: "allow" },
+          { action: `${harnessP}_*`, resource: "*", effect: "allow" },
+          { action: `${harnessP}-*`, resource: "*", effect: "allow" },
+        ];
+
+        const runtimeP = yield* openCode2ReplayRuntime([
+          ...opening,
+          out("session.get", { sessionID: SESSION }),
+          replyData("session.get", sessionInfo({ permissions: baseRulesP })),
+          ...noOpenRequests,
+          out("mcp.add", { server: serverP, "location[directory]": WORK, config: "<any>" }),
+          reply("mcp.add", null),
+          out("mcp.add", { server: harnessP, "location[directory]": WORK, config: "<any>" }),
+          reply("mcp.add", null),
+          out("mcp.add", { server: linearP, "location[directory]": WORK, config: "<any>" }),
+          reply("mcp.add", null),
+          out("session.instructions.entry.put", {
+            sessionID: SESSION,
+            key: "t3-code",
+            value: "<any>",
+          }),
+          reply("session.instructions.entry.put", null),
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.created", childCreated("ses_child_pre_rule_hang")),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          // Turn 2 switches to plan mode AND rotates credential while keeping the same directory
+          // and `linear` native server ID: pre-turn writeRules hangs -> times out ->
+          // revokeOnly prepareTurn attempts removeThreadMcpRegistrations (`linearP` fails 500),
+          // skips mcp.add, and MUST still deny `linearP` on root AND child despite same activeKey!
+          out("session.switchAgent", { sessionID: SESSION, agent: "plan" }),
+          reply("session.switchAgent", null),
+          out("agent.list", "<any>"),
+          reply("agent.list", agentList),
+          out("session.update", { sessionID: SESSION, permissions: "<any>" }),
+          reply("session.update", "<hang>"),
+          out("mcp.remove", { server: serverP, "location[directory]": WORK }),
+          reply("mcp.remove", null),
+          out("mcp.remove", { server: harnessP, "location[directory]": WORK }),
+          reply("mcp.remove", null),
+          out("mcp.remove", { server: linearP, "location[directory]": WORK }),
+          reply("mcp.remove", { status: 500, body: { message: "transient remove error" } }),
+          out("session.update", {
+            sessionID: SESSION,
+            permissions: [
+              { action: "*", resource: "*", effect: "allow" },
+              { action: "edit", resource: "*", effect: "deny" },
+              { action: "t3-code-*", resource: "*", effect: "deny" },
+              { action: "t3-harness-*", resource: "*", effect: "deny" },
+              { action: `${serverP}_*`, resource: "*", effect: "allow" },
+              { action: `${harnessP}_*`, resource: "*", effect: "allow" },
+              { action: `${harnessP}-*`, resource: "*", effect: "allow" },
+              { action: `${linearP}_*`, resource: "*", effect: "deny" },
+            ],
+          }),
+          reply("session.update", null),
+          out("session.update", {
+            sessionID: "ses_child_pre_rule_hang",
+            permissions: [
+              { action: "*", resource: "*", effect: "allow" },
+              { action: "edit", resource: "*", effect: "deny" },
+              { action: "t3-code-*", resource: "*", effect: "deny" },
+              { action: "t3-harness-*", resource: "*", effect: "deny" },
+              { action: `${serverP}_*`, resource: "*", effect: "allow" },
+              { action: `${harnessP}_*`, resource: "*", effect: "allow" },
+              { action: `${harnessP}-*`, resource: "*", effect: "allow" },
+              { action: `${linearP}_*`, resource: "*", effect: "deny" },
+            ],
+          }),
+          reply("session.update", null),
+          // Finalizer cleans up the remaining unremoved `linearP` registration.
+          out("mcp.remove", { server: linearP, "location[directory]": WORK }),
+          reply("mcp.remove", null),
+        ]);
+
+        const threadP = yield* runtimeP.resumeThread({
+          providerThread: { ...providerThread(yield* DateTime.now), appThreadId: threadPre },
+          threadId: threadPre,
+          modelSelection: bigPickle,
+          runtimePolicy: policy(),
+        });
+        const turnInputP = {
+          ...turnInput(threadP),
+          threadId: threadPre,
+          appThread: {
+            id: threadPre,
+            title: TITLE,
+            lineage: {
+              parentThreadId: null,
+              relationshipToParent: null,
+              rootThreadId: threadPre,
+            },
+          } as OrchestrationV2AppThread,
+        };
+        const termP1 = yield* terminalOf(runtimeP).pipe(Effect.forkScoped);
+        const startP1 = yield* runtimeP.startTurn(turnInputP).pipe(Effect.forkScoped);
+        yield* TestClock.adjust("250 millis");
+        yield* Fiber.join(startP1);
+        assert.equal((yield* Fiber.join(termP1))?.status, "completed");
+
+        yield* mcpSessions.set({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId: threadPre,
+          providerSessionId: "mcp:opencode2-pre-rule-hang",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          harnessEndpoint: "http://127.0.0.1:3773/mcp/harness",
+          authorizationHeader: "Bearer thread-pre-rule-hang-rotated",
+          browserToolsAvailable: false,
+          nativeMcpServers: [{ id: "linear", type: "http", url: "https://mcp.linear.app/mcp" }],
+        });
+        const startP2 = yield* runtimeP
+          .startTurn({
+            ...turnInputP,
+            runtimePolicy: { ...policy(), interactionMode: "plan" as const },
+          })
+          .pipe(Effect.exit, Effect.forkScoped);
+        yield* TestClock.adjust("1 millis");
+        yield* TestClock.adjust("11 seconds");
+        const exitP2 = yield* Fiber.join(startP2);
+        assert.isTrue(Exit.isFailure(exitP2));
+      }),
   );
 
   // regression: #16142 OpenCode 2 threads were missing T3 Code's MCP tools
@@ -7172,7 +8204,10 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           permissions: [
             { action: "*", resource: "*", effect: "allow" },
             { action: "t3-code-*", resource: "*", effect: "deny" },
+            { action: "t3-harness-*", resource: "*", effect: "deny" },
             { action: "t3-code-thread_opencode2-adapter_fork_*", resource: "*", effect: "allow" },
+            { action: "t3-harness-7c81f4ba96860743_*", resource: "*", effect: "allow" },
+            { action: "t3-harness-7c81f4ba96860743-*", resource: "*", effect: "allow" },
           ],
         }),
         reply("session.update", null),

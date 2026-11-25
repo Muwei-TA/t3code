@@ -70,7 +70,7 @@ export const loadedPolicy = Effect.fn("ManagedPolicy.loadedPolicy")(function* (
  */
 export function deniedBy(
   policy: Pick<ManagedPolicy["Service"], "document">,
-  capability: "webhookTasks" | "telemetry" | "previewTunnel",
+  capability: "webhookTasks" | "telemetry" | "previewTunnel" | "harness" | "harnessMcpStdio",
 ): string | undefined {
   return policy.document?.limits?.[capability] === false ? policy.document.organization : undefined;
 }
@@ -136,6 +136,8 @@ function summarizeLimits(
     telemetry,
     browserCookieImport,
     previewTunnel,
+    harness,
+    harnessMcpStdio,
     providers,
     updates,
   } = document.limits ?? {};
@@ -148,6 +150,8 @@ function summarizeLimits(
     ...(telemetry === undefined ? {} : { telemetry }),
     ...(browserCookieImport === undefined ? {} : { browserCookieImport }),
     ...(previewTunnel === undefined ? {} : { previewTunnel }),
+    ...(harness === undefined ? {} : { harness }),
+    ...(harnessMcpStdio === undefined ? {} : { harnessMcpStdio }),
     ...(providers?.allowedDrivers === undefined && Object.keys(lockedInstanceFields).length === 0
       ? {}
       : {

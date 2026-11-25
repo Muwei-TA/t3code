@@ -850,6 +850,39 @@ export function summarizeT3ToolCalls(
           );
       break;
     }
+    case "propose-plan": {
+      const count = selected.length;
+      label = done
+        ? resolve(
+            msg("{count, plural, one {Proposed {count} plan} other {Proposed {count} plans}}", {
+              count,
+            }),
+          )
+        : resolve(
+            msg(
+              "{count, plural, one {Tried to propose {count} plan} other {Tried to propose {count} plans}}",
+              { count },
+            ),
+          );
+      break;
+    }
+    case "harness-tool-search": {
+      const count = selected.length;
+      label = done
+        ? resolve(
+            msg(
+              "{count, plural, one {Searched harness tools {count} time} other {Searched harness tools {count} times}}",
+              { count },
+            ),
+          )
+        : resolve(
+            msg(
+              "{count, plural, one {Tried to search harness tools {count} time} other {Tried to search harness tools {count} times}}",
+              { count },
+            ),
+          );
+      break;
+    }
     case "thread-list": {
       const count = selected.length;
       label = done
