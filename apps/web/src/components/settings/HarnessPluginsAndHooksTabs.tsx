@@ -798,7 +798,7 @@ function HookEditorBody({
         </Button>
         <Button
           size="sm"
-          disabled={targetType === "command" && !canRunTerminal && existing?.enabled !== false}
+          disabled={targetType === "command" && !canRunTerminal}
           onClick={() => {
             const decodedId = decodeHookId(existing ? existing.id : id);
             if (decodedId._tag === "None") {

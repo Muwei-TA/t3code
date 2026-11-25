@@ -18,6 +18,8 @@ import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 import * as HarnessSyncService from "./HarnessSyncService.ts";
 
+vi.mock("node:child_process", { spy: true });
+
 function makeTestLayer(
   baseDir: string,
   paths: ServerConfig.ServerDerivedPaths,
@@ -329,6 +331,63 @@ describe("HarnessSyncService", () => {
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("uses the pushed resolution as the base for the next pull", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-harness-pull-base-" });
+      const paths = yield* ServerConfig.deriveServerPaths(root, undefined);
+      const remote = path.join(root, "remote.git");
+      const clone = path.join(root, "clone");
+      yield* Effect.promise(() => execGit(root, ["init", "--bare", "-b", "main", remote]));
+
+      yield* Effect.gen(function* () {
+        const sync = yield* HarnessSyncService.HarnessSyncService;
+        const { harnessDir } = yield* HarnessStore.HarnessStore;
+        const remoteUrl = TrimmedNonEmptyString.make(remote);
+        const branch = TrimmedNonEmptyString.make("main");
+        const push = Effect.gen(function* () {
+          const preview = yield* sync.previewPush();
+          expect(preview.canPush).toBe(true);
+          return yield* sync.push({
+            expectedRemoteUrl: remoteUrl,
+            expectedBranch: branch,
+            expectedTreeDigest: TrimmedNonEmptyString.make(preview.previewTreeDigest!),
+          });
+        });
+        const updateRemote = (body: string) =>
+          Effect.promise(async () => {
+            await NodeFSP.writeFile(path.join(clone, "AGENTS.md"), body);
+            await execGit(clone, ["add", "AGENTS.md"]);
+            await commit(clone, "Update instructions");
+            await execGit(clone, ["push", "origin", "main"]);
+          });
+
+        yield* sync.configureRemote({ remoteUrl, branch });
+        yield* fs.makeDirectory(harnessDir, { recursive: true });
+        const agentsPath = path.join(harnessDir, "AGENTS.md");
+        yield* fs.writeFileString(agentsPath, "Shared instructions\n");
+        expect((yield* push).pushed).toBe(true);
+        yield* Effect.promise(() => execGit(root, ["clone", remote, clone]));
+
+        yield* fs.writeFileString(agentsPath, "Local instructions\n");
+        yield* updateRemote("Remote instructions\n");
+        expect((yield* sync.pull()).conflicts).toEqual([
+          { path: "AGENTS.md", reason: "modified_both" },
+        ]);
+
+        yield* fs.writeFileString(agentsPath, "Resolved instructions\n");
+        expect((yield* push).pushed).toBe(true);
+        yield* Effect.promise(() => execGit(clone, ["pull", "--ff-only", "origin", "main"]));
+        yield* updateRemote("New remote instructions\n");
+        const pulled = yield* sync.pull();
+        expect(pulled.conflicts).toBeUndefined();
+        expect(pulled.updatedFiles).toEqual(["AGENTS.md"]);
+        expect(yield* fs.readFileString(agentsPath)).toBe("New remote instructions\n");
+      }).pipe(Effect.provide(makeTestLayer(root, paths)));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect(
     "blocks an earlier outbound secret and symlink even after both disappear from HEAD",
     () =>
@@ -360,6 +419,13 @@ describe("HarnessSyncService", () => {
             await execGit(checkout, ["add", "-A"]);
             await commit(checkout, "Clean version");
           });
+          const git = vi.mocked(NodeChildProcess.spawn);
+          git.mockClear();
+          const historyScans = () =>
+            git.mock.calls.filter(
+              ([command, args]) =>
+                command === "git" && args?.includes("rev-list") && !args.includes("--left-right"),
+            ).length;
           const preview = yield* sync.previewPush();
           expect(preview.canPush).toBe(false);
           expect(preview.secretFindings).toEqual(
@@ -368,11 +434,18 @@ describe("HarnessSyncService", () => {
               expect.objectContaining({ path: "memory/linked.md", rule: "unscannable-symlink" }),
             ]),
           );
+          expect(historyScans()).toBe(1);
+          yield* fs.makeDirectory(store.harnessDir, { recursive: true });
+          yield* fs.writeFileString(path.join(store.harnessDir, "AGENTS.md"), "Local edit\n");
+          const edited = yield* sync.previewPush();
+          expect(edited.previewTreeDigest).not.toBe(preview.previewTreeDigest);
+          expect(edited.secretFindings).toEqual(preview.secretFindings);
+          expect(historyScans()).toBe(1);
           const blocked = yield* sync
             .push({
               expectedRemoteUrl: TrimmedNonEmptyString.make(remote),
               expectedBranch: TrimmedNonEmptyString.make("main"),
-              expectedTreeDigest: TrimmedNonEmptyString.make(preview.previewTreeDigest!),
+              expectedTreeDigest: TrimmedNonEmptyString.make(edited.previewTreeDigest!),
             })
             .pipe(Effect.flip);
           expect(blocked.code).toBe("policy_denied");
@@ -408,14 +481,25 @@ describe("HarnessSyncService", () => {
           const unrelated = path.join(root, "unrelated.git");
           vi.stubEnv("GIT_DIR", unrelated);
           try {
-            const status = yield* sync.configureRemote({
-              remoteUrl: TrimmedNonEmptyString.make("https://example.com/harness.git"),
-            });
+            const remoteUrl = TrimmedNonEmptyString.make("https://example.com/harness.git");
+            const status = yield* sync.configureRemote({ remoteUrl });
             expect(status.initialized).toBe(true);
-            expect(
-              yield* fs.exists(path.join(path.dirname(store.harnessDir), "harness-sync", ".git")),
-            ).toBe(true);
+            const gitDir = path.join(path.dirname(store.harnessDir), "harness-sync", ".git");
+            expect(yield* fs.exists(gitDir)).toBe(true);
             expect(yield* fs.exists(unrelated)).toBe(false);
+            const pendingPath = path.join(gitDir, "t3-harness-pull-bases.json");
+            yield* fs.writeFileString(pendingPath, '{"AGENTS.md":null}');
+            yield* sync.configureRemote({ remoteUrl });
+            expect(yield* fs.exists(pendingPath)).toBe(true);
+            const branch = TrimmedNonEmptyString.make("next");
+            yield* sync.configureRemote({ remoteUrl, branch });
+            expect(yield* fs.exists(pendingPath)).toBe(false);
+            yield* fs.writeFileString(pendingPath, '{"AGENTS.md":null}');
+            yield* sync.configureRemote({
+              remoteUrl: TrimmedNonEmptyString.make("https://example.com/other.git"),
+              branch,
+            });
+            expect(yield* fs.exists(pendingPath)).toBe(false);
           } finally {
             vi.unstubAllEnvs();
           }

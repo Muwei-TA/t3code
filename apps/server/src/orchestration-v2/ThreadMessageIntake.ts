@@ -150,8 +150,8 @@ export const withQueuedAttachmentsOnSignOutText = Effect.fn(
 
 /**
  * `sender.managesProviders` is whether the caller holds `providers:manage`. RPC authorization
- * has already checked every command whose payload shows a provider sign-out; a queued edit
- * that keeps its attachments is the one case decided here.
+ * checks sign-outs visible in the payload. Intake checks guest text, expanded commands,
+ * and queued edits that can keep existing attachments.
  */
 export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
   function* (incoming: OrchestrationV2Command, sender: { readonly managesProviders: boolean }) {
@@ -194,22 +194,19 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
           detail: preprocessed.blockReason ?? "Turn blocked by turn.beforeStart hook.",
         });
       }
-      if (isGuest) {
-        return { command: input, guestText: preprocessed.text };
-      }
       const next = { ...input, text: preprocessed.text };
       if (!sender.managesProviders) {
         if (next.type === "queued-run.edit" && next.attachments === undefined) {
           return { command: yield* withQueuedAttachmentsOnSignOutText(next) };
         }
         if (
-          (next.type === "queued-run.edit" || preprocessed.text !== originalText) &&
+          (isGuest || next.type === "queued-run.edit" || preprocessed.text !== originalText) &&
           isProviderSignOutPrompt({ text: next.text, attachments: next.attachments ?? [] })
         ) {
           return yield* rpcAuthorizationError(AuthProvidersManageScope);
         }
       }
-      return { command: next };
+      return isGuest ? { command: input, guestText: preprocessed.text } : { command: next };
     });
     if (command.type === "runtime-request.respond" && command.attachmentsByQuestionId) {
       const config = yield* ServerConfig.ServerConfig;

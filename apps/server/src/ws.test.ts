@@ -2757,7 +2757,11 @@ const layerWorkflowRpcTest = Layer.mergeAll(
   Layer.mock(ServerBrowser.ServerBrowser)({}),
 );
 
-const hookMutationTags = [WS_METHODS.harnessHookUpsert, WS_METHODS.harnessHookSetEnabled] as const;
+const hookMutationTags = [
+  WS_METHODS.harnessHookUpsert,
+  WS_METHODS.harnessHookSetEnabled,
+  WS_METHODS.harnessHookRemove,
+] as const;
 const hookMutationRpcs = WsRpcGroup.omit(
   ...[...WsRpcGroup.requests.keys()].filter(
     (
@@ -2774,7 +2778,7 @@ const layerHookRpcTest = HarnessHooksService.layer.pipe(
   Layer.provideMerge(layerWorkflowRpcTest),
 );
 
-it.effect("requires terminal access only when saving or enabling an active command hook", () =>
+it.effect("requires terminal access to save or enable a command hook", () =>
   Effect.gen(function* () {
     const hooks = yield* HarnessHooksService.HarnessHooksService;
     const browser = yield* ServerBrowser.ServerBrowser;
@@ -2821,13 +2825,21 @@ it.effect("requires terminal access only when saving or enabling an active comma
       id: HarnessHookId.make("http-hook"),
       target: { type: "http", url: TrimmedNonEmptyString.make("https://example.com/hook") },
     } as const;
-    for (const payload of [commandHook, { ...commandHook, enabled: true }]) {
+    for (const payload of [
+      commandHook,
+      { ...commandHook, enabled: true },
+      { ...commandHook, enabled: false },
+    ]) {
       assert.strictEqual(
         (yield* settingsOnly[WS_METHODS.harnessHookUpsert](payload).pipe(Effect.flip))._tag,
         "EnvironmentAuthorizationError",
       );
     }
-    yield* settingsOnly[WS_METHODS.harnessHookUpsert]({ ...commandHook, enabled: false });
+    const inactive = yield* withTerminal[WS_METHODS.harnessHookUpsert]({
+      ...commandHook,
+      enabled: false,
+    });
+    assert.isFalse(inactive.hooks.find((hook) => hook.id === commandHook.id)?.enabled);
     const enable = { id: commandHook.id, enabled: true } as const;
     assert.strictEqual(
       (yield* settingsOnly[WS_METHODS.harnessHookSetEnabled](enable).pipe(Effect.flip))._tag,
@@ -2844,6 +2856,8 @@ it.effect("requires terminal access only when saving or enabling an active comma
       enabled: false,
     });
     assert.isFalse(disabled.hooks.find((hook) => hook.id === commandHook.id)?.enabled);
+    const removed = yield* settingsOnly[WS_METHODS.harnessHookRemove]({ id: commandHook.id });
+    assert.isFalse(removed.hooks.some((hook) => hook.id === commandHook.id));
     yield* settingsOnly[WS_METHODS.harnessHookUpsert]({ ...httpHook, enabled: false });
     const httpEnabled = yield* settingsOnly[WS_METHODS.harnessHookSetEnabled]({
       id: httpHook.id,

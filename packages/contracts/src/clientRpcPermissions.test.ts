@@ -11,8 +11,8 @@ describe("clientRpcRequiredScopes for hook changes", () => {
     target: { type: "command", command: "echo" },
   };
 
-  it("checks terminal access for a command hook that is active on save", () => {
-    for (const payload of [input, { ...input, enabled: true }]) {
+  it("checks terminal access for every command hook save", () => {
+    for (const payload of [input, { ...input, enabled: true }, { ...input, enabled: false }]) {
       expect(clientRpcRequiredScopes(WS_METHODS.harnessHookUpsert, payload)).toEqual([
         AuthSettingsWriteScope,
         AuthTerminalOperateScope,
@@ -20,10 +20,13 @@ describe("clientRpcRequiredScopes for hook changes", () => {
     }
   });
 
-  it("uses settings access for inactive command hooks and HTTP hooks", () => {
+  it("uses settings access for HTTP hook saves and for disabling or removing hooks", () => {
     expect(
-      clientRpcRequiredScopes(WS_METHODS.harnessHookUpsert, { ...input, enabled: false }),
+      clientRpcRequiredScopes(WS_METHODS.harnessHookSetEnabled, { id: input.id, enabled: false }),
     ).toEqual([AuthSettingsWriteScope]);
+    expect(clientRpcRequiredScopes(WS_METHODS.harnessHookRemove, { id: input.id })).toEqual([
+      AuthSettingsWriteScope,
+    ]);
     expect(
       clientRpcRequiredScopes(WS_METHODS.harnessHookUpsert, {
         ...input,

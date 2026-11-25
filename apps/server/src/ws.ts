@@ -4180,7 +4180,7 @@ export const layerWsRpc = (
           Option.match(harnessHooksOption, {
             onNone: () => harnessUnavailable("HarnessHooksService"),
             onSome: (hooks) =>
-              input.target.type === "command" && input.enabled !== false
+              input.target.type === "command"
                 ? authorizeEffect(
                     AuthSettingsWriteScope,
                     authorizeEffect(AuthTerminalOperateScope, hooks.upsertUserHook(input)),

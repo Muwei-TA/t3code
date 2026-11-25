@@ -346,6 +346,37 @@ describe("HarnessLibraryStore", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect(
+    "removes rule, command, mode, and AGENTS.md symlinks without deleting their target",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-library-removal-" });
+        const paths = yield* ServerConfig.deriveServerPaths(root, undefined);
+        yield* Effect.gen(function* () {
+          const lib = yield* HarnessLibraryStore.HarnessLibraryStore;
+          const { harnessDir } = yield* lib.getSnapshot();
+          const target = path.join(harnessDir, "original.md");
+          yield* fs.makeDirectory(harnessDir, { recursive: true });
+          yield* fs.writeFileString(target, "Original instructions\n");
+          for (const [relativeLink, remove] of [
+            ["rules/alias.md", lib.removeUserRule({ id: HarnessRuleId.make("alias") })],
+            ["commands/alias.md", lib.removeUserCommand({ id: HarnessCommandId.make("alias") })],
+            ["modes/alias.md", lib.removeUserMode({ id: HarnessModeId.make("alias") })],
+            ["AGENTS.md", lib.saveUserAgentsMd({ body: "" })],
+          ] as const) {
+            const link = path.join(harnessDir, relativeLink);
+            yield* fs.makeDirectory(path.dirname(link), { recursive: true });
+            yield* fs.symlink(target, link);
+            yield* remove;
+            expect(yield* fs.readFileString(target)).toBe("Original instructions\n");
+            expect(yield* fs.exists(link)).toBe(false);
+          }
+        }).pipe(Effect.provide(makeTestLayer(root, paths)));
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("blocks writes when ManagedPolicy disables harness", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

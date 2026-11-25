@@ -535,6 +535,37 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const removeLibraryEntry = Effect.fn("HarnessLibraryStore.removeLibraryEntry")(function* (
+    targetPath: string,
+    label: string,
+    options?: { readonly recursive?: boolean; readonly allowMissing?: boolean },
+  ) {
+    yield* Effect.tryPromise({
+      try: async () => {
+        const { resolvedTarget: parent } = await assertContainedNoSymlinks(
+          harnessDir,
+          path.dirname(targetPath),
+        );
+        const target = path.join(parent, path.basename(targetPath));
+        const stat = await NodeFSP.lstat(target);
+        if (options?.recursive && !stat.isSymbolicLink()) {
+          await NodeFSP.rm(target, { recursive: true, force: true });
+        } else {
+          await NodeFSP.unlink(target);
+        }
+      },
+      catch: (error) =>
+        typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"
+          ? new HarnessError({ code: "not_found", detail: `${label} was not found.` })
+          : new HarnessError({ code: "io_error", detail: `Failed to safely remove ${label}.` }),
+    }).pipe(
+      Effect.catchIf(
+        (error) => options?.allowMissing === true && error.code === "not_found",
+        () => Effect.void,
+      ),
+    );
+  });
+
   const assertPolicyAllows = Effect.fn("HarnessLibraryStore.assertPolicyAllows")(function* () {
     const overrides = yield* store.readProjectLibraryOverrides(undefined);
     if (!overrides.managedPolicyAllowsHarness) {
@@ -1026,15 +1057,7 @@ const make = Effect.gen(function* () {
     const targetPath = path.join(harnessDir, "AGENTS.md");
     yield* withLibraryWrite(
       body.trim().length === 0
-        ? fs.remove(targetPath, { force: true }).pipe(
-            Effect.mapError(
-              () =>
-                new HarnessError({
-                  code: "io_error",
-                  detail: "Failed to remove AGENTS.md.",
-                }),
-            ),
-          )
+        ? removeLibraryEntry(targetPath, "AGENTS.md", { allowMissing: true })
         : writeFileAtomic(targetPath, body.endsWith("\n") ? body : `${body}\n`),
     );
     return yield* getSnapshot(workspaceRoot);
@@ -1071,28 +1094,7 @@ const make = Effect.gen(function* () {
     yield* assertPolicyAllows();
     const skillDir = path.join(harnessDir, "skills", id);
     yield* withLibraryWrite(
-      Effect.tryPromise({
-        try: async () => {
-          const { resolvedTarget: parent } = await assertContainedNoSymlinks(
-            harnessDir,
-            path.dirname(skillDir),
-          );
-          const target = path.join(parent, id);
-          const stat = await NodeFSP.lstat(target);
-          if (stat.isSymbolicLink()) await NodeFSP.unlink(target);
-          else await NodeFSP.rm(target, { recursive: true, force: true });
-        },
-        catch: (error) =>
-          typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"
-            ? new HarnessError({
-                code: "not_found",
-                detail: `Portable skill "${id}" was not found.`,
-              })
-            : new HarnessError({
-                code: "io_error",
-                detail: `Failed to safely remove skill "${id}".`,
-              }),
-      }),
+      removeLibraryEntry(skillDir, `Portable skill "${id}"`, { recursive: true }),
     );
     yield* store.setLibraryItemDisabled({ kind: "skill", id, disabled: false }).pipe(Effect.ignore);
     return yield* getSnapshot(workspaceRoot);
@@ -1134,33 +1136,7 @@ const make = Effect.gen(function* () {
   )(function* ({ id, workspaceRoot }) {
     yield* assertPolicyAllows();
     const rulePath = path.join(harnessDir, "rules", `${id}.md`);
-    yield* withLibraryWrite(
-      Effect.gen(function* () {
-        const exists = yield* fs.exists(rulePath).pipe(Effect.orElseSucceed(() => false));
-        if (!exists) {
-          return yield* new HarnessError({
-            code: "not_found",
-            detail: `Portable rule "${id}" was not found.`,
-          });
-        }
-        const contained = yield* resolveContainedPath(harnessDir, rulePath);
-        if (contained === null) {
-          return yield* new HarnessError({
-            code: "invalid_config",
-            detail: `Rule path for "${id}" escapes the harness directory.`,
-          });
-        }
-        yield* fs.remove(contained, { force: true }).pipe(
-          Effect.mapError(
-            () =>
-              new HarnessError({
-                code: "io_error",
-                detail: `Failed to remove rule "${id}".`,
-              }),
-          ),
-        );
-      }),
-    );
+    yield* withLibraryWrite(removeLibraryEntry(rulePath, `Portable rule "${id}"`));
     yield* store.setLibraryItemDisabled({ kind: "rule", id, disabled: false }).pipe(Effect.ignore);
     return yield* getSnapshot(workspaceRoot);
   });
@@ -1206,33 +1182,7 @@ const make = Effect.gen(function* () {
   )(function* ({ id, workspaceRoot }) {
     yield* assertPolicyAllows();
     const commandPath = path.join(harnessDir, "commands", `${id}.md`);
-    yield* withLibraryWrite(
-      Effect.gen(function* () {
-        const exists = yield* fs.exists(commandPath).pipe(Effect.orElseSucceed(() => false));
-        if (!exists) {
-          return yield* new HarnessError({
-            code: "not_found",
-            detail: `Portable command "/${id}" was not found.`,
-          });
-        }
-        const contained = yield* resolveContainedPath(harnessDir, commandPath);
-        if (contained === null) {
-          return yield* new HarnessError({
-            code: "invalid_config",
-            detail: `Command path for "/${id}" escapes the harness directory.`,
-          });
-        }
-        yield* fs.remove(contained, { force: true }).pipe(
-          Effect.mapError(
-            () =>
-              new HarnessError({
-                code: "io_error",
-                detail: `Failed to remove command "/${id}".`,
-              }),
-          ),
-        );
-      }),
-    );
+    yield* withLibraryWrite(removeLibraryEntry(commandPath, `Portable command "/${id}"`));
     yield* store
       .setLibraryItemDisabled({ kind: "command", id, disabled: false })
       .pipe(Effect.ignore);
@@ -1622,33 +1572,7 @@ const make = Effect.gen(function* () {
   )(function* ({ id, workspaceRoot }) {
     yield* assertPolicyAllows();
     const modePath = path.join(harnessDir, "modes", `${id}.md`);
-    yield* withLibraryWrite(
-      Effect.gen(function* () {
-        const exists = yield* fs.exists(modePath).pipe(Effect.orElseSucceed(() => false));
-        if (!exists) {
-          return yield* new HarnessError({
-            code: "not_found",
-            detail: `Portable mode "${id}" was not found.`,
-          });
-        }
-        const contained = yield* resolveContainedPath(harnessDir, modePath);
-        if (contained === null) {
-          return yield* new HarnessError({
-            code: "invalid_config",
-            detail: `Mode path for "${id}" escapes the harness directory.`,
-          });
-        }
-        yield* fs.remove(contained, { force: true }).pipe(
-          Effect.mapError(
-            () =>
-              new HarnessError({
-                code: "io_error",
-                detail: `Failed to remove portable mode "${id}".`,
-              }),
-          ),
-        );
-      }),
-    );
+    yield* withLibraryWrite(removeLibraryEntry(modePath, `Portable mode "${id}"`));
     return yield* getSnapshot(workspaceRoot);
   });
 

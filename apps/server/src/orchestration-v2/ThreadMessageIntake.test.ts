@@ -510,6 +510,10 @@ it.effect("preprocesses guest sends and queued edits once per accepted command",
       id: HarnessCommandId.make("review-change"),
       body: "Review $ARGUMENTS",
     });
+    yield* library.upsertUserCommand({
+      id: HarnessCommandId.make("end-session"),
+      body: "/logout",
+    });
     const observed: Array<unknown> = [];
     const hookId = HarnessHookId.make("check-prompt");
     const pluginId = HarnessPluginId.make("intake-test");
@@ -604,8 +608,8 @@ it.effect("preprocesses guest sends and queued edits once per accepted command",
           return { sequence: 1, storedEvents: [] };
         }),
     });
-    const send = (command: OrchestrationV2Command) =>
-      dispatchCommand(command).pipe(Effect.provide(threadLayer));
+    const send = (command: OrchestrationV2Command, managesProviders = true) =>
+      dispatchCommand(command, { managesProviders }).pipe(Effect.provide(threadLayer));
 
     yield* Effect.all([send(guestCommand), send(guestCommand)], { concurrency: 2 });
     yield* Effect.all([send(edit), send(edit)], { concurrency: 2 });
@@ -624,6 +628,16 @@ it.effect("preprocesses guest sends and queued edits once per accepted command",
         detail: "Review is frozen",
       });
       expect(accepted.has(command.commandId)).toBe(false);
+    }
+
+    for (const text of ["/logout", "/end-session"]) {
+      guestMessageText = text;
+      const command = { ...guestCommand, commandId: CommandId.make(`guest-${text.slice(1)}`) };
+      const denied = yield* send(command, false).pipe(Effect.flip);
+      expect(denied._tag).toBe("EnvironmentAuthorizationError");
+      expect(accepted.has(command.commandId)).toBe(false);
+      yield* send(command, true);
+      expect(accepted.get(command.commandId)).toBe("/logout");
     }
   }).pipe(Effect.provide(layerHarnessIntakeTest)),
 );

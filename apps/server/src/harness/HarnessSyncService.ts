@@ -35,6 +35,7 @@ import {
 const MAX_SYNC_FILE_BYTES = 512 * 1024;
 const REDACTED_PREVIEW = "***";
 const O_NOFOLLOW = NodeFS.constants.O_NOFOLLOW ?? 0;
+const PENDING_PULL_BASES_FILE = "t3-harness-pull-bases.json";
 
 const ALLOWED_SKILL_EXTENSIONS = new Set([
   ".md",
@@ -767,12 +768,16 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
         const previewTreeDigest = computeTreeDigest(headSha, snapshot.files);
         const remoteHead =
           headSha === null ? null : await resolveRef(`refs/remotes/origin/${branch}`);
-        const historyCacheKey = `${previewTreeDigest}:${remoteHead ?? ""}`;
+        const historyCacheKey = `${headSha ?? ""}:${remoteHead ?? ""}`;
         if (historyCache?.key !== historyCacheKey) {
-          historyCache = {
-            key: historyCacheKey,
-            value: scanOutboundGitHistory(headSha, remoteHead),
+          const scan = scanOutboundGitHistory(headSha, remoteHead);
+          historyCache = { key: historyCacheKey, value: scan };
+          const evictScan = () => {
+            if (historyCache?.value === scan) historyCache = undefined;
           };
+          void scan.then((findings) => {
+            if (findings.some(({ rule }) => rule === "unscannable-git-history")) evictScan();
+          }, evictScan);
         }
         const historyFindings = await historyCache.value;
         const allFindings = [...snapshot.findings, ...historyFindings].slice(0, 50);
@@ -882,7 +887,9 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
             Effect.tryPromise({
               try: async () => {
                 await NodeFSP.mkdir(repoDir, { recursive: true });
-                const hasGit = await NodeFSP.stat(NodePath.join(repoDir, ".git"))
+                const gitDir = NodePath.join(repoDir, ".git");
+                const pendingPath = NodePath.join(gitDir, PENDING_PULL_BASES_FILE);
+                const hasGit = await NodeFSP.stat(gitDir)
                   .then(() => true)
                   .catch(() => false);
                 if (!hasGit) {
@@ -891,25 +898,40 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                     throw new Error(init.stderr.trim() || "git init failed");
                   }
                 } else {
-                  const symRes = await runGit(repoDir, [
-                    "symbolic-ref",
-                    "HEAD",
-                    `refs/heads/${targetBranch}`,
-                  ]);
-                  if (symRes.code !== 0) {
-                    const checkoutRes = await runGit(repoDir, ["checkout", "-B", targetBranch]);
-                    if (checkoutRes.code !== 0) {
-                      throw new Error(checkoutRes.stderr.trim() || "git branch switch failed");
+                  const branchRef = `refs/heads/${targetBranch}`;
+                  const previousBranch = await runGit(repoDir, ["symbolic-ref", "HEAD"]);
+                  if (previousBranch.code !== 0 || previousBranch.stdout.trim() !== branchRef) {
+                    const symRes = await runGit(repoDir, ["symbolic-ref", "HEAD", branchRef]);
+                    if (symRes.code !== 0) {
+                      const checkoutRes = await runGit(repoDir, ["checkout", "-B", targetBranch]);
+                      if (checkoutRes.code !== 0) {
+                        throw new Error(checkoutRes.stderr.trim() || "git branch switch failed");
+                      }
                     }
+                    await safeRemoveFile(gitDir, pendingPath);
                   }
                 }
-                const hasOrigin = await runGit(repoDir, ["remote", "get-url", "origin"]);
-                const setRemote =
-                  hasOrigin.code === 0
-                    ? await runGit(repoDir, ["remote", "set-url", "--", "origin", input.remoteUrl])
-                    : await runGit(repoDir, ["remote", "add", "--", "origin", input.remoteUrl]);
-                if (setRemote.code !== 0) {
-                  throw new Error(setRemote.stderr.trim() || "git remote update failed");
+                const previousRemote = await runGit(repoDir, [
+                  "config",
+                  "--local",
+                  "--get",
+                  "remote.origin.url",
+                ]);
+                if (previousRemote.code !== 0 || previousRemote.stdout.trim() !== input.remoteUrl) {
+                  const setRemote =
+                    previousRemote.code === 0
+                      ? await runGit(repoDir, [
+                          "remote",
+                          "set-url",
+                          "--",
+                          "origin",
+                          input.remoteUrl,
+                        ])
+                      : await runGit(repoDir, ["remote", "add", "--", "origin", input.remoteUrl]);
+                  if (setRemote.code !== 0) {
+                    throw new Error(setRemote.stderr.trim() || "git remote update failed");
+                  }
+                  await safeRemoveFile(gitDir, pendingPath);
                 }
               },
               catch: (error) =>
@@ -1068,6 +1090,8 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                   if (pushRes.code !== 0) {
                     throw new Error(pushRes.stderr.trim() || "git push failed");
                   }
+                  const gitDir = NodePath.join(repoDir, ".git");
+                  await safeRemoveFile(gitDir, NodePath.join(gitDir, PENDING_PULL_BASES_FILE));
                   return {
                     committed,
                     pushed: true,
@@ -1132,7 +1156,7 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                       .map((entry) => [entry.path, entry.sha]),
                   );
                   const gitDir = NodePath.join(repoDir, ".git");
-                  const pendingPath = NodePath.join(gitDir, "t3-harness-pull-bases.json");
+                  const pendingPath = NodePath.join(gitDir, PENDING_PULL_BASES_FILE);
                   const pendingBases = await readPendingPullBases(gitDir, pendingPath);
 
                   const fetchRes = await runGit(repoDir, ["fetch", "origin", branch]);

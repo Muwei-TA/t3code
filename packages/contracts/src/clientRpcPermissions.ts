@@ -202,11 +202,7 @@ export function clientRpcRequiredScopes(
   }
   if (method === WS_METHODS.harnessHookUpsert) {
     const parsed = decodeHookUpsert(input);
-    if (
-      parsed._tag === "Some" &&
-      parsed.value.target.type === "command" &&
-      parsed.value.enabled !== false
-    ) {
+    if (parsed._tag === "Some" && parsed.value.target.type === "command") {
       return [AuthSettingsWriteScope, AuthTerminalOperateScope];
     }
   }
