@@ -65,6 +65,7 @@ import {
   ChartNoAxesColumnIcon,
   CheckIcon,
   ChevronRightIcon,
+  Clock3Icon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderGit2Icon,
@@ -1749,6 +1750,25 @@ function OpenCommandPaletteDialog(props: {
             ? paletteRouteTarget.threadRef.environmentId
             : null),
       );
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:automations",
+    searchTerms: [
+      "automations",
+      "scheduled tasks",
+      "schedule",
+      "cron",
+      "webhook",
+      "workflows",
+      "automation",
+    ],
+    title: gt("Open automations"),
+    icon: <Clock3Icon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/automations" });
     },
   });
 

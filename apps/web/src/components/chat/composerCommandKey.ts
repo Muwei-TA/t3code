@@ -99,6 +99,8 @@ export function composerCommandKeyHandler(input: {
   /** Predicted next prompt that Tab fills into an empty composer; Escape dismisses it. */
   readonly promptSuggestion: string | null;
   readonly dismissPromptSuggestion: () => void;
+  /** Cycles active portable mode on Shift+Tab when not outdenting a list item. */
+  readonly onCycleMode?: () => void;
 }) {
   const {
     keybindings,
@@ -138,6 +140,7 @@ export function composerCommandKeyHandler(input: {
     submitComposer,
     promptSuggestion,
     dismissPromptSuggestion,
+    onCycleMode,
   } = input;
 
   // The composer persists across threads. A recall from thread A must not
@@ -232,7 +235,14 @@ export function composerCommandKeyHandler(input: {
       prompt: promptRef.current,
     });
     if (key === "Tab" && event.shiftKey && submissionIntent === null) {
-      return applyListEdit(event, listOutdentForTab);
+      if (applyListEdit(event, listOutdentForTab)) {
+        return true;
+      }
+      if (!event.isComposing && onCycleMode) {
+        onCycleMode();
+        return true;
+      }
+      return false;
     }
     const { trigger } = resolveActiveComposerTrigger();
     const menuIsActive = !isLiteralPendingAnswer && trigger !== null;

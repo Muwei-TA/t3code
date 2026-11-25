@@ -670,6 +670,10 @@
     "./state/harness": {
       "types": "./src/state/harness.ts",
       "default": "./src/state/harness.ts"
+    },
+    "./approval-analysis": {
+      "types": "./src/approvalAnalysis.ts",
+      "default": "./src/approvalAnalysis.ts"
     }
   },
   "scripts": {

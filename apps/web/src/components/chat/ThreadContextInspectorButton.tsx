@@ -121,8 +121,35 @@ export function ThreadContextInspectorButton({
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <Badge variant={manifest.interactionMode === "plan" ? "default" : "secondary"}>
-                    {manifest.interactionMode === "plan" ? gt("Plan mode") : gt("Default mode")}
+                    {manifest.modeName
+                      ? gt("Mode: {mode}", { mode: manifest.modeName })
+                      : manifest.interactionMode === "plan"
+                        ? gt("Plan mode")
+                        : gt("Default mode")}
                   </Badge>
+                  {manifest.modeReadOnly ? (
+                    <Badge variant="outline">{gt("Read-only mode")}</Badge>
+                  ) : null}
+                  {manifest.tokenUsage !== null ? (
+                    <Badge variant="outline">
+                      {manifest.tokenUsage.maxTokens !== null
+                        ? gt("Tokens: {used} / {max}", {
+                            used: manifest.tokenUsage.usedTokens.toLocaleString(),
+                            max: manifest.tokenUsage.maxTokens.toLocaleString(),
+                          })
+                        : gt("Tokens: {used}", {
+                            used: manifest.tokenUsage.usedTokens.toLocaleString(),
+                          })}
+                    </Badge>
+                  ) : null}
+                  {manifest.approvalRulesCount > 0 ? (
+                    <Badge variant="outline">
+                      {gt(
+                        "{count, plural, one {{count} approval grant} other {{count} approval grants}}",
+                        { count: manifest.approvalRulesCount },
+                      )}
+                    </Badge>
+                  ) : null}
                   <Badge variant="outline">
                     {manifest.planModeSource === "native"
                       ? gt("Plan cards: Native")

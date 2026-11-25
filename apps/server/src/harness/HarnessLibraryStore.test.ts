@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
   HarnessCommandId,
+  HarnessModeId,
   HarnessRuleId,
   HarnessSkillId,
   TrimmedNonEmptyString,
@@ -224,6 +225,93 @@ describe("HarnessLibraryStore", () => {
           expect(afterRemove.commands.some((c) => c.id === "review-pr")).toBe(false);
         }).pipe(Effect.provide(makeTestLayer(baseDir, paths)));
       }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("manages built-in and custom declarative modes with overrides and resolution", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-harness-modes-" });
+      const baseDir = path.join(tempRoot, "t3home");
+      const repoRoot = path.join(tempRoot, "repo");
+      yield* fs.makeDirectory(repoRoot, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(repoRoot, "t3.json"),
+        JSON.stringify({
+          harness: {
+            disabledModes: ["creator"],
+          },
+        }),
+      );
+      const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+
+      yield* Effect.gen(function* () {
+        const lib = yield* HarnessLibraryStore.HarnessLibraryStore;
+        const initial = yield* lib.getSnapshot(repoRoot);
+        const ids = initial.modes.map((m) => m.id);
+        expect(ids).toContain("build");
+        expect(ids).toContain("plan");
+        expect(ids).toContain("review");
+        expect(ids).toContain("creator");
+        expect(initial.modes.find((m) => m.id === "creator")?.effectiveEnabled).toBe(false);
+        expect(initial.modes.find((m) => m.id === "creator")?.overriddenByProject).toBe(true);
+
+        // Create a custom declarative mode
+        const afterCreate = yield* lib.upsertUserMode({
+          id: HarnessModeId.make("security-audit"),
+          name: TrimmedNonEmptyString.make("Security Audit"),
+          description: "Read-only threat review",
+          baseInteractionMode: "default",
+          readonly: true,
+          proposePlan: false,
+          includedRules: [HarnessRuleId.make("sec-baseline")],
+          body: "Inspect auth boundaries and never modify files.",
+          workspaceRoot: repoRoot,
+        });
+        const customMode = afterCreate.modes.find((m) => m.id === "security-audit");
+        expect(customMode).toBeDefined();
+        expect(customMode?.scope).toBe("user");
+        expect(customMode?.readonly).toBe(true);
+        expect(customMode?.includedRules).toEqual(["sec-baseline"]);
+
+        // Resolve custom mode with stable digest
+        const resolved = yield* lib.resolveMode({
+          modeId: HarnessModeId.make("security-audit"),
+          interactionMode: "default",
+          workspaceRoot: repoRoot,
+        });
+        expect(resolved?.id).toBe("security-audit");
+        expect(resolved?.contentDigest).toBe(customMode?.contentDigest);
+
+        // Override built-in review mode, then remove override to restore built-in
+        const afterOverride = yield* lib.upsertUserMode({
+          id: HarnessModeId.make("review"),
+          name: TrimmedNonEmptyString.make("Strict Review"),
+          baseInteractionMode: "default",
+          readonly: true,
+          body: "Custom review checklist.",
+          workspaceRoot: repoRoot,
+        });
+        const overriddenReview = afterOverride.modes.find((m) => m.id === "review");
+        expect(overriddenReview?.scope).toBe("user");
+        expect(overriddenReview?.overriddenBuiltin).toBe(true);
+
+        const afterDisable = yield* lib.setModeEnabled({
+          id: HarnessModeId.make("security-audit"),
+          enabled: false,
+          workspaceRoot: repoRoot,
+        });
+        expect(afterDisable.modes.find((m) => m.id === "security-audit")?.effectiveEnabled).toBe(
+          false,
+        );
+
+        const afterRemove = yield* lib.removeUserMode({
+          id: HarnessModeId.make("review"),
+          workspaceRoot: repoRoot,
+        });
+        expect(afterRemove.modes.find((m) => m.id === "review")?.scope).toBe("builtin");
+      }).pipe(Effect.provide(makeTestLayer(baseDir, paths)));
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("blocks writes when ManagedPolicy disables harness", () =>

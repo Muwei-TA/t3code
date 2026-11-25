@@ -12,6 +12,7 @@ import {
   AgentFeedbackRequestStatus,
   AgentFeedbackTrace,
 } from "./agentFeedback.ts";
+import { HarnessModeId } from "./harness.ts";
 import {
   GitRefName,
   CheckpointId,
@@ -532,6 +533,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  modeId: Schema.optional(HarnessModeId),
+  modeDigest: Schema.optional(Schema.String),
   branch: Schema.NullOr(GitRefName),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -2426,6 +2429,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  modeId: Schema.optional(HarnessModeId),
+  modeDigest: Schema.optional(Schema.String),
   branch: Schema.NullOr(GitRefName),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -3335,6 +3340,8 @@ export const OrchestrationV2Command = Schema.Union([
     modelSelection: ModelSelection,
     runtimeMode: RuntimeMode,
     interactionMode: ProviderInteractionMode,
+    modeId: Schema.optional(HarnessModeId),
+    modeDigest: Schema.optional(Schema.String),
     branch: Schema.NullOr(GitRefName),
     worktreePath: Schema.NullOr(TrimmedNonEmptyString),
     /** Only the server sets this; a client's thread.create never carries one. */
@@ -3596,6 +3603,8 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     interactionMode: ProviderInteractionMode,
+    modeId: Schema.optional(HarnessModeId),
+    modeDigest: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.model-selection.set"),
@@ -3802,6 +3811,8 @@ export const OrchestrationV2Command = Schema.Union([
     modelSelection: ModelSelection,
     runtimeMode: RuntimeMode,
     interactionMode: ProviderInteractionMode,
+    modeId: Schema.optional(HarnessModeId),
+    modeDigest: Schema.optional(Schema.String),
     workspaceStrategy: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
     // Defaults to settled_only; fire-and-forget wakes require always.
     completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
@@ -4195,6 +4206,7 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  modeId: Schema.optional(HarnessModeId),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
   initialMessage: Schema.optional(
     Schema.Struct({

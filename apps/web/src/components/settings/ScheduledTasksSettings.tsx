@@ -18,6 +18,7 @@ import {
 import { type ReactNode, useRef, useState } from "react";
 import type {
   EnvironmentId,
+  HarnessModeId,
   ModelSelection,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
@@ -80,6 +81,7 @@ import { environmentAtomList, environmentIdsKey } from "../../state/environmentA
 import { usePaginatedBranches, useThreadSearch } from "../../state/queries";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
+import { harnessEnvironment } from "../../state/harness";
 import { threadFamilies } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { WorktreeBaseBranchPicker } from "../WorktreeBaseBranchPicker";
@@ -203,6 +205,7 @@ const EMPTY_DRAFT: DraftState = {
   modelKey: "",
   runtimeMode: "full-access",
   interactionMode: "default",
+  modeId: "",
   baseModelSelection: null,
   signatureEnabled: false,
   ...WEBHOOK_SIGNATURE_DEFAULTS,
@@ -1588,6 +1591,15 @@ function ScheduledTaskEditorForm({
     shownInstanceId,
     shownModel,
   );
+  const harnessLibraryQuery = useEnvironmentQuery(
+    harnessEnvironment.libraryQuery({
+      environmentId,
+      input: selectedProject?.workspaceRoot ? { workspaceRoot: selectedProject.workspaceRoot } : {},
+    }),
+  );
+  const availableModes = (harnessLibraryQuery.data?.modes ?? []).filter(
+    (mode) => mode.effectiveEnabled,
+  );
 
   const reportFailure = (title: string, error: unknown) => {
     toastManager.add(
@@ -1700,6 +1712,7 @@ function ScheduledTaskEditorForm({
         clampManagedRuntimeMode(environment?.serverConfig?.managedPolicy, draft.runtimeMode) ??
         draft.runtimeMode,
       interactionMode: draft.interactionMode,
+      modeId: draft.modeId ? (draft.modeId as HarnessModeId) : null,
       creationSource: "web",
     };
     // Lock before React renders, and keep successful creates locked until the form closes.
@@ -1968,6 +1981,52 @@ function ScheduledTaskEditorForm({
                 }
               />
             </div>
+          </Field>
+
+          <Field label={gt("Portable mode")} htmlFor="scheduled-task-mode">
+            <Select
+              value={draft.modeId || "__default__"}
+              onValueChange={(value) => {
+                const nextModeId = value === "__default__" || !value ? "" : value;
+                const matched = availableModes.find((mode) => mode.id === nextModeId);
+                setDraft((current) => ({
+                  ...current,
+                  modeId: nextModeId,
+                  interactionMode:
+                    matched?.baseInteractionMode ?? (nextModeId === "plan" ? "plan" : "default"),
+                }));
+              }}
+            >
+              <SelectTrigger size="sm" id="scheduled-task-mode">
+                <SelectValue>
+                  {draft.modeId
+                    ? (availableModes.find((mode) => mode.id === draft.modeId)?.name ??
+                      draft.modeId)
+                    : gt("Default (Build)")}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup>
+                <SelectItem value="__default__">{gt("Default (Build)")}</SelectItem>
+                {(availableModes.length > 0
+                  ? availableModes
+                  : [
+                      { id: "build", name: gt("Build"), description: undefined },
+                      { id: "plan", name: gt("Plan"), description: undefined },
+                      { id: "review", name: gt("Review"), description: undefined },
+                      { id: "creator", name: gt("Creator"), description: undefined },
+                    ]
+                ).map((mode) => (
+                  <SelectItem key={mode.id} value={mode.id} label={mode.name}>
+                    <span className="block truncate">{mode.name}</span>
+                    {mode.description ? (
+                      <span className="block max-w-72 truncate text-xs text-muted-foreground">
+                        {mode.description}
+                      </span>
+                    ) : null}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
           </Field>
 
           <div className="space-y-3">

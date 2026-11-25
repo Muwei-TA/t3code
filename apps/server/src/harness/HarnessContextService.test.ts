@@ -131,6 +131,7 @@ describe("HarnessContextService", () => {
               ? Effect.succeed(thread)
               : Effect.fail(new HarnessError({ code: "not_found", detail: "not found" }));
           },
+          getThreadRecords: () => Effect.succeed({ providerTurns: [] }),
         } as unknown as ProjectionStore.ProjectionStoreV2["Service"]);
 
         const mockProjectLayer = Layer.succeed(ProjectStore.ProjectStoreV2, {
@@ -259,6 +260,10 @@ describe("HarnessContextService", () => {
           });
 
           const codexWithLibrary = yield* contextService.getThreadContextManifest(codexThreadId);
+          expect(codexWithLibrary.modeId).toBe("build");
+          expect(codexWithLibrary.modeName).toBe("Build");
+          expect(codexWithLibrary.modeReadOnly).toBe(false);
+          expect(codexWithLibrary.approvalRulesCount).toBe(0);
           expect(codexWithLibrary.skills.some((s) => s.id === "review-helper")).toBe(true);
           expect(codexWithLibrary.rules.find((r) => r.id === "always-short")?.status).toBe(
             "inlined",

@@ -727,9 +727,11 @@ function EnvironmentHarnessSection({
               {(
                 [
                   ["mcp", gt("MCP")],
+                  ["modes", gt("Modes")],
                   ["skills", gt("Skills")],
                   ["rules", gt("Rules")],
                   ["commands", gt("Commands")],
+                  ["permissions", gt("Permissions")],
                   ["transfer", gt("Import / Export")],
                 ] as const
               ).map(([tabKey, tabLabel]) => (

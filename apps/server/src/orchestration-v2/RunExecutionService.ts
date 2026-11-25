@@ -2314,10 +2314,20 @@ export const layer: Layer.Layer<
                     Effect.orElseSucceed(() => [] as ReadonlyArray<NativeDiscoveredSkill>),
                   )
                 : [];
+              const activeMode = yield* harnessLibraryStore.value
+                .resolveMode({
+                  ...(input.appThread.modeId !== undefined
+                    ? { modeId: input.appThread.modeId }
+                    : {}),
+                  interactionMode: input.runtimePolicy.interactionMode,
+                  workspaceRoot,
+                })
+                .pipe(Effect.orElseSucceed(() => null));
               const capabilities = input.session.providerSession.capabilities;
               const projected = projectHarnessContext({
                 library: librarySnapshot,
                 harnessCapabilities: capabilities.harness,
+                activeMode,
                 nativeSkills,
                 nativeReadsProjectAgentsMd: true,
                 promptText: input.message.text,

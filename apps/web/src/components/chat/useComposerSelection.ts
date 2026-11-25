@@ -7,6 +7,7 @@ import { useStableCallback } from "../../hooks/useStableCallback";
 import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
 import {
   type EnvironmentId,
+  HarnessModeId,
   type ModelSelection,
   type ProviderInteractionMode,
   ProviderInstanceId,
@@ -52,7 +53,6 @@ interface ComposerSelectionInput {
   readonly supportsProviderSwitchingViaHandoff: boolean;
   readonly multipleModelSelections: ReadonlyArray<ModelSelection> | null;
   readonly runtimeMode: RuntimeMode;
-  readonly interactionMode: ProviderInteractionMode;
   readonly isLocalDraftThread: boolean;
   readonly canOverrideServerThreadEnvMode: boolean;
   readonly setPendingServerThreadEnvModeEntry: Dispatch<
@@ -82,7 +82,6 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     supportsProviderSwitchingViaHandoff,
     multipleModelSelections,
     runtimeMode,
-    interactionMode,
     isLocalDraftThread,
     canOverrideServerThreadEnvMode,
     setPendingServerThreadEnvModeEntry,
@@ -99,6 +98,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
   );
+  const setComposerDraftModeId = useComposerDraftStore((store) => store.setModeId);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const applyThreadModelPick = useApplyThreadModelPick();
 
@@ -114,15 +114,32 @@ export function useComposerSelection(input: ComposerSelectionInput) {
   const handleRuntimeModeChangeStable = useStableCallback(handleRuntimeModeChange);
 
   const handleInteractionModeChange = (mode: ProviderInteractionMode) => {
-    if (mode === interactionMode) return;
     cancelHeldComposerSend(composerTargetKey(composerDraftTarget));
     setComposerDraftInteractionMode(composerDraftTarget, mode);
+    setComposerDraftModeId(
+      composerDraftTarget,
+      HarnessModeId.make(mode === "plan" ? "plan" : "build"),
+    );
     if (isLocalDraftThread) {
       setDraftThreadContext(composerDraftTarget, { interactionMode: mode });
     }
     scheduleComposerFocus();
   };
   const handleInteractionModeChangeStable = useStableCallback(handleInteractionModeChange);
+
+  const handleModeChange = (
+    nextModeId: HarnessModeId,
+    baseInteractionMode: ProviderInteractionMode,
+  ) => {
+    cancelHeldComposerSend(composerTargetKey(composerDraftTarget));
+    setComposerDraftModeId(composerDraftTarget, nextModeId);
+    setComposerDraftInteractionMode(composerDraftTarget, baseInteractionMode);
+    if (isLocalDraftThread) {
+      setDraftThreadContext(composerDraftTarget, { interactionMode: baseInteractionMode });
+    }
+    scheduleComposerFocus();
+  };
+  const handleModeChangeStable = useStableCallback(handleModeChange);
 
   const openProviderSetup = (instanceId: ProviderInstanceId) => {
     void navigate({
@@ -303,6 +320,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
   return {
     getModelDisabledReason,
     handleInteractionModeChangeStable,
+    handleModeChangeStable,
     handleRuntimeModeChangeStable,
     onEnvModeChangeStable,
     onProviderModelSelectStable,

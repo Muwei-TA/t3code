@@ -515,6 +515,13 @@ import {
   HarnessRuleSetEnabledInput,
   HarnessRuleUpsertInput,
   HarnessSettingsUpdateInput,
+  HarnessApprovalRuleRevokeInput,
+  HarnessApprovalRuleRevokeResult,
+  HarnessApprovalRulesListInput,
+  HarnessApprovalRulesListResult,
+  HarnessModeRemoveInput,
+  HarnessModeSetEnabledInput,
+  HarnessModeUpsertInput,
   HarnessSkillRemoveInput,
   HarnessSkillSetEnabledInput,
   HarnessSkillUpsertInput,
@@ -804,6 +811,11 @@ export const WS_METHODS = {
   harnessLibraryApplyImports: "harness.library.applyImports",
   harnessExportPreview: "harness.export.preview",
   harnessExportApply: "harness.export.apply",
+  harnessModeUpsert: "harness.mode.upsert",
+  harnessModeRemove: "harness.mode.remove",
+  harnessModeSetEnabled: "harness.mode.setEnabled",
+  harnessApprovalRulesList: "harness.approvalRules.list",
+  harnessApprovalRuleRevoke: "harness.approvalRules.revoke",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -2682,6 +2694,36 @@ const WsHarnessExportApplyRpc = Rpc.make(WS_METHODS.harnessExportApply, {
   error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
 });
 
+const WsHarnessModeUpsertRpc = Rpc.make(WS_METHODS.harnessModeUpsert, {
+  payload: HarnessModeUpsertInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessModeRemoveRpc = Rpc.make(WS_METHODS.harnessModeRemove, {
+  payload: HarnessModeRemoveInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessModeSetEnabledRpc = Rpc.make(WS_METHODS.harnessModeSetEnabled, {
+  payload: HarnessModeSetEnabledInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessApprovalRulesListRpc = Rpc.make(WS_METHODS.harnessApprovalRulesList, {
+  payload: HarnessApprovalRulesListInput,
+  success: HarnessApprovalRulesListResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessApprovalRuleRevokeRpc = Rpc.make(WS_METHODS.harnessApprovalRuleRevoke, {
+  payload: HarnessApprovalRuleRevokeInput,
+  success: HarnessApprovalRuleRevokeResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
 export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthorization>()(
   "t3/contracts/RpcScopeAuthorization",
   { error: EnvironmentAuthorizationError },
@@ -2972,4 +3014,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsHarnessLibraryApplyImportsRpc,
   WsHarnessExportPreviewRpc,
   WsHarnessExportApplyRpc,
+  WsHarnessModeUpsertRpc,
+  WsHarnessModeRemoveRpc,
+  WsHarnessModeSetEnabledRpc,
+  WsHarnessApprovalRulesListRpc,
+  WsHarnessApprovalRuleRevokeRpc,
 ).middleware(RpcScopeAuthorization);

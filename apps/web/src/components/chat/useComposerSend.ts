@@ -24,6 +24,7 @@ import {
   AuthOrchestrationOperateScope,
   DEFAULT_MODEL,
   type EnvironmentId,
+  type HarnessModeId,
   type ModelSelection,
   type PreviewAnnotationPayload,
   type ResponseContextRecord,
@@ -217,6 +218,7 @@ interface ComposerSendInput {
   readonly phase: SessionPhase;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
+  readonly modeId?: HarnessModeId | undefined;
   readonly sendEnvMode: DraftThreadEnvMode;
   /** Tracked repositories a new worktree takes; undefined leaves the choice to the server. */
   readonly worktreeRepositories: ReadonlyArray<{ readonly path: string }> | undefined;
@@ -290,6 +292,7 @@ interface ComposerSendInput {
     branch?: string;
     runtimeMode: RuntimeMode;
     interactionMode: ProviderInteractionMode;
+    modeId?: HarnessModeId | undefined;
   }) => Promise<AtomCommandResult<void, unknown>>;
   /** Links a checked-out pull request to its thread; best effort, failures only logged. */
   readonly linkCheckoutPullRequest: (threadRef: ScopedThreadRef, url: string) => void;
@@ -321,6 +324,7 @@ export function useComposerSend(input: ComposerSendInput) {
     phase,
     runtimeMode,
     interactionMode,
+    modeId,
     sendEnvMode,
     worktreeRepositories,
     startFromOrigin,
@@ -1456,6 +1460,7 @@ export function useComposerSend(input: ComposerSendInput) {
           : {}),
         runtimeMode,
         interactionMode,
+        ...(modeId !== undefined ? { modeId } : {}),
       });
       if (settingsResult._tag === "Failure") {
         failure = settingsResult;
@@ -1489,6 +1494,7 @@ export function useComposerSend(input: ComposerSendInput) {
           modelSelection: ctxSelectedModelSelection,
           runtimeMode,
           interactionMode,
+          ...(modeId !== undefined ? { modeId } : {}),
         },
       });
       if (compactResult._tag === "Failure") {
@@ -1510,6 +1516,7 @@ export function useComposerSend(input: ComposerSendInput) {
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
                       interactionMode,
+                      ...(modeId !== undefined ? { modeId } : {}),
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
@@ -1560,6 +1567,7 @@ export function useComposerSend(input: ComposerSendInput) {
           titleSeed: title,
           runtimeMode,
           interactionMode,
+          ...(modeId !== undefined ? { modeId } : {}),
           dispatchMode: turnDispatchMode,
           ...(freshArm === undefined ? {} : { freshContext: true }),
           ...(bootstrap ? { bootstrap } : {}),

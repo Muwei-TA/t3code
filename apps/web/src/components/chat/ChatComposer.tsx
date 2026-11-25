@@ -13,6 +13,8 @@ import {
 } from "./runtimeModeConfig";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { harnessEnvironment } from "../../state/harness";
+import { useEnvironmentQuery } from "../../state/query";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { importPastedComposerText, readPastedComposerContext } from "../composerInlineTokenPaste";
 import {
@@ -45,6 +47,7 @@ import {
   EnvironmentRequestInvalidError,
   AuthOrchestrationOperateScope,
   clampManagedRuntimeMode,
+  HarnessModeId,
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -425,6 +428,7 @@ export interface ChatComposerProps {
   runtimeMode: RuntimeMode;
   defaultRuntimeMode?: RuntimeMode;
   interactionMode: ProviderInteractionMode;
+  modeId: HarnessModeId;
 
   lockedProvider: ProviderDriverKind | null;
   providerStatuses: ServerProvider[];
@@ -511,6 +515,7 @@ export interface ChatComposerProps {
   getModelDisabledReason: (instanceId: ProviderInstanceId, model: string) => string | null;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
   handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
+  handleModeChange: (modeId: HarnessModeId, baseInteractionMode: ProviderInteractionMode) => void;
 
   focusComposer: () => void;
   scheduleComposerFocus: () => void;
@@ -562,6 +567,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     respondingRequestIds,
     runtimeMode,
     interactionMode,
+    modeId,
     lockedProvider,
     providerStatuses,
     providerCatalogKnown,
@@ -605,6 +611,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     getModelDisabledReason,
     handleRuntimeModeChange,
     handleInteractionModeChange,
+    handleModeChange,
     focusComposer,
     scheduleComposerFocus,
     setThreadError,
@@ -2564,6 +2571,73 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ? promptSuggestion
       : null;
 
+  const selectedProviderSnapshot =
+    providerStatuses.find((provider) => provider.instanceId === selectedInstanceId) ?? null;
+  const showPlanModeToggle =
+    selectedProviderSnapshot !== null &&
+    (selectedProviderSnapshot.showInteractionModeToggle !== false ||
+      (selectedProviderSnapshot.harnessPlanMode !== undefined &&
+        selectedProviderSnapshot.harnessPlanMode !== "none"));
+  const planReadOnlyEnforcement = selectedProviderSnapshot?.planReadOnlyEnforcement ?? "none";
+  const harnessLibraryQuery = useEnvironmentQuery(
+    harnessEnvironment.libraryQuery({
+      environmentId,
+      input: gitCwd ? { workspaceRoot: gitCwd } : {},
+    }),
+  );
+  const rawAvailableModes =
+    harnessLibraryQuery.data?.modes && harnessLibraryQuery.data.modes.length > 0
+      ? harnessLibraryQuery.data.modes
+          .filter((entry) => entry.effectiveEnabled)
+          .map((entry) => ({
+            id: entry.id,
+            name: entry.name,
+            description: entry.description,
+            baseInteractionMode: entry.baseInteractionMode,
+            readonly: entry.readonly,
+          }))
+      : [
+          {
+            id: HarnessModeId.make("build"),
+            name: gt("Build", { $context: "composer mode toggle" }),
+            description: gt("Default implementation mode with full tool access."),
+            baseInteractionMode: "default" as const,
+            readonly: false,
+          },
+          {
+            id: HarnessModeId.make("plan"),
+            name: gt("Plan", { $context: "composer mode toggle" }),
+            description: gt("Read-only exploration and structured plan output."),
+            baseInteractionMode: "plan" as const,
+            readonly: true,
+          },
+          {
+            id: HarnessModeId.make("review"),
+            name: gt("Review", { $context: "composer mode toggle" }),
+            description: gt("Read-only code review focused on correctness and risks."),
+            baseInteractionMode: "default" as const,
+            readonly: true,
+          },
+          {
+            id: HarnessModeId.make("creator"),
+            name: gt("Creator", { $context: "composer mode toggle" }),
+            description: gt("Author portable skills, rules, commands, and modes."),
+            baseInteractionMode: "default" as const,
+            readonly: false,
+          },
+        ];
+  const availableModes = showPlanModeToggle
+    ? rawAvailableModes
+    : rawAvailableModes.filter((entry) => entry.baseInteractionMode !== "plan");
+  const handleCycleMode = () => {
+    if (availableModes.length <= 1) return;
+    const currentIndex = availableModes.findIndex((entry) => entry.id === modeId);
+    const nextMode =
+      availableModes[(currentIndex + 1 + availableModes.length) % availableModes.length];
+    if (nextMode) {
+      handleModeChange(nextMode.id, nextMode.baseInteractionMode);
+    }
+  };
   const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem?: boolean) => {
     if (key === "Escape" && composerSendHeld && !event.isComposing) {
       cancelHeldSend();
@@ -2607,6 +2681,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       submitComposer,
       promptSuggestion: offeredPromptSuggestion,
       dismissPromptSuggestion,
+      ...(availableModes.length > 1 ? { onCycleMode: handleCycleMode } : {}),
     })(key, event, isTaskItem);
   };
 
@@ -2685,14 +2760,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     : composerControlsCollapsed
       ? 0
       : expandedControlsIconOnlyBlockCount;
-  const selectedProviderSnapshot =
-    providerStatuses.find((provider) => provider.instanceId === selectedInstanceId) ?? null;
-  const showPlanModeToggle =
-    selectedProviderSnapshot !== null &&
-    (selectedProviderSnapshot.showInteractionModeToggle !== false ||
-      (selectedProviderSnapshot.harnessPlanMode !== undefined &&
-        selectedProviderSnapshot.harnessPlanMode !== "none"));
-  const planReadOnlyEnforcement = selectedProviderSnapshot?.planReadOnlyEnforcement ?? "none";
 
   const composerControls = (
     <ComposerControlsBar
@@ -2715,9 +2782,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       compatibleRuntimeModeOptions={compatibleRuntimeModeOptions}
       handleRuntimeModeChange={handleRuntimeModeChange}
       interactionMode={interactionMode}
+      modeId={modeId}
+      availableModes={availableModes}
       showPlanModeToggle={showPlanModeToggle}
       planReadOnlyEnforcement={planReadOnlyEnforcement}
       handleInteractionModeChange={handleInteractionModeChange}
+      handleModeChange={handleModeChange}
       composerControlsCollapsed={composerControlsCollapsed}
       effortDisplay={settings.effortDisplay}
       permissionsShownInStrip={props.permissionsShownInStrip}

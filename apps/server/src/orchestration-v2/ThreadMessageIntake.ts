@@ -12,6 +12,7 @@ import * as Schema from "effect/Schema";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import { rpcAuthorizationError } from "../auth/RpcAuthorization.ts";
 import * as ServerConfig from "../config.ts";
+import * as HarnessApprovalAuditStore from "../harness/HarnessApprovalAuditStore.ts";
 import * as HarnessLibraryStore from "../harness/HarnessLibraryStore.ts";
 import { expandPortableCommand } from "../harness/HarnessProjector.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -291,17 +292,93 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
         ),
       );
   }
+  const commandWithModeDigest = yield* Effect.gen(function* () {
+    if (
+      (command.type === "thread.create" || command.type === "thread.interaction-mode.set") &&
+      command.modeId !== undefined &&
+      command.modeDigest === undefined
+    ) {
+      const libOpt = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+      if (Option.isSome(libOpt)) {
+        const resolved = yield* libOpt.value
+          .resolveMode({
+            modeId: command.modeId,
+            interactionMode: command.interactionMode,
+          })
+          .pipe(Effect.orElseSucceed(() => null));
+        if (resolved !== null) {
+          return {
+            ...command,
+            interactionMode: resolved.baseInteractionMode,
+            modeDigest: resolved.contentDigest,
+          };
+        }
+      }
+    }
+    return command;
+  });
+
   if (
-    command.type !== "message.dispatch" &&
-    (command.type !== "queued-run.edit" || command.attachments === undefined)
+    commandWithModeDigest.type === "runtime-request.respond" &&
+    (commandWithModeDigest.decision === "acceptForSession" ||
+      commandWithModeDigest.decision === "acceptAlways")
+  ) {
+    const decision = commandWithModeDigest.decision;
+    const result = yield* threads.dispatch(commandWithModeDigest);
+    // Record native `allow_always` / session approval grants in the audit store after dispatch succeeds
+    // (never intercepts or emulates provider approval engines).
+    const auditOpt = yield* Effect.serviceOption(
+      HarnessApprovalAuditStore.HarnessApprovalAuditStore,
+    );
+    if (Option.isSome(auditOpt) && result.replayed !== true) {
+      const shell = yield* threads
+        .getThreadShell(commandWithModeDigest.threadId)
+        .pipe(Effect.orElseSucceed(() => null));
+      const matchedItem = result.storedEvents
+        .map((s) => s.event)
+        .find(
+          (ev) =>
+            ev.type === "turn-item.updated" &&
+            ev.payload.type === "approval_request" &&
+            ev.payload.requestId === commandWithModeDigest.requestId,
+        );
+      const approvalPayload =
+        matchedItem?.type === "turn-item.updated" && matchedItem.payload.type === "approval_request"
+          ? matchedItem.payload
+          : null;
+      yield* auditOpt.value
+        .recordGrant({
+          threadId: commandWithModeDigest.threadId,
+          providerInstanceId: shell?.providerInstanceId ?? ("unknown" as never),
+          requestKind: approvalPayload?.requestKind ?? "approval",
+          scope: decision === "acceptAlways" ? "always" : "session",
+          summary:
+            approvalPayload?.prompt ??
+            approvalPayload?.reason ??
+            `Approved request ${commandWithModeDigest.requestId}`,
+          ...(approvalPayload?.appName ? { appName: approvalPayload.appName } : {}),
+          workspaceRoot: shell?.worktreePath ?? null,
+        })
+        .pipe(Effect.ignore);
+    }
+    return result;
+  }
+
+  if (
+    commandWithModeDigest.type !== "message.dispatch" &&
+    (commandWithModeDigest.type !== "queued-run.edit" ||
+      commandWithModeDigest.attachments === undefined)
   )
-    return yield* threads.dispatch(command);
+    return yield* threads.dispatch(commandWithModeDigest);
   // An accepted edit's retry replays its receipt even if a later cleanup removed its files.
-  if (command.type === "queued-run.edit" && !(yield* threads.hasReceipt(command.commandId))) {
+  if (
+    commandWithModeDigest.type === "queued-run.edit" &&
+    !(yield* threads.hasReceipt(commandWithModeDigest.commandId))
+  ) {
     const config = yield* ServerConfig.ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
     // A stale view can keep a file that another client's edit dropped and deleted.
-    for (const attachment of command.attachments ?? []) {
+    for (const attachment of commandWithModeDigest.attachments ?? []) {
       if (AttachmentClaims.attachmentIsPendingUpload(attachment)) continue;
       const path = resolveAttachmentPath({ attachmentsDir: config.attachmentsDir, attachment });
       if (
@@ -315,18 +392,18 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
     }
   }
   const claimed = yield* AttachmentClaims.claimPendingAttachments({
-    threadId: command.threadId,
-    attachments: command.attachments ?? [],
+    threadId: commandWithModeDigest.threadId,
+    attachments: commandWithModeDigest.attachments ?? [],
   });
   return yield* threads
     .dispatch({
-      ...command,
+      ...commandWithModeDigest,
       attachments: claimed.attachments,
-      ...(command.context
+      ...(commandWithModeDigest.context
         ? {
             context: remapComposerContextAttachments(
-              command.context,
-              command.attachments ?? [],
+              commandWithModeDigest.context,
+              commandWithModeDigest.attachments ?? [],
               claimed.attachments,
             ),
           }
@@ -374,19 +451,36 @@ export const launchThread = Effect.fn("ThreadMessageIntake.launchThread")(functi
   input: ThreadLaunch.ThreadLaunchInput,
 ) {
   const launches = yield* ThreadLaunch.ThreadLaunchService;
+  const modeResolvedInput = yield* Effect.gen(function* () {
+    if (input.modeId === undefined || input.modeDigest !== undefined) return input;
+    const libOpt = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+    if (Option.isNone(libOpt)) return input;
+    const resolved = yield* libOpt.value
+      .resolveMode({
+        modeId: input.modeId,
+        interactionMode: input.interactionMode,
+      })
+      .pipe(Effect.orElseSucceed(() => null));
+    if (resolved === null) return input;
+    return {
+      ...input,
+      interactionMode: resolved.baseInteractionMode,
+      modeDigest: resolved.contentDigest,
+    };
+  });
   const normalizedInput =
-    input.initialMessage !== undefined
+    modeResolvedInput.initialMessage !== undefined
       ? {
-          ...input,
+          ...modeResolvedInput,
           initialMessage: {
-            ...input.initialMessage,
+            ...modeResolvedInput.initialMessage,
             text: yield* expandPortableSlashText({
-              text: input.initialMessage.text,
-              projectId: input.projectId,
+              text: modeResolvedInput.initialMessage.text,
+              projectId: modeResolvedInput.projectId,
             }),
           },
         }
-      : input;
+      : modeResolvedInput;
   yield* AttachmentClaims.validateAttachmentLimits(
     normalizedInput.initialMessage?.attachments ?? [],
   );

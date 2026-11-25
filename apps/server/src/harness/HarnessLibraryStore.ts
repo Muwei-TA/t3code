@@ -8,6 +8,10 @@ import {
   HarnessError,
   type HarnessInvalidEntry,
   type HarnessLibrarySnapshot,
+  HarnessMcpServerId,
+  type HarnessModeEntry,
+  HarnessModeId,
+  type HarnessModeUpsertInput,
   HarnessRuleApplyMode,
   type HarnessRuleEntry,
   HarnessRuleId,
@@ -18,6 +22,7 @@ import {
   isReservedHarnessCommandId,
   NonNegativeInt,
   type PositiveInt,
+  type ProviderInteractionMode,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -40,7 +45,106 @@ const MAX_COMPANION_FILES = 32;
 const decodeSkillId = Schema.decodeUnknownOption(HarnessSkillId);
 const decodeRuleId = Schema.decodeUnknownOption(HarnessRuleId);
 const decodeCommandId = Schema.decodeUnknownOption(HarnessCommandId);
+const decodeModeId = Schema.decodeUnknownOption(HarnessModeId);
+const decodeMcpServerId = Schema.decodeUnknownOption(HarnessMcpServerId);
 const decodeRuleApplyMode = Schema.decodeUnknownOption(HarnessRuleApplyMode);
+
+interface BuiltinModeSpec {
+  readonly id: HarnessModeId;
+  readonly name: typeof TrimmedNonEmptyString.Type;
+  readonly description: string;
+  readonly baseInteractionMode: ProviderInteractionMode;
+  readonly readonly: boolean;
+  readonly proposePlan: boolean;
+  readonly body: string;
+}
+
+const BUILTIN_MODES: ReadonlyArray<BuiltinModeSpec> = [
+  {
+    id: HarnessModeId.make("build"),
+    name: TrimmedNonEmptyString.make("Build"),
+    description:
+      "Default implementation mode with full tool access for writing and verifying code.",
+    baseInteractionMode: "default",
+    readonly: false,
+    proposePlan: false,
+    body: "",
+  },
+  {
+    id: HarnessModeId.make("plan"),
+    name: TrimmedNonEmptyString.make("Plan"),
+    description:
+      "Read-only exploration and structured architectural planning before making file edits.",
+    baseInteractionMode: "plan",
+    readonly: true,
+    proposePlan: true,
+    body: "",
+  },
+  {
+    id: HarnessModeId.make("review"),
+    name: TrimmedNonEmptyString.make("Review"),
+    description:
+      "Read-only code review mode focused on correctness, security, edge cases, and test gaps without modifying files.",
+    baseInteractionMode: "plan",
+    readonly: true,
+    proposePlan: false,
+    body: "You are in Review mode (read-only). Do not modify files or run mutating commands. Inspect diffs, architecture, error handling, security boundaries, and test coverage. Present findings grouped by severity (P0/P1/P2) with exact file paths, line numbers, concrete reproduction scenarios, and minimal recommended fixes.",
+  },
+  {
+    id: HarnessModeId.make("creator"),
+    name: TrimmedNonEmptyString.make("Creator"),
+    description:
+      "Authoring mode for creating and refining portable Skills, Rules, Commands, Modes, and Workflows.",
+    baseInteractionMode: "default",
+    readonly: false,
+    proposePlan: false,
+    body: "You are in Creator mode. Help the user author concise, portable T3 Harness extensions under ~/.t3/harness/ (SKILL.md skills, always/glob/manual rules, slash commands, declarative modes, and workflows). Prefer minimal, deterministic instructions, validate identifiers and YAML frontmatter, and avoid leaking secrets.",
+  },
+];
+
+function formatModeMarkdown(input: {
+  readonly name?: string | undefined;
+  readonly description?: string | undefined;
+  readonly baseInteractionMode: ProviderInteractionMode;
+  readonly readonly?: boolean | undefined;
+  readonly proposePlan?: boolean | undefined;
+  readonly defaultModel?: string | undefined;
+  readonly allowedMcpServers?: ReadonlyArray<string> | undefined;
+  readonly disabledMcpServers?: ReadonlyArray<string> | undefined;
+  readonly includedRules?: ReadonlyArray<string> | undefined;
+  readonly includedSkills?: ReadonlyArray<string> | undefined;
+  readonly enabled?: boolean | undefined;
+  readonly body: string;
+}): string {
+  const frontmatter: Record<string, unknown> = {
+    ...(input.name !== undefined && input.name.trim().length > 0
+      ? { name: input.name.trim() }
+      : {}),
+    ...(input.description !== undefined && input.description.trim().length > 0
+      ? { description: input.description.trim() }
+      : {}),
+    baseInteractionMode: input.baseInteractionMode,
+    ...(input.readonly !== undefined ? { readonly: input.readonly } : {}),
+    ...(input.proposePlan !== undefined ? { proposePlan: input.proposePlan } : {}),
+    ...(input.defaultModel !== undefined && input.defaultModel.trim().length > 0
+      ? { defaultModel: input.defaultModel.trim() }
+      : {}),
+    ...(input.allowedMcpServers && input.allowedMcpServers.length > 0
+      ? { allowedMcpServers: [...input.allowedMcpServers] }
+      : {}),
+    ...(input.disabledMcpServers && input.disabledMcpServers.length > 0
+      ? { disabledMcpServers: [...input.disabledMcpServers] }
+      : {}),
+    ...(input.includedRules && input.includedRules.length > 0
+      ? { includedRules: [...input.includedRules] }
+      : {}),
+    ...(input.includedSkills && input.includedSkills.length > 0
+      ? { includedSkills: [...input.includedSkills] }
+      : {}),
+    ...(input.enabled === false ? { enabled: false } : {}),
+  };
+  return formatMarkdownWithFrontmatter(frontmatter, input.body);
+}
 
 export function sha256Hex(text: string): string {
   return NodeCrypto.createHash("sha256").update(text, "utf8").digest("hex");
@@ -267,6 +371,23 @@ export class HarnessLibraryStore extends Context.Service<
       readonly enabled: boolean;
       readonly workspaceRoot?: string | undefined;
     }) => Effect.Effect<HarnessLibrarySnapshot, HarnessError>;
+    readonly upsertUserMode: (
+      input: HarnessModeUpsertInput,
+    ) => Effect.Effect<HarnessLibrarySnapshot, HarnessError>;
+    readonly removeUserMode: (input: {
+      readonly id: HarnessModeId;
+      readonly workspaceRoot?: string | undefined;
+    }) => Effect.Effect<HarnessLibrarySnapshot, HarnessError>;
+    readonly setModeEnabled: (input: {
+      readonly id: HarnessModeId;
+      readonly enabled: boolean;
+      readonly workspaceRoot?: string | undefined;
+    }) => Effect.Effect<HarnessLibrarySnapshot, HarnessError>;
+    readonly resolveMode: (input: {
+      readonly modeId?: HarnessModeId | undefined;
+      readonly interactionMode?: ProviderInteractionMode | undefined;
+      readonly workspaceRoot?: string | undefined;
+    }) => Effect.Effect<HarnessModeEntry | null>;
     readonly updateSettings: (input: {
       readonly maxSystemContextBytes: typeof PositiveInt.Type | null;
       readonly workspaceRoot?: string | undefined;
@@ -698,6 +819,66 @@ const make = Effect.gen(function* () {
       })
       .sort((a, b) => a.id.localeCompare(b.id));
 
+    const userDisabledModes = new Set<string>(userConfig.disabledModes);
+    const rawUserModes = yield* loadModesFromDir({
+      modesDir: path.join(harnessDir, "modes"),
+      invalidEntries,
+    });
+    const userModesById = new Map(rawUserModes.map((m) => [m.id, m] as const));
+    const builtinIds = new Set<string>(BUILTIN_MODES.map((m) => m.id));
+    const modes: Array<HarnessModeEntry> = [];
+
+    for (const builtin of BUILTIN_MODES) {
+      const override = userModesById.get(builtin.id);
+      if (override !== undefined) {
+        const enabled = override.frontmatterEnabled && !userDisabledModes.has(override.id);
+        const overriddenByProject = overrides.disabledModes.has(override.id);
+        const effectiveEnabled =
+          overrides.managedPolicyAllowsHarness && enabled && !overriddenByProject;
+        const { frontmatterEnabled: _fm, ...rest } = override;
+        modes.push({
+          ...rest,
+          overriddenBuiltin: true,
+          enabled,
+          effectiveEnabled,
+          overriddenByProject,
+        });
+      } else {
+        const enabled = !userDisabledModes.has(builtin.id);
+        const overriddenByProject = overrides.disabledModes.has(builtin.id);
+        const effectiveEnabled =
+          builtin.id === "build" || builtin.id === "plan"
+            ? true
+            : overrides.managedPolicyAllowsHarness && enabled && !overriddenByProject;
+        modes.push({
+          id: builtin.id,
+          name: builtin.name,
+          scope: "builtin",
+          description: builtin.description,
+          baseInteractionMode: builtin.baseInteractionMode,
+          readonly: builtin.readonly,
+          proposePlan: builtin.proposePlan,
+          enabled,
+          effectiveEnabled,
+          overriddenByProject,
+          sourcePath: null,
+          contentDigest: sha256Hex(`${builtin.id}:${builtin.baseInteractionMode}:${builtin.body}`),
+          bytes: utf8Bytes(builtin.body),
+          body: builtin.body,
+        });
+      }
+    }
+
+    for (const item of rawUserModes) {
+      if (builtinIds.has(item.id)) continue;
+      const enabled = item.frontmatterEnabled && !userDisabledModes.has(item.id);
+      const overriddenByProject = overrides.disabledModes.has(item.id);
+      const effectiveEnabled =
+        overrides.managedPolicyAllowsHarness && enabled && !overriddenByProject;
+      const { frontmatterEnabled: _fm, ...rest } = item;
+      modes.push({ ...rest, enabled, effectiveEnabled, overriddenByProject });
+    }
+
     return {
       harnessDir,
       workspaceRoot: overrides.normalizedRepo,
@@ -706,6 +887,7 @@ const make = Effect.gen(function* () {
       skills,
       rules,
       commands,
+      modes,
       maxSystemContextBytes: overrides.maxSystemContextBytes,
       invalidEntries,
       managedPolicyAllowsHarness: overrides.managedPolicyAllowsHarness,
@@ -1142,6 +1324,191 @@ const make = Effect.gen(function* () {
       );
     });
 
+  const loadModesFromDir = Effect.fn("HarnessLibraryStore.loadModesFromDir")(function* (input: {
+    readonly modesDir: string;
+    readonly invalidEntries: Array<HarnessInvalidEntry>;
+  }) {
+    const entries = yield* fs.readDirectory(input.modesDir).pipe(Effect.orElseSucceed(() => []));
+    const out: Array<
+      Omit<HarnessModeEntry, "effectiveEnabled" | "overriddenByProject"> & {
+        readonly frontmatterEnabled: boolean;
+      }
+    > = [];
+    for (const fileName of entries) {
+      if (!fileName.endsWith(".md")) continue;
+      const rawId = fileName.slice(0, -3);
+      const filePath = path.join(input.modesDir, fileName);
+      const decodedId = decodeModeId(rawId);
+      if (Option.isNone(decodedId)) {
+        input.invalidEntries.push({
+          source: filePath,
+          id: rawId,
+          message: `Mode file "${fileName}" is not a valid mode identifier and was skipped.`,
+        });
+        continue;
+      }
+      const loaded = yield* readBoundedContainedFile(harnessDir, filePath);
+      if (Option.isNone(loaded)) continue;
+      const parsed = parseMarkdownFrontmatter(loaded.value.text);
+      if (parsed.malformed) {
+        input.invalidEntries.push({
+          source: filePath,
+          id: decodedId.value,
+          message: `Mode "${decodedId.value}" has malformed YAML frontmatter and was skipped.`,
+        });
+        continue;
+      }
+      const fm = parsed.frontmatter ?? {};
+      const nameStr =
+        typeof fm.name === "string" && fm.name.trim().length > 0
+          ? fm.name.trim().slice(0, 128)
+          : decodedId.value;
+      const description =
+        typeof fm.description === "string" && fm.description.trim().length > 0
+          ? fm.description.trim().slice(0, 512)
+          : undefined;
+      const baseInteractionMode: ProviderInteractionMode =
+        fm.baseInteractionMode === "plan" || fm.interactionMode === "plan" ? "plan" : "default";
+      const readonly = parseBool(fm.readonly) ?? baseInteractionMode === "plan";
+      const proposePlan =
+        parseBool(fm.proposePlan) ?? (decodedId.value === "plan" && baseInteractionMode === "plan");
+      const defaultModel =
+        typeof fm.defaultModel === "string" && fm.defaultModel.trim().length > 0
+          ? TrimmedNonEmptyString.make(fm.defaultModel.trim().slice(0, 128))
+          : undefined;
+      const parseMcpIds = (raw: unknown): ReadonlyArray<HarnessMcpServerId> =>
+        parseStringList(raw).flatMap((v) => {
+          const d = decodeMcpServerId(v);
+          return Option.isSome(d) ? [d.value] : [];
+        });
+      const parseRuleIds = (raw: unknown): ReadonlyArray<HarnessRuleId> =>
+        parseStringList(raw).flatMap((v) => {
+          const d = decodeRuleId(v);
+          return Option.isSome(d) ? [d.value] : [];
+        });
+      const parseSkillIds = (raw: unknown): ReadonlyArray<HarnessSkillId> =>
+        parseStringList(raw).flatMap((v) => {
+          const d = decodeSkillId(v);
+          return Option.isSome(d) ? [d.value] : [];
+        });
+      const allowedMcpServers = parseMcpIds(fm.allowedMcpServers);
+      const disabledMcpServers = parseMcpIds(fm.disabledMcpServers);
+      const includedRules = parseRuleIds(fm.includedRules);
+      const includedSkills = parseSkillIds(fm.includedSkills);
+      const frontmatterEnabled = parseBool(fm.enabled) ?? true;
+      out.push({
+        id: decodedId.value,
+        name: TrimmedNonEmptyString.make(nameStr),
+        scope: "user",
+        ...(description !== undefined ? { description } : {}),
+        baseInteractionMode,
+        readonly,
+        proposePlan,
+        ...(defaultModel !== undefined ? { defaultModel } : {}),
+        ...(allowedMcpServers.length > 0 ? { allowedMcpServers } : {}),
+        ...(disabledMcpServers.length > 0 ? { disabledMcpServers } : {}),
+        ...(includedRules.length > 0 ? { includedRules } : {}),
+        ...(includedSkills.length > 0 ? { includedSkills } : {}),
+        enabled: frontmatterEnabled,
+        frontmatterEnabled,
+        sourcePath: loaded.value.realPath,
+        contentDigest: sha256Hex(loaded.value.text),
+        bytes: utf8Bytes(parsed.body),
+        body: parsed.body,
+      });
+    }
+    return out;
+  });
+
+  const upsertUserMode: HarnessLibraryStore["Service"]["upsertUserMode"] = Effect.fn(
+    "HarnessLibraryStore.upsertUserMode",
+  )(function* (input) {
+    yield* assertPolicyAllows();
+    const modePath = path.join(harnessDir, "modes", `${input.id}.md`);
+    const content = formatModeMarkdown({
+      name: input.name ?? input.id,
+      description: input.description,
+      baseInteractionMode: input.baseInteractionMode,
+      readonly: input.readonly ?? input.baseInteractionMode === "plan",
+      proposePlan:
+        input.proposePlan ?? (input.id === "plan" && input.baseInteractionMode === "plan"),
+      defaultModel: input.defaultModel,
+      allowedMcpServers: input.allowedMcpServers,
+      disabledMcpServers: input.disabledMcpServers,
+      includedRules: input.includedRules,
+      includedSkills: input.includedSkills,
+      enabled: input.enabled,
+      body: input.body,
+    });
+    yield* writeLock.withPermits(1)(writeFileAtomic(modePath, content));
+    if (input.enabled !== undefined) {
+      yield* store.setLibraryItemDisabled({
+        kind: "mode",
+        id: input.id,
+        disabled: !input.enabled,
+      });
+    }
+    return yield* getSnapshot(input.workspaceRoot);
+  });
+
+  const removeUserMode: HarnessLibraryStore["Service"]["removeUserMode"] = Effect.fn(
+    "HarnessLibraryStore.removeUserMode",
+  )(function* ({ id, workspaceRoot }) {
+    yield* assertPolicyAllows();
+    const modePath = path.join(harnessDir, "modes", `${id}.md`);
+    yield* writeLock.withPermits(1)(
+      Effect.gen(function* () {
+        const exists = yield* fs.exists(modePath).pipe(Effect.orElseSucceed(() => false));
+        if (!exists) {
+          return yield* new HarnessError({
+            code: "not_found",
+            detail: `Portable mode "${id}" was not found.`,
+          });
+        }
+        const contained = yield* resolveContainedPath(harnessDir, modePath);
+        if (contained === null) {
+          return yield* new HarnessError({
+            code: "invalid_config",
+            detail: `Mode path for "${id}" escapes the harness directory.`,
+          });
+        }
+        yield* fs.remove(contained, { force: true }).pipe(
+          Effect.mapError(
+            () =>
+              new HarnessError({
+                code: "io_error",
+                detail: `Failed to remove portable mode "${id}".`,
+              }),
+          ),
+        );
+      }),
+    );
+    return yield* getSnapshot(workspaceRoot);
+  });
+
+  const setModeEnabled: HarnessLibraryStore["Service"]["setModeEnabled"] = Effect.fn(
+    "HarnessLibraryStore.setModeEnabled",
+  )(function* ({ id, enabled, workspaceRoot }) {
+    yield* assertPolicyAllows();
+    yield* store.setLibraryItemDisabled({ kind: "mode", id, disabled: !enabled });
+    return yield* getSnapshot(workspaceRoot);
+  });
+
+  const resolveMode: HarnessLibraryStore["Service"]["resolveMode"] = Effect.fn(
+    "HarnessLibraryStore.resolveMode",
+  )(function* ({ modeId, interactionMode, workspaceRoot }) {
+    const snapshot = yield* getSnapshot(workspaceRoot);
+    const targetId =
+      modeId ??
+      (interactionMode === "plan" ? HarnessModeId.make("plan") : HarnessModeId.make("build"));
+    const exact = snapshot.modes.find(
+      (mode) => mode.id.toLowerCase() === targetId.toLowerCase() && mode.effectiveEnabled,
+    );
+    if (exact !== undefined) return exact;
+    const fallbackId = interactionMode === "plan" ? "plan" : "build";
+    return snapshot.modes.find((mode) => mode.id === fallbackId) ?? null;
+  });
+
   return HarnessLibraryStore.of({
     getSnapshot,
     saveUserAgentsMd,
@@ -1154,6 +1521,10 @@ const make = Effect.gen(function* () {
     upsertUserCommand,
     removeUserCommand,
     setCommandEnabled,
+    upsertUserMode,
+    removeUserMode,
+    setModeEnabled,
+    resolveMode,
     updateSettings,
     getSkillDetail,
     getRuleDetail,

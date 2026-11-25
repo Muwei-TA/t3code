@@ -1,6 +1,7 @@
 import {
   type HarnessCommandEntry,
   type HarnessLibrarySnapshot,
+  type HarnessModeEntry,
   type HarnessSkillEntry,
   NonNegativeInt,
   type OrchestrationV2HarnessCapabilities,
@@ -234,13 +235,29 @@ function isSkillDeduplicatedByNative(
   return false;
 }
 
+/** Evaluates whether a portable Mode allows the given MCP server ID. */
+export function isMcpServerAllowedByMode(
+  serverId: string,
+  activeMode?: HarnessModeEntry | null | undefined,
+): boolean {
+  if (!activeMode) return true;
+  if (activeMode.disabledMcpServers && activeMode.disabledMcpServers.includes(serverId as never)) {
+    return false;
+  }
+  if (activeMode.allowedMcpServers && activeMode.allowedMcpServers.length > 0) {
+    return activeMode.allowedMcpServers.includes(serverId as never);
+  }
+  return true;
+}
+
 /**
- * Pure projection of portable Harness skills, personal `AGENTS.md`, and `rules/*.md` into
+ * Pure projection of portable Harness modes, skills, personal `AGENTS.md`, and `rules/*.md` into
  * provider-bounded context segments without ever silently truncating user rules.
  */
 export function projectHarnessContext(input: {
   readonly library: HarnessLibrarySnapshot;
   readonly harnessCapabilities: OrchestrationV2HarnessCapabilities;
+  readonly activeMode?: HarnessModeEntry | null | undefined;
   readonly nativeSkills?: ReadonlyArray<NativeDiscoveredSkill> | undefined;
   readonly nativeReadsProjectAgentsMd?: boolean | undefined;
   readonly promptText?: string | undefined;
@@ -326,7 +343,7 @@ export function projectHarnessContext(input: {
 
   // Decide which blocks want inline projection (strict priority, ZERO silent truncation).
   const candidateBlocks: Array<{
-    readonly kind: "agents_md" | "rule" | "skill_index" | "mentioned_skill";
+    readonly kind: "mode" | "agents_md" | "rule" | "skill_index" | "mentioned_skill";
     readonly id: string;
     readonly scope: "user" | "project";
     readonly apply: "always" | "glob" | "manual";
@@ -334,7 +351,29 @@ export function projectHarnessContext(input: {
     readonly rawBytes: number;
   }> = [];
 
-  // 1. User personal AGENTS.md (highest priority)
+  const activeMode = input.activeMode ?? null;
+  const modeIncludedRules = new Set(
+    (activeMode?.includedRules ?? []).map((id) => id.trim().toLowerCase()),
+  );
+  const modeIncludedSkills = new Set(
+    (activeMode?.includedSkills ?? []).map((id) => id.trim().toLowerCase()),
+  );
+
+  // 0. Active declarative Mode instructions (highest priority)
+  if (activeMode !== null && activeMode.effectiveEnabled && activeMode.body.trim().length > 0) {
+    const readonlyAttr = activeMode.readonly ? ' readonly="true"' : "";
+    const blockText = `<t3_mode id="${activeMode.id}" name="${activeMode.name}"${readonlyAttr}>\n${activeMode.body.trim()}\n</t3_mode>`;
+    candidateBlocks.push({
+      kind: "mode",
+      id: activeMode.id,
+      scope: "user",
+      apply: "always",
+      blockText,
+      rawBytes: activeMode.bytes,
+    });
+  }
+
+  // 1. User personal AGENTS.md (highest user rule priority)
   if (library.userAgentsMd.exists && library.userAgentsMd.body.trim().length > 0) {
     const blockText = `<t3_personal_rules source="~/.t3/harness/AGENTS.md">\n${library.userAgentsMd.body.trim()}\n</t3_personal_rules>`;
     candidateBlocks.push({
@@ -391,7 +430,8 @@ export function projectHarnessContext(input: {
       });
       continue;
     }
-    if (rule.apply === "manual") {
+    const forcedByMode = modeIncludedRules.has(rule.id.toLowerCase());
+    if (!forcedByMode && rule.apply === "manual") {
       hasOnDemandOrDegradedRules = true;
       ruleItems.push({
         id: rule.id,
@@ -403,7 +443,7 @@ export function projectHarnessContext(input: {
       });
       continue;
     }
-    if (rule.apply === "glob") {
+    if (!forcedByMode && rule.apply === "glob") {
       const matched =
         rule.globs.length > 0 &&
         referencedPaths.some((candidatePath) =>
@@ -433,11 +473,13 @@ export function projectHarnessContext(input: {
     });
   }
 
-  // 3. Explicit `$skill` mentions for non-native skills
+  // 3. Explicit `$skill` mentions or Mode-included skills for non-native skills
   for (const skill of gatewaySkills) {
     if (
       mentionedSkills.has(skill.id.toLowerCase()) ||
-      mentionedSkills.has(skill.name.toLowerCase())
+      mentionedSkills.has(skill.name.toLowerCase()) ||
+      modeIncludedSkills.has(skill.id.toLowerCase()) ||
+      modeIncludedSkills.has(skill.name.toLowerCase())
     ) {
       const blockText = `<t3_skill name="${skill.name}" scope="${skill.scope}">\n${skill.body.trim()}\n</t3_skill>`;
       candidateBlocks.push({
@@ -504,7 +546,9 @@ export function projectHarnessContext(input: {
       const reason = !fitsSegment
         ? `Block (${blockBytes} B) exceeds provider per-entry cap (${maxSegmentBytes} B); degraded whole-block to on-demand tool read without truncation.`
         : `Block (${blockBytes} B) exceeds remaining harness context budget (${remainingBudget} B / ${totalBudget} B); degraded whole-block to on-demand tool read without truncation.`;
-      if (candidate.kind === "agents_md" || candidate.kind === "rule") {
+      if (candidate.kind === "mode") {
+        degradedItems.push({ kind: "mode", id: candidate.id, reason });
+      } else if (candidate.kind === "agents_md" || candidate.kind === "rule") {
         hasOnDemandOrDegradedRules = true;
         ruleItems.push({
           id: candidate.id,

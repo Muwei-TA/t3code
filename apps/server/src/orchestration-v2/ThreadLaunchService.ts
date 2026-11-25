@@ -109,6 +109,8 @@ export interface ThreadLaunchInput {
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
+  readonly modeId?: import("@t3tools/contracts").HarnessModeId | undefined;
+  readonly modeDigest?: string | undefined;
   readonly workspaceStrategy: ThreadLaunchWorkspaceStrategy;
   readonly initialMessage?: ThreadLaunchInitialMessage;
   readonly importedNativeThread?: {
@@ -1490,6 +1492,8 @@ const make = Effect.gen(function* () {
                 modelSelection: input.modelSelection,
                 runtimeMode: input.runtimeMode,
                 interactionMode: input.interactionMode,
+                ...(input.modeId === undefined ? {} : { modeId: input.modeId }),
+                ...(input.modeDigest === undefined ? {} : { modeDigest: input.modeDigest }),
                 branch: initialBranch,
                 worktreePath: initialWorktreePath,
                 ...(input.importedNativeThread === undefined

@@ -7,6 +7,7 @@ import {
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
   type EnvironmentId,
+  type HarnessApprovalRuleRecord,
   HarnessCommandId,
   type HarnessCommandEntry,
   type HarnessExportPreviewResult,
@@ -16,12 +17,15 @@ import {
   type HarnessLibraryImportSourcePreview,
   type HarnessLibrarySnapshot,
   type HarnessMcpImportSource,
+  type HarnessModeEntry,
+  HarnessModeId,
   type HarnessRuleApplyMode,
   type HarnessRuleEntry,
   HarnessRuleId,
   type HarnessSkillEntry,
   HarnessSkillId,
   PositiveInt,
+  type ProviderInteractionMode,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -33,6 +37,7 @@ import {
   PlusIcon,
   RefreshCwIcon,
   SaveIcon,
+  ShieldCheckIcon,
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
@@ -64,6 +69,7 @@ import { useSearchableSetting } from "./settingsSearch";
 const decodeSkillId = Schema.decodeUnknownOption(HarnessSkillId);
 const decodeRuleId = Schema.decodeUnknownOption(HarnessRuleId);
 const decodeCommandId = Schema.decodeUnknownOption(HarnessCommandId);
+const decodeModeId = Schema.decodeUnknownOption(HarnessModeId);
 
 function formatError(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim().length > 0) return error.message;
@@ -71,7 +77,14 @@ function formatError(error: unknown, fallback: string): string {
   return fallback;
 }
 
-export type HarnessPanelTab = "mcp" | "skills" | "rules" | "commands" | "transfer";
+export type HarnessPanelTab =
+  | "mcp"
+  | "modes"
+  | "skills"
+  | "rules"
+  | "commands"
+  | "approvals"
+  | "transfer";
 
 export function HarnessLibraryPanels({
   activeTab,
@@ -116,6 +129,31 @@ export function HarnessLibraryPanels({
   const setCommandEnabled = useAtomCommand(harnessEnvironment.setCommandEnabled, {
     reportFailure: false,
   });
+  const upsertMode = useAtomCommand(harnessEnvironment.upsertMode, { reportFailure: false });
+  const removeMode = useAtomCommand(harnessEnvironment.removeMode, { reportFailure: false });
+  const setModeEnabled = useAtomCommand(harnessEnvironment.setModeEnabled, {
+    reportFailure: false,
+  });
+  const listApprovalRules = useAtomCommand(harnessEnvironment.listApprovalRules, {
+    reportFailure: false,
+  });
+  const revokeApprovalRule = useAtomCommand(harnessEnvironment.revokeApprovalRule, {
+    reportFailure: false,
+  });
+  const approvalRulesQueryAtom = harnessEnvironment.approvalRulesQuery({
+    environmentId,
+    input: { includeRevoked: true },
+  });
+  const approvalRulesQueryResult = useAtomValue(approvalRulesQueryAtom);
+  const [overrideApprovalRules, setOverrideApprovalRules] =
+    useState<ReadonlyArray<HarnessApprovalRuleRecord> | null>(null);
+  const approvalRules =
+    overrideApprovalRules ??
+    AsyncResult.getOrElse(
+      approvalRulesQueryResult,
+      () => null as { readonly rules: ReadonlyArray<HarnessApprovalRuleRecord> } | null,
+    )?.rules ??
+    [];
   const updateSettings = useAtomCommand(harnessEnvironment.updateSettings, {
     reportFailure: false,
   });
@@ -132,6 +170,9 @@ export function HarnessLibraryPanels({
   const [agentsDraft, setAgentsDraft] = useState<string | null>(null);
   const [budgetDraft, setBudgetDraft] = useState<string | null>(null);
 
+  const [modeModal, setModeModal] = useState<
+    null | { readonly mode: "add" } | { readonly mode: "edit"; readonly item: HarnessModeEntry }
+  >(null);
   const [skillModal, setSkillModal] = useState<
     null | { readonly mode: "add" } | { readonly mode: "edit"; readonly item: HarnessSkillEntry }
   >(null);
@@ -184,6 +225,253 @@ export function HarnessLibraryPanels({
   const wsInput = workspaceRoot ? { workspaceRoot } : {};
   const policyBlocked = !snapshot.managedPolicyAllowsHarness;
   const editable = canWriteSettings && !policyBlocked;
+
+  if (activeTab === "modes") {
+    return (
+      <>
+        <SettingsSection {...setting("harness-mcp")}>
+          <SettingsRow
+            title={<T>Declarative Modes</T>}
+            description={
+              <T>
+                Portable agent modes stored in <Var>{snapshot.harnessDir}</Var>/modes/*.md. Built-in
+                modes (Build, Plan, Review, Creator) can be customized without losing provider
+                continuity.
+              </T>
+            }
+          >
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" disabled={busy} onClick={() => void refresh()}>
+                <RefreshCwIcon className="size-3.5" aria-hidden />
+                <T>Refresh</T>
+              </Button>
+              <Button
+                size="sm"
+                disabled={!editable || busy}
+                onClick={() => setModeModal({ mode: "add" })}
+              >
+                <PlusIcon className="size-3.5" aria-hidden />
+                <T>Add Mode</T>
+              </Button>
+            </div>
+          </SettingsRow>
+
+          <div className="divide-y divide-border/60">
+            {snapshot.modes.map((mode) => (
+              <div
+                key={`${mode.scope}:${mode.id}`}
+                className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+              >
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-mono text-sm font-medium text-foreground">
+                      {mode.name}
+                    </span>
+                    <Badge variant="outline">{mode.id}</Badge>
+                    <Badge variant="secondary">{mode.scope}</Badge>
+                    {mode.readonly ? <Badge variant="warning">{gt("Read-only")}</Badge> : null}
+                    {mode.proposePlan ? <Badge variant="info">{gt("Propose plan")}</Badge> : null}
+                  </div>
+                  {mode.description ? (
+                    <p className="text-xs text-muted-foreground">{mode.description}</p>
+                  ) : null}
+                  {mode.allowedMcpServers && mode.allowedMcpServers.length > 0 ? (
+                    <p className="font-mono text-2xs text-muted-foreground/85">
+                      {gt("Allowed MCP: {servers}", {
+                        servers: mode.allowedMcpServers.join(", "),
+                      })}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={mode.enabled}
+                    disabled={!editable || busy || mode.id === "build"}
+                    onCheckedChange={async (checked) => {
+                      setBusy(true);
+                      const res = await setModeEnabled({
+                        environmentId,
+                        input: { id: mode.id, enabled: checked, ...wsInput },
+                      });
+                      setBusy(false);
+                      if (res._tag === "Success") setOverrideSnapshot(res.value);
+                    }}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!editable || busy}
+                    onClick={() => setModeModal({ mode: "edit", item: mode })}
+                  >
+                    <PencilIcon className="size-3.5" aria-hidden />
+                  </Button>
+                  {mode.scope === "user" ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={!editable || busy}
+                      onClick={async () => {
+                        setBusy(true);
+                        const res = await removeMode({
+                          environmentId,
+                          input: { id: mode.id, ...wsInput },
+                        });
+                        setBusy(false);
+                        if (res._tag === "Success") {
+                          setOverrideSnapshot(res.value);
+                          toastManager.add({ type: "success", title: gt("Mode removed") });
+                        }
+                      }}
+                    >
+                      <Trash2Icon className="size-3.5" aria-hidden />
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        </SettingsSection>
+
+        <ModeEditorDialog
+          state={modeModal}
+          onClose={() => setModeModal(null)}
+          onSave={async (payload) => {
+            setBusy(true);
+            const res = await upsertMode({
+              environmentId,
+              input: { ...payload, ...wsInput },
+            });
+            setBusy(false);
+            if (res._tag === "Success") {
+              setOverrideSnapshot(res.value);
+              setModeModal(null);
+              toastManager.add({ type: "success", title: gt("Mode saved") });
+            } else if (!isAtomCommandInterrupted(res)) {
+              toastManager.add({
+                type: "error",
+                title: gt("Failed to save mode"),
+                description: formatError(squashAtomCommandFailure(res), gt("Try again.")),
+              });
+            }
+          }}
+        />
+      </>
+    );
+  }
+
+  if (activeTab === "approvals") {
+    const refreshApprovals = async () => {
+      setBusy(true);
+      const res = await listApprovalRules({
+        environmentId,
+        input: { includeRevoked: true },
+      });
+      setBusy(false);
+      if (res._tag === "Success") {
+        setOverrideApprovalRules(res.value.rules);
+      }
+    };
+
+    return (
+      <SettingsSection {...setting("harness-mcp")}>
+        <SettingsRow
+          title={<T>Approval Grants & Audit Ledger</T>}
+          description={
+            <T>
+              Records “Allow always” and session grants accepted through T3 without replacing native
+              provider approvals. Revoking detaches live thread sessions.
+            </T>
+          }
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void refreshApprovals()}
+          >
+            <RefreshCwIcon className="size-3.5" aria-hidden />
+            <T>Refresh</T>
+          </Button>
+        </SettingsRow>
+
+        {approvalRules.length === 0 ? (
+          <p className="px-4 py-4 text-sm text-muted-foreground">
+            <T>No persistent or session approval grants recorded yet.</T>
+          </p>
+        ) : (
+          <div className="divide-y divide-border/60">
+            {approvalRules.map((rule) => (
+              <div
+                key={rule.id}
+                className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+              >
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <ShieldCheckIcon className="size-3.5 text-muted-foreground" aria-hidden />
+                    <span className="font-mono text-xs font-medium text-foreground">
+                      {rule.summary}
+                    </span>
+                    <Badge variant="outline">{rule.scope}</Badge>
+                    <Badge variant="secondary">{rule.requestKind}</Badge>
+                    {rule.providerInstanceId ? (
+                      <Badge variant="outline">{rule.providerInstanceId}</Badge>
+                    ) : null}
+                    {rule.revokedAt ? (
+                      <Badge variant="error">{gt("Revoked")}</Badge>
+                    ) : (
+                      <Badge variant="success">{gt("Active")}</Badge>
+                    )}
+                  </div>
+                  <p className="text-2xs text-muted-foreground">
+                    {gt("Granted {timestamp}", { timestamp: rule.createdAt })}
+                    {rule.revokedAt
+                      ? ` · ${gt("Revoked {timestamp}", { timestamp: rule.revokedAt })}`
+                      : ""}
+                  </p>
+                </div>
+                {!rule.revokedAt ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!editable || busy}
+                    onClick={async () => {
+                      setBusy(true);
+                      const res = await revokeApprovalRule({
+                        environmentId,
+                        input: { id: rule.id, detachThreadSession: true },
+                      });
+                      setBusy(false);
+                      if (res._tag === "Success") {
+                        setOverrideApprovalRules(
+                          approvalRules.map((item) =>
+                            item.id === res.value.rule.id ? res.value.rule : item,
+                          ),
+                        );
+                        toastManager.add({
+                          type: "success",
+                          title: res.value.sessionDetached
+                            ? gt("Grant revoked and thread session detached")
+                            : gt("Grant revoked"),
+                        });
+                      } else if (!isAtomCommandInterrupted(res)) {
+                        toastManager.add({
+                          type: "error",
+                          title: gt("Failed to revoke grant"),
+                          description: formatError(squashAtomCommandFailure(res), gt("Try again.")),
+                        });
+                      }
+                    }}
+                  >
+                    <T>Revoke</T>
+                  </Button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </SettingsSection>
+    );
+  }
 
   if (activeTab === "skills") {
     return (
@@ -1389,6 +1677,232 @@ function CommandEditorDialogBody({
           }}
         >
           <T>Save Command</T>
+        </Button>
+      </DialogFooter>
+    </DialogPopup>
+  );
+}
+
+function ModeEditorDialog({
+  state,
+  onClose,
+  onSave,
+}: {
+  readonly state:
+    | null
+    | { readonly mode: "add" }
+    | { readonly mode: "edit"; readonly item: HarnessModeEntry };
+  readonly onClose: () => void;
+  readonly onSave: (payload: {
+    readonly id: HarnessModeId;
+    readonly name?: typeof TrimmedNonEmptyString.Type;
+    readonly description?: string;
+    readonly baseInteractionMode: ProviderInteractionMode;
+    readonly readonly?: boolean;
+    readonly proposePlan?: boolean;
+    readonly allowedMcpServers?: ReadonlyArray<typeof TrimmedNonEmptyString.Type>;
+    readonly includedRules?: ReadonlyArray<typeof TrimmedNonEmptyString.Type>;
+    readonly includedSkills?: ReadonlyArray<typeof TrimmedNonEmptyString.Type>;
+    readonly body: string;
+  }) => Promise<void>;
+}) {
+  return (
+    <Dialog open={state !== null} onOpenChange={(open) => !open && onClose()}>
+      {state !== null ? (
+        <ModeEditorDialogBody
+          key={state.mode === "edit" ? state.item.id : "new-mode"}
+          existing={state.mode === "edit" ? state.item : null}
+          onClose={onClose}
+          onSave={onSave}
+        />
+      ) : null}
+    </Dialog>
+  );
+}
+
+function ModeEditorDialogBody({
+  existing,
+  onClose,
+  onSave,
+}: {
+  readonly existing: HarnessModeEntry | null;
+  readonly onClose: () => void;
+  readonly onSave: (payload: {
+    readonly id: HarnessModeId;
+    readonly name?: typeof TrimmedNonEmptyString.Type;
+    readonly description?: string;
+    readonly baseInteractionMode: ProviderInteractionMode;
+    readonly readonly?: boolean;
+    readonly proposePlan?: boolean;
+    readonly allowedMcpServers?: ReadonlyArray<typeof TrimmedNonEmptyString.Type>;
+    readonly includedRules?: ReadonlyArray<typeof TrimmedNonEmptyString.Type>;
+    readonly includedSkills?: ReadonlyArray<typeof TrimmedNonEmptyString.Type>;
+    readonly body: string;
+  }) => Promise<void>;
+}) {
+  const gt = useGT();
+  const [id, setId] = useState(existing?.id ?? "");
+  const [name, setName] = useState(existing?.name ?? "");
+  const [description, setDescription] = useState(existing?.description ?? "");
+  const [baseInteractionMode, setBaseInteractionMode] = useState<ProviderInteractionMode>(
+    existing?.baseInteractionMode ?? "default",
+  );
+  const [readonlyMode, setReadonlyMode] = useState(existing?.readonly ?? false);
+  const [proposePlan, setProposePlan] = useState(existing?.proposePlan ?? false);
+  const [allowedMcpText, setAllowedMcpText] = useState(
+    existing?.allowedMcpServers?.join(", ") ?? "",
+  );
+  const [includedRulesText, setIncludedRulesText] = useState(
+    existing?.includedRules?.join(", ") ?? "",
+  );
+  const [includedSkillsText, setIncludedSkillsText] = useState(
+    existing?.includedSkills?.join(", ") ?? "",
+  );
+  const [body, setBody] = useState(existing?.body ?? "");
+
+  return (
+    <DialogPopup className="max-w-xl">
+      <DialogHeader>
+        <DialogTitle>
+          {existing ? <T>Edit Declarative Mode</T> : <T>New Declarative Mode</T>}
+        </DialogTitle>
+        <DialogDescription>
+          <T>Stored under ~/.t3/harness/modes/*.md and projected across all providers.</T>
+        </DialogDescription>
+      </DialogHeader>
+      <DialogPanel>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <label className="text-xs font-medium">{gt("Mode ID")}</label>
+            <Input
+              disabled={existing !== null}
+              value={existing ? existing.id : id}
+              placeholder="security-audit"
+              onChange={(e) => setId(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium">{gt("Display Name")}</label>
+            <Input
+              value={name}
+              placeholder={gt("Security Audit")}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium">{gt("Description")}</label>
+            <Input value={description} onChange={(e) => setDescription(e.target.value)} />
+          </div>
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="space-y-1">
+              <label className="text-xs font-medium">{gt("Base Interaction Mode")}</label>
+              <div className="flex gap-2">
+                {(["default", "plan"] as const).map((mode) => (
+                  <Button
+                    key={mode}
+                    size="sm"
+                    variant={baseInteractionMode === mode ? "default" : "outline"}
+                    onClick={() => setBaseInteractionMode(mode)}
+                  >
+                    {mode}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-xs">
+              <Checkbox
+                checked={readonlyMode}
+                onCheckedChange={(checked) => setReadonlyMode(Boolean(checked))}
+              />
+              <span>{gt("Read-only")}</span>
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <Checkbox
+                checked={proposePlan}
+                onCheckedChange={(checked) => setProposePlan(Boolean(checked))}
+              />
+              <span>{gt("Propose plan")}</span>
+            </label>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium">
+              {gt("Allowed MCP Servers (comma separated, blank = all)")}
+            </label>
+            <Input
+              value={allowedMcpText}
+              placeholder={gt("github, linear")}
+              onChange={(e) => setAllowedMcpText(e.target.value)}
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-xs font-medium">{gt("Force-included Rules")}</label>
+              <Input
+                value={includedRulesText}
+                placeholder="security-policy"
+                onChange={(e) => setIncludedRulesText(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium">{gt("Force-included Skills")}</label>
+              <Input
+                value={includedSkillsText}
+                placeholder="code-review"
+                onChange={(e) => setIncludedSkillsText(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium">{gt("System Prompt (Markdown)")}</label>
+            <Textarea
+              rows={8}
+              value={body}
+              placeholder={gt("# Mode instructions...")}
+              onChange={(e) => setBody(e.target.value)}
+            />
+          </div>
+        </div>
+      </DialogPanel>
+      <DialogFooter>
+        <Button variant="outline" size="sm" onClick={onClose}>
+          <T>Cancel</T>
+        </Button>
+        <Button
+          size="sm"
+          onClick={() => {
+            const targetId = existing ? existing.id : id;
+            const decoded = decodeModeId(targetId);
+            if (decoded._tag === "None") {
+              toastManager.add({
+                type: "error",
+                title: gt("Invalid mode ID (use lowercase letters, numbers, and hyphens)"),
+              });
+              return;
+            }
+            const parseList = (raw: string) =>
+              raw
+                .split(/[,\n]+/u)
+                .map((item) => item.trim())
+                .filter(Boolean)
+                .map((item) => TrimmedNonEmptyString.make(item));
+            const allowedMcpServers = parseList(allowedMcpText);
+            const includedRules = parseList(includedRulesText);
+            const includedSkills = parseList(includedSkillsText);
+            void onSave({
+              id: decoded.value,
+              ...(name.trim() ? { name: TrimmedNonEmptyString.make(name.trim()) } : {}),
+              ...(description.trim() ? { description: description.trim() } : {}),
+              baseInteractionMode,
+              readonly: readonlyMode,
+              proposePlan,
+              ...(allowedMcpServers.length > 0 ? { allowedMcpServers } : {}),
+              ...(includedRules.length > 0 ? { includedRules } : {}),
+              ...(includedSkills.length > 0 ? { includedSkills } : {}),
+              body,
+            });
+          }}
+        >
+          <T>Save Mode</T>
         </Button>
       </DialogFooter>
     </DialogPopup>

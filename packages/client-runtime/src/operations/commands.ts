@@ -10,6 +10,7 @@ import {
   OrchestrationV2CheckpointUnavailableError,
   WS_METHODS,
   type ChatAttachment,
+  type HarnessModeId,
   MessageId,
   type ModelSelection,
   type NodeId,
@@ -165,6 +166,7 @@ export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
 
 export interface SetThreadInteractionModeInput extends ThreadCommandInput {
   readonly interactionMode: ProviderInteractionMode;
+  readonly modeId?: HarnessModeId | undefined;
 }
 
 interface StartThreadBootstrap {
@@ -174,6 +176,7 @@ interface StartThreadBootstrap {
     readonly modelSelection: ModelSelection;
     readonly runtimeMode: RuntimeMode;
     readonly interactionMode: ProviderInteractionMode;
+    readonly modeId?: HarnessModeId | undefined;
     readonly branch: string | null;
     readonly worktreePath: string | null;
     readonly createdAt: string;
@@ -204,6 +207,7 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
   readonly titleSeed?: string;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
+  readonly modeId?: HarnessModeId | undefined;
   readonly bootstrap?: StartThreadBootstrap;
   readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: PlanId };
   readonly dispatchMode?: "auto" | "queue" | "steer" | "restart" | "start";
@@ -770,6 +774,7 @@ export const setThreadInteractionMode = Effect.fn("EnvironmentCommands.setThread
       commandId: yield* allocateCommandId(input),
       threadId: input.threadId,
       interactionMode: input.interactionMode,
+      ...(input.modeId === undefined ? {} : { modeId: input.modeId }),
     });
   },
 );
@@ -835,6 +840,11 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       modelSelection: input.modelSelection ?? thread.modelSelection,
       runtimeMode: input.runtimeMode,
       interactionMode: input.interactionMode,
+      ...(input.modeId !== undefined
+        ? { modeId: input.modeId }
+        : bootstrap?.modeId !== undefined
+          ? { modeId: bootstrap.modeId }
+          : {}),
       workspaceStrategy,
       initialMessage: {
         messageId: input.message.messageId,

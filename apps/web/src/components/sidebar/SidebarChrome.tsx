@@ -1,4 +1,10 @@
-import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  ChartNoAxesColumnIcon,
+  Clock3Icon,
+  SettingsIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { T, useGT } from "gt-react";
 import { memo } from "react";
@@ -263,6 +269,11 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/usage" });
   };
 
+  const handleAutomationsClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/automations" });
+  };
+
   const handleBackClick = () => {
     closeMobileSidebar();
     void navigateToMainApp();
@@ -300,6 +311,11 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               onClick={handleIssuesClick}
             />
           ) : null}
+          <SidebarUtilityItem
+            icon={<Clock3Icon />}
+            label={gt("Automations")}
+            onClick={handleAutomationsClick}
+          />
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label={gt("Usage")}

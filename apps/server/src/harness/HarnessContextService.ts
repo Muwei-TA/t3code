@@ -4,9 +4,11 @@ import {
   type HarnessPlanReadOnlyEnforcement,
   IsoDateTime,
   NonNegativeInt,
+  PositiveInt,
   type ThreadContextDegradedItem,
   type ThreadContextManifest,
   type ThreadContextMcpItem,
+  type ThreadContextTokenUsage,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -19,8 +21,13 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as HarnessApprovalAuditStore from "./HarnessApprovalAuditStore.ts";
 import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
-import { type NativeDiscoveredSkill, projectHarnessContext } from "./HarnessProjector.ts";
+import {
+  isMcpServerAllowedByMode,
+  type NativeDiscoveredSkill,
+  projectHarnessContext,
+} from "./HarnessProjector.ts";
 import * as McpGateway from "./McpGateway.ts";
 
 export class HarnessContextService extends Context.Service<
@@ -35,6 +42,9 @@ export class HarnessContextService extends Context.Service<
 const make = Effect.gen(function* () {
   const gateway = yield* McpGateway.McpGateway;
   const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+  const approvalAuditStore = yield* Effect.serviceOption(
+    HarnessApprovalAuditStore.HarnessApprovalAuditStore,
+  );
   const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
@@ -103,16 +113,60 @@ const make = Effect.gen(function* () {
             Effect.orElseSucceed(() => [] as ReadonlyArray<NativeDiscoveredSkill>),
           )
         : [];
+      const activeMode = Option.isSome(libraryStore)
+        ? yield* libraryStore.value
+            .resolveMode({
+              ...(thread.modeId !== undefined ? { modeId: thread.modeId } : {}),
+              interactionMode: thread.interactionMode,
+              workspaceRoot,
+            })
+            .pipe(Effect.orElseSucceed(() => null))
+        : null;
       const projected =
         librarySnapshot !== null
           ? projectHarnessContext({
               library: librarySnapshot,
               harnessCapabilities,
+              activeMode,
               nativeSkills,
               nativeReadsProjectAgentsMd: true,
               supportsMcpTools,
             })
           : null;
+
+      const latestTokenUsage: ThreadContextTokenUsage | null = yield* projections
+        .getThreadRecords(threadId, ["providerTurns"])
+        .pipe(
+          Effect.map((records) => {
+            const withUsage = [...records.providerTurns]
+              .reverse()
+              .find((turn) => turn.tokenUsage !== undefined);
+            if (!withUsage?.tokenUsage) return null;
+            const maxTokensVal = withUsage.tokenUsage.maxTokens;
+            const autoCompactVal = withUsage.tokenUsage.autoCompactThreshold;
+            return {
+              usedTokens: NonNegativeInt.make(
+                Math.max(0, Math.floor(withUsage.tokenUsage.usedTokens)),
+              ),
+              maxTokens:
+                typeof maxTokensVal === "number" && maxTokensVal > 0
+                  ? PositiveInt.make(Math.floor(maxTokensVal))
+                  : null,
+              autoCompactThreshold:
+                typeof autoCompactVal === "number" && autoCompactVal > 0
+                  ? PositiveInt.make(Math.floor(autoCompactVal))
+                  : null,
+            } satisfies ThreadContextTokenUsage;
+          }),
+          Effect.orElseSucceed(() => null),
+        );
+
+      const approvalRulesCount = Option.isSome(approvalAuditStore)
+        ? yield* approvalAuditStore.value.list({ threadId, includeRevoked: false }).pipe(
+            Effect.map((rules) => NonNegativeInt.make(rules.length)),
+            Effect.orElseSucceed(() => NonNegativeInt.make(0)),
+          )
+        : NonNegativeInt.make(0);
 
       const planModeSource: HarnessPlanModeKind = emitsProposedPlan
         ? "native"
@@ -151,6 +205,9 @@ const make = Effect.gen(function* () {
           reason = server.overriddenByProject
             ? "Overridden by project t3.json."
             : "Disabled in Harness settings.";
+        } else if (!isMcpServerAllowedByMode(server.id, activeMode)) {
+          channel = "disabled";
+          reason = `Filtered out by active mode "${activeMode?.id ?? ""}".`;
         } else if (
           McpGateway.resolveServerChannel(server.config, harnessCapabilities) === "native"
         ) {
@@ -204,6 +261,18 @@ const make = Effect.gen(function* () {
         generatedAt: IsoDateTime.make(DateTime.formatIso(now)),
         providerInstanceId: thread.providerInstanceId,
         interactionMode: thread.interactionMode,
+        ...(activeMode !== null
+          ? {
+              modeId: activeMode.id,
+              modeName: activeMode.name,
+              modeDigest: thread.modeDigest ?? activeMode.contentDigest,
+              modeReadOnly: activeMode.readonly,
+            }
+          : {
+              ...(thread.modeId !== undefined ? { modeId: thread.modeId } : {}),
+              ...(thread.modeDigest !== undefined ? { modeDigest: thread.modeDigest } : {}),
+              modeReadOnly: thread.interactionMode === "plan",
+            }),
         planModeSource,
         planModeReadOnlyEnforcement,
         harnessGatewayActive:
@@ -218,6 +287,8 @@ const make = Effect.gen(function* () {
         contextBudgetBytes: projected?.contextBudgetBytes ?? NonNegativeInt.make(0),
         contextUsedBytes: projected?.contextUsedBytes ?? NonNegativeInt.make(0),
         scaffoldBytes: projected?.scaffoldBytes ?? NonNegativeInt.make(0),
+        tokenUsage: latestTokenUsage,
+        approvalRulesCount,
         degradedItems,
       };
     });

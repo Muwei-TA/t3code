@@ -146,9 +146,11 @@ export function HarnessSettingsPanel() {
 
   const tabs: ReadonlyArray<{ readonly id: HarnessPanelTab; readonly label: string }> = [
     { id: "mcp", label: gt("MCP Servers") },
+    { id: "modes", label: gt("Modes") },
     { id: "skills", label: gt("Skills") },
     { id: "rules", label: gt("Rules & AGENTS.md") },
     { id: "commands", label: gt("Commands") },
+    { id: "approvals", label: gt("Approvals") },
     { id: "transfer", label: gt("Import / Export") },
   ];
 

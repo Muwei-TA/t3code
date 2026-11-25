@@ -10,6 +10,7 @@ import {
   HarnessMcpServerId,
   type HarnessMcpServerScope,
   type HarnessMcpTrustReason,
+  HarnessModeId,
   HarnessRuleId,
   HarnessSkillId,
   IsoDateTime,
@@ -61,6 +62,7 @@ const decodeServerId = Schema.decodeUnknownOption(HarnessMcpServerId);
 const decodeSkillId = Schema.decodeUnknownOption(HarnessSkillId);
 const decodeRuleId = Schema.decodeUnknownOption(HarnessRuleId);
 const decodeCommandId = Schema.decodeUnknownOption(HarnessCommandId);
+const decodeModeId = Schema.decodeUnknownOption(HarnessModeId);
 const decodePositiveInt = Schema.decodeUnknownOption(PositiveInt);
 const decodeTrustLedgerJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(HarnessTrustLedgerFile),
@@ -73,6 +75,7 @@ const EMPTY_USER_HARNESS_CONFIG: HarnessConfigFile = {
   disabledSkills: [],
   disabledRules: [],
   disabledCommands: [],
+  disabledModes: [],
   maxSystemContextBytes: null,
 };
 
@@ -229,6 +232,7 @@ function decodePartialUserConfigObject(
   const disabledSkills = decodeIdList(Reflect.get(parsed, "disabledSkills"), decodeSkillId);
   const disabledRules = decodeIdList(Reflect.get(parsed, "disabledRules"), decodeRuleId);
   const disabledCommands = decodeIdList(Reflect.get(parsed, "disabledCommands"), decodeCommandId);
+  const disabledModes = decodeIdList(Reflect.get(parsed, "disabledModes"), decodeModeId);
   const rawMaxBytes = Reflect.get(parsed, "maxSystemContextBytes");
   const maxSystemContextBytes =
     rawMaxBytes === null || rawMaxBytes === undefined
@@ -238,6 +242,7 @@ function decodePartialUserConfigObject(
     disabledSkills,
     disabledRules,
     disabledCommands,
+    disabledModes,
     maxSystemContextBytes,
   };
   const rawServers = Reflect.get(parsed, "mcpServers");
@@ -295,6 +300,7 @@ interface LoadedProjectHarnessConfig {
   readonly disabledSkills: ReadonlySet<string>;
   readonly disabledRules: ReadonlySet<string>;
   readonly disabledCommands: ReadonlySet<string>;
+  readonly disabledModes: ReadonlySet<string>;
   readonly invalidEntries: ReadonlyArray<HarnessInvalidEntry>;
 }
 
@@ -305,6 +311,7 @@ const EMPTY_PROJECT_HARNESS: LoadedProjectHarnessConfig = {
   disabledSkills: new Set(),
   disabledRules: new Set(),
   disabledCommands: new Set(),
+  disabledModes: new Set(),
   invalidEntries: [],
 };
 
@@ -413,6 +420,9 @@ function decodeProjectHarnessLeniently(
             (id) => !isReservedHarnessCommandId(id),
           ),
         );
+        const disabledModes = new Set<string>(
+          decodeIdList(Reflect.get(rawHarness, "disabledModes"), decodeModeId),
+        );
 
         return {
           mcpServers,
@@ -421,6 +431,7 @@ function decodeProjectHarnessLeniently(
           disabledSkills,
           disabledRules,
           disabledCommands,
+          disabledModes,
           invalidEntries,
         };
       },
@@ -477,7 +488,7 @@ export class HarnessStore extends Context.Service<
       readonly serverId: HarnessMcpServerId;
     }) => Effect.Effect<void, HarnessError>;
     readonly setLibraryItemDisabled: (input: {
-      readonly kind: "skill" | "rule" | "command";
+      readonly kind: "skill" | "rule" | "command" | "mode";
       readonly id: string;
       readonly disabled: boolean;
     }) => Effect.Effect<void, HarnessError>;
@@ -489,6 +500,7 @@ export class HarnessStore extends Context.Service<
       readonly disabledSkills: ReadonlySet<string>;
       readonly disabledRules: ReadonlySet<string>;
       readonly disabledCommands: ReadonlySet<string>;
+      readonly disabledModes: ReadonlySet<string>;
       readonly invalidEntries: ReadonlyArray<HarnessInvalidEntry>;
       readonly managedPolicyAllowsHarness: boolean;
       readonly managedPolicyOrganization: string | null;
@@ -1103,6 +1115,20 @@ const make = Effect.gen(function* () {
           });
           return;
         }
+        if (kind === "mode") {
+          const decoded = decodeModeId(id);
+          if (Option.isNone(decoded)) {
+            return yield* new HarnessError({
+              code: "invalid_config",
+              detail: `Invalid mode id "${id}".`,
+            });
+          }
+          yield* saveUserConfig({
+            ...current,
+            disabledModes: toggle(current.disabledModes, decoded.value),
+          });
+          return;
+        }
         const decoded = decodeCommandId(id);
         if (Option.isNone(decoded)) {
           return yield* new HarnessError({
@@ -1154,6 +1180,7 @@ const make = Effect.gen(function* () {
         disabledSkills: projectHarness.disabledSkills,
         disabledRules: projectHarness.disabledRules,
         disabledCommands: projectHarness.disabledCommands,
+        disabledModes: projectHarness.disabledModes,
         invalidEntries: [...userInvalid, ...projectHarness.invalidEntries],
         managedPolicyAllowsHarness,
         managedPolicyOrganization,

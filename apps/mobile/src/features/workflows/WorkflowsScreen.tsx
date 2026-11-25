@@ -22,6 +22,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { RelativeTime } from "../../components/RelativeTime";
 import { AppText as Text } from "../../components/ui/AppText";
+import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
@@ -29,6 +30,7 @@ import { cn } from "../../lib/cn";
 import { useEnvironments } from "../../state/environments";
 import { formatEnvironmentQueryError } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
+import { openSettings } from "../settings/settings-navigation";
 
 const TABS = [
   {
@@ -169,6 +171,7 @@ const TAB_ORDER: ReadonlyArray<WorkflowListTab> = ["needs-you", "running", "all"
 
 /** The Workflows tab: what waits on you first, in every environment this device is connected to. */
 export function WorkflowsScreen() {
+  const navigation = useNavigation();
   const { environments, isReady } = useEnvironments();
   const [tab, setTab] = useState<WorkflowListTab | null>(null);
   const insets = useSafeAreaInsets();
@@ -216,6 +219,19 @@ export function WorkflowsScreen() {
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{ paddingBottom: insets.bottom + 96 }}
     >
+      <View className="flex-row items-center justify-between gap-3 border-b border-border-subtle px-5 py-3">
+        <View className="min-w-0 flex-1">
+          <Text className="font-t3-semibold text-sm text-foreground">{gt("Automations")}</Text>
+          <Text className="text-xs text-foreground-muted" numberOfLines={1}>
+            {gt("Workflows and scheduled tasks")}
+          </Text>
+        </View>
+        <Button
+          label={gt("Scheduled tasks")}
+          tone="secondary"
+          onPress={() => openSettings(navigation, "SettingsScheduledTasks")}
+        />
+      </View>
       {sections.flatMap(({ environment, snapshot, error }) =>
         snapshot === null && error !== null
           ? [

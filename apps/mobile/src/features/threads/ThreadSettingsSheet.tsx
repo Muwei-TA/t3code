@@ -1009,7 +1009,17 @@ function ThreadSettingsOptionsItem(props: {
     if (result._tag === "Success") {
       const manifest: ThreadContextManifest = result.value;
       const lines = [
-        `${gt("Mode")}: ${manifest.interactionMode} (${manifest.planModeReadOnlyEnforcement})`,
+        `${gt("Mode")}: ${manifest.modeName ?? manifest.interactionMode}${manifest.modeReadOnly ? ` (${gt("read-only")})` : ""} (${manifest.planModeReadOnlyEnforcement})`,
+        ...(manifest.tokenUsage
+          ? [
+              manifest.tokenUsage.maxTokens !== null
+                ? `${gt("Tokens")}: ${manifest.tokenUsage.usedTokens.toLocaleString()} / ${manifest.tokenUsage.maxTokens.toLocaleString()}`
+                : `${gt("Tokens")}: ${manifest.tokenUsage.usedTokens.toLocaleString()}`,
+            ]
+          : []),
+        ...(manifest.approvalRulesCount > 0
+          ? [`${gt("Approval grants")}: ${manifest.approvalRulesCount}`]
+          : []),
         `${gt("Harness MCP")}: ${manifest.harnessGatewayActive ? gt("Active") : gt("Inactive")}`,
         `${gt("MCP servers")}: ${manifest.mcpServers.length} (${manifest.mcpServers.reduce((acc, s) => acc + s.toolCount, 0)} ${gt("tools")})`,
         ...manifest.mcpServers.map(

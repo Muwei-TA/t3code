@@ -90,6 +90,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import * as HarnessLibraryStore from "../harness/HarnessLibraryStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import {
   SUBAGENT_RESULT_TURN_ITEM_TYPES,
@@ -2912,9 +2913,24 @@ const make = Effect.gen(function* () {
         input.runtimeMode,
         target,
       );
+      const resolvedHarnessMode =
+        input.modeId !== undefined
+          ? yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore).pipe(
+              Effect.flatMap((libOpt) =>
+                Option.isSome(libOpt)
+                  ? libOpt.value
+                      .resolveMode({
+                        modeId: input.modeId,
+                        workspaceRoot: parent.thread.worktreePath ?? undefined,
+                      })
+                      .pipe(Effect.orElseSucceed(() => null))
+                  : Effect.succeed(null),
+              ),
+            )
+          : null;
       const interactionMode = yield* resolveInteractionMode(
         parent.thread.interactionMode,
-        input.interactionMode,
+        input.interactionMode ?? resolvedHarnessMode?.baseInteractionMode,
       );
       let workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined;
       if (input.isolation === "worktree" && !isRetryOfAcceptedDelegation) {
@@ -2968,6 +2984,10 @@ const make = Effect.gen(function* () {
               modelSelection: target.modelSelection,
               runtimeMode,
               interactionMode,
+              ...(input.modeId === undefined ? {} : { modeId: input.modeId }),
+              ...(resolvedHarnessMode !== null
+                ? { modeDigest: resolvedHarnessMode.contentDigest }
+                : {}),
               ...(workspaceStrategy === undefined ? {} : { workspaceStrategy }),
               // Async delegations wake the parent on every child terminal; wait
               // delegations deliver through the blocking tool call until `awaitTask`

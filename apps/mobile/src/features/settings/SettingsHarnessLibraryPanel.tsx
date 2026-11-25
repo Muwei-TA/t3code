@@ -5,6 +5,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   type EnvironmentId,
+  type HarnessApprovalRuleRecord,
   HarnessCommandId,
   type HarnessCommandEntry,
   type HarnessExportPreviewResult,
@@ -14,12 +15,15 @@ import {
   type HarnessLibraryImportSourcePreview,
   type HarnessLibrarySnapshot,
   type HarnessMcpImportSource,
+  type HarnessModeEntry,
+  HarnessModeId,
   type HarnessRuleApplyMode,
   type HarnessRuleEntry,
   HarnessRuleId,
   type HarnessSkillEntry,
   HarnessSkillId,
   PositiveInt,
+  type ProviderInteractionMode,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -39,8 +43,16 @@ import { useAtomCommand } from "../../state/use-atom-command";
 const decodeSkillId = Schema.decodeUnknownOption(HarnessSkillId);
 const decodeRuleId = Schema.decodeUnknownOption(HarnessRuleId);
 const decodeCommandId = Schema.decodeUnknownOption(HarnessCommandId);
+const decodeModeId = Schema.decodeUnknownOption(HarnessModeId);
 
-export type MobileHarnessTab = "mcp" | "skills" | "rules" | "commands" | "transfer";
+export type MobileHarnessTab =
+  | "mcp"
+  | "modes"
+  | "skills"
+  | "rules"
+  | "commands"
+  | "permissions"
+  | "transfer";
 
 const ALL_EXPORT_SECTIONS: ReadonlyArray<HarnessExportSection> = [
   "mcp",
@@ -96,6 +108,12 @@ export function SettingsHarnessLibraryPanel({
       input: workspaceRoot ? { workspaceRoot } : {},
     }),
   );
+  const approvalRulesQuery = useEnvironmentQuery(
+    harnessEnvironment.approvalRulesQuery({
+      environmentId,
+      input: { includeRevoked: true },
+    }),
+  );
 
   const saveAgentsMd = useAtomCommand(harnessEnvironment.saveAgentsMd, { reportFailure: false });
   const upsertSkill = useAtomCommand(harnessEnvironment.upsertSkill, { reportFailure: false });
@@ -124,8 +142,19 @@ export function SettingsHarnessLibraryPanel({
   });
   const previewExport = useAtomCommand(harnessEnvironment.previewExport, { reportFailure: false });
   const applyExport = useAtomCommand(harnessEnvironment.applyExport, { reportFailure: false });
+  const upsertMode = useAtomCommand(harnessEnvironment.upsertMode, { reportFailure: false });
+  const removeMode = useAtomCommand(harnessEnvironment.removeMode, { reportFailure: false });
+  const setModeEnabled = useAtomCommand(harnessEnvironment.setModeEnabled, {
+    reportFailure: false,
+  });
+  const revokeApprovalRule = useAtomCommand(harnessEnvironment.revokeApprovalRule, {
+    reportFailure: false,
+  });
 
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [modeModal, setModeModal] = useState<
+    { readonly mode: "create" } | { readonly mode: "edit"; readonly entry: HarnessModeEntry } | null
+  >(null);
   const [skillModal, setSkillModal] = useState<
     | { readonly mode: "create" }
     | { readonly mode: "edit"; readonly entry: HarnessSkillEntry }
@@ -167,6 +196,81 @@ export function SettingsHarnessLibraryPanel({
       </View>
     );
   }
+
+  const handleToggleMode = async (entry: HarnessModeEntry) => {
+    if (!canWriteSettings) return;
+    setBusyId(`mode:${entry.id}`);
+    const result = await setModeEnabled({
+      environmentId,
+      input: {
+        id: entry.id,
+        enabled: !entry.effectiveEnabled,
+        ...(workspaceRoot ? { workspaceRoot } : {}),
+      },
+    });
+    setBusyId(null);
+    if (result._tag === "Success") libraryQuery.refresh();
+    else reportError(gt("Could not update mode"), result);
+  };
+
+  const handleRemoveMode = (entry: HarnessModeEntry) => {
+    if (!canWriteSettings || entry.scope !== "user") return;
+    Dialog.confirm({
+      title: gt("Remove mode"),
+      message: gt('Remove portable mode "{id}" from this host?', { id: entry.id }),
+      confirmText: gt("Remove"),
+      destructive: true,
+      onConfirm: () => {
+        void (async () => {
+          setBusyId(`mode:${entry.id}`);
+          const result = await removeMode({
+            environmentId,
+            input: {
+              id: entry.id,
+              ...(workspaceRoot ? { workspaceRoot } : {}),
+            },
+          });
+          setBusyId(null);
+          if (result._tag === "Success") libraryQuery.refresh();
+          else reportError(gt("Could not remove mode"), result);
+        })();
+      },
+    });
+  };
+
+  const handleRevokeApprovalRule = (rule: HarnessApprovalRuleRecord) => {
+    if (!canWriteSettings || rule.revokedAt !== null) return;
+    Dialog.confirm({
+      title: gt("Revoke approval grant"),
+      message: gt(
+        'Revoke "{summary}" on {host} and detach its active provider session so future turns re-check permissions?',
+        { summary: rule.summary, host: targetHost },
+      ),
+      confirmText: gt("Revoke"),
+      destructive: true,
+      onConfirm: () => {
+        void (async () => {
+          setBusyId(`approval:${rule.id}`);
+          const result = await revokeApprovalRule({
+            environmentId,
+            input: { id: rule.id, detachThreadSession: true },
+          });
+          setBusyId(null);
+          if (result._tag === "Success") {
+            approvalRulesQuery.refresh();
+            Dialog.alert(
+              gt("Grant revoked"),
+              result.value.sessionDetached
+                ? gt("The grant was revoked and the thread session was detached.")
+                : result.value.note,
+            );
+          } else {
+            reportError(gt("Could not revoke grant"), result);
+          }
+        })();
+      },
+    });
+  };
 
   const handleToggleSkill = async (entry: HarnessSkillEntry) => {
     if (!canWriteSettings) return;
@@ -477,6 +581,129 @@ export function SettingsHarnessLibraryPanel({
 
   return (
     <View className="gap-3">
+      {activeTab === "modes" ? (
+        <>
+          <View className="flex-row flex-wrap gap-2">
+            <Button
+              label={gt("Add mode")}
+              tone="primary"
+              disabled={!canWriteSettings}
+              onPress={() => setModeModal({ mode: "create" })}
+            />
+            <Button label={gt("Refresh")} tone="secondary" onPress={() => libraryQuery.refresh()} />
+          </View>
+
+          {!snapshot || snapshot.modes.length === 0 ? (
+            <Text className="text-sm text-foreground-muted">
+              <T>No portable modes found.</T>
+            </Text>
+          ) : (
+            <View className="gap-3">
+              {snapshot.modes.map((mode) => (
+                <View
+                  key={`${mode.scope}:${mode.id}`}
+                  className="gap-2 rounded-xl border border-border bg-card-alt p-3"
+                >
+                  <View className="flex-row items-center justify-between gap-2">
+                    <View className="flex-1">
+                      <Text className="font-t3-semibold text-base text-foreground">
+                        {mode.name}
+                      </Text>
+                      <Text className="text-xs text-foreground-muted">
+                        {mode.id} · {mode.scope} · {mode.baseInteractionMode}
+                        {mode.readonly ? ` · ${gt("read-only")}` : ""}
+                        {mode.proposePlan ? ` · ${gt("propose-plan")}` : ""}
+                      </Text>
+                    </View>
+                    <Switch
+                      value={mode.effectiveEnabled}
+                      disabled={!canWriteSettings || busyId === `mode:${mode.id}`}
+                      onValueChange={() => void handleToggleMode(mode)}
+                    />
+                  </View>
+                  {mode.description ? (
+                    <Text className="text-xs text-foreground-muted" numberOfLines={2}>
+                      {mode.description}
+                    </Text>
+                  ) : null}
+                  <View className="flex-row flex-wrap gap-2 pt-1">
+                    <Button
+                      label={mode.scope === "builtin" ? gt("Customize") : gt("Edit")}
+                      tone="secondary"
+                      disabled={!canWriteSettings}
+                      onPress={() => setModeModal({ mode: "edit", entry: mode })}
+                    />
+                    {mode.scope === "user" ? (
+                      <Button
+                        label={gt("Remove")}
+                        tone="secondary"
+                        disabled={!canWriteSettings || busyId === `mode:${mode.id}`}
+                        onPress={() => handleRemoveMode(mode)}
+                      />
+                    ) : null}
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
+        </>
+      ) : null}
+
+      {activeTab === "permissions" ? (
+        <>
+          <View className="flex-row flex-wrap gap-2">
+            <Button
+              label={gt("Refresh")}
+              tone="secondary"
+              onPress={() => approvalRulesQuery.refresh()}
+            />
+          </View>
+          <Text className="text-xs text-foreground-muted">
+            <T>
+              Audited native allow-always and session approval grants recorded on this host.
+              Revoking a grant marks it inactive and detaches the active provider session.
+            </T>
+          </Text>
+          {approvalRulesQuery.isPending && !approvalRulesQuery.data ? (
+            <View className="py-4">
+              <AppActivityIndicator />
+            </View>
+          ) : !approvalRulesQuery.data || approvalRulesQuery.data.rules.length === 0 ? (
+            <Text className="text-sm text-foreground-muted">
+              <T>No persistent or session approval grants recorded yet.</T>
+            </Text>
+          ) : (
+            <View className="gap-3">
+              {approvalRulesQuery.data.rules.map((rule) => (
+                <View
+                  key={rule.id}
+                  className="gap-2 rounded-xl border border-border bg-card-alt p-3"
+                >
+                  <Text className="font-mono text-xs text-foreground">{rule.summary}</Text>
+                  <Text className="text-xs text-foreground-muted">
+                    {rule.scope} · {rule.requestKind} · {rule.providerInstanceId} ·{" "}
+                    {rule.revokedAt ? gt("Revoked") : gt("Active")}
+                  </Text>
+                  <Text className="text-2xs text-foreground-muted">
+                    {gt("Granted {timestamp}", { timestamp: rule.createdAt })}
+                  </Text>
+                  {rule.revokedAt === null ? (
+                    <View className="flex-row pt-1">
+                      <Button
+                        label={gt("Revoke")}
+                        tone="danger"
+                        disabled={!canWriteSettings || busyId === `approval:${rule.id}`}
+                        onPress={() => handleRevokeApprovalRule(rule)}
+                      />
+                    </View>
+                  ) : null}
+                </View>
+              ))}
+            </View>
+          )}
+        </>
+      ) : null}
+
       {activeTab === "skills" ? (
         <>
           <View className="flex-row flex-wrap gap-2">
@@ -1087,6 +1314,52 @@ export function SettingsHarnessLibraryPanel({
           </View>
         </ScrollView>
       </Modal>
+
+      <Modal
+        visible={modeModal !== null}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setModeModal(null)}
+      >
+        {modeModal ? (
+          <ModeEditorBody
+            initial={modeModal.mode === "edit" ? modeModal.entry : null}
+            saving={busyId === "__mode_save__"}
+            onCancel={() => setModeModal(null)}
+            onSave={async (draft) => {
+              const parsedId = decodeModeId(draft.id.trim());
+              if (parsedId._tag === "None") {
+                Dialog.alert(
+                  gt("Invalid mode ID"),
+                  gt("Use letters, digits, underscores, or hyphens."),
+                );
+                return;
+              }
+              setBusyId("__mode_save__");
+              const result = await upsertMode({
+                environmentId,
+                input: {
+                  id: parsedId.value,
+                  ...(draft.name.trim() ? { name: draft.name.trim() } : {}),
+                  ...(draft.description.trim() ? { description: draft.description.trim() } : {}),
+                  baseInteractionMode: draft.baseInteractionMode,
+                  readonly: draft.readonly,
+                  proposePlan: draft.proposePlan,
+                  body: draft.body,
+                  ...(workspaceRoot ? { workspaceRoot } : {}),
+                },
+              });
+              setBusyId(null);
+              if (result._tag === "Success") {
+                setModeModal(null);
+                libraryQuery.refresh();
+              } else {
+                reportError(gt("Could not save mode"), result);
+              }
+            }}
+          />
+        ) : null}
+      </Modal>
     </View>
   );
 }
@@ -1426,6 +1699,132 @@ function AgentsMdEditorBody({
           tone="primary"
           disabled={saving}
           onPress={() => void onSave(content)}
+        />
+        <Button label={gt("Cancel")} tone="secondary" onPress={onCancel} />
+      </View>
+    </ScrollView>
+  );
+}
+
+function ModeEditorBody({
+  initial,
+  saving,
+  onCancel,
+  onSave,
+}: {
+  readonly initial: HarnessModeEntry | null;
+  readonly saving: boolean;
+  readonly onCancel: () => void;
+  readonly onSave: (draft: {
+    readonly id: string;
+    readonly name: string;
+    readonly description: string;
+    readonly baseInteractionMode: ProviderInteractionMode;
+    readonly readonly: boolean;
+    readonly proposePlan: boolean;
+    readonly body: string;
+  }) => Promise<void>;
+}) {
+  const gt = useGT();
+  const [id, setId] = useState(initial?.id ?? "");
+  const [name, setName] = useState(initial?.name ?? "");
+  const [description, setDescription] = useState(initial?.description ?? "");
+  const [baseInteractionMode, setBaseInteractionMode] = useState<ProviderInteractionMode>(
+    initial?.baseInteractionMode ?? "default",
+  );
+  const [readonlyMode, setReadonlyMode] = useState(initial?.readonly ?? false);
+  const [proposePlan, setProposePlan] = useState(initial?.proposePlan ?? false);
+  const [body, setBody] = useState(initial?.body ?? "");
+
+  return (
+    <ScrollView className="flex-1 bg-screen px-5 pt-6" contentContainerClassName="gap-4 pb-10">
+      <Text className="font-t3-bold text-xl text-foreground">
+        {initial ? <T>Edit Portable Mode</T> : <T>New Portable Mode</T>}
+      </Text>
+      <View className="gap-1.5">
+        <Text className="text-sm font-t3-medium text-foreground">
+          <T>Mode ID</T>
+        </Text>
+        <TextInput
+          value={id}
+          editable={initial === null}
+          onChangeText={setId}
+          placeholder="security-audit"
+          autoCapitalize="none"
+          className="rounded-xl border border-border bg-card px-3 py-2.5 text-foreground"
+        />
+      </View>
+      <View className="gap-1.5">
+        <Text className="text-sm font-t3-medium text-foreground">
+          <T>Display name</T>
+        </Text>
+        <TextInput
+          value={name}
+          onChangeText={setName}
+          placeholder={gt("Security Audit")}
+          className="rounded-xl border border-border bg-card px-3 py-2.5 text-foreground"
+        />
+      </View>
+      <View className="gap-1.5">
+        <Text className="text-sm font-t3-medium text-foreground">
+          <T>Description</T>
+        </Text>
+        <TextInput
+          value={description}
+          onChangeText={setDescription}
+          placeholder={gt("Short summary shown in mode switcher")}
+          className="rounded-xl border border-border bg-card px-3 py-2.5 text-foreground"
+        />
+      </View>
+      <View className="flex-row items-center justify-between">
+        <Text className="text-sm font-t3-medium text-foreground">
+          <T>Base plan interaction mode</T>
+        </Text>
+        <Switch
+          value={baseInteractionMode === "plan"}
+          onValueChange={(enabled) => setBaseInteractionMode(enabled ? "plan" : "default")}
+        />
+      </View>
+      <View className="flex-row items-center justify-between">
+        <Text className="text-sm font-t3-medium text-foreground">
+          <T>Read-only mode</T>
+        </Text>
+        <Switch value={readonlyMode} onValueChange={setReadonlyMode} />
+      </View>
+      <View className="flex-row items-center justify-between">
+        <Text className="text-sm font-t3-medium text-foreground">
+          <T>Emit proposed plan cards</T>
+        </Text>
+        <Switch value={proposePlan} onValueChange={setProposePlan} />
+      </View>
+      <View className="gap-1.5">
+        <Text className="text-sm font-t3-medium text-foreground">
+          <T>Instructions (Markdown)</T>
+        </Text>
+        <TextInput
+          value={body}
+          onChangeText={setBody}
+          multiline
+          textAlignVertical="top"
+          className="min-h-40 rounded-xl border border-border bg-card px-3 py-2.5 font-mono text-xs text-foreground"
+        />
+      </View>
+      <View className="flex-row gap-2 pt-2">
+        <Button
+          label={saving ? gt("Saving...") : gt("Save")}
+          tone="primary"
+          disabled={saving}
+          onPress={() =>
+            void onSave({
+              id,
+              name,
+              description,
+              baseInteractionMode,
+              readonly: readonlyMode,
+              proposePlan,
+              body,
+            })
+          }
         />
         <Button label={gt("Cancel")} tone="secondary" onPress={onCancel} />
       </View>

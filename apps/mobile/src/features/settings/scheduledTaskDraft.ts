@@ -214,6 +214,7 @@ export type ScheduledTaskDraft = {
   readonly enabled: boolean;
   readonly startFromOrigin: boolean;
   readonly runtimeMode: RuntimeMode;
+  readonly modeId: string;
 };
 
 function draftSignature(draft: ScheduledTaskDraft): string {
@@ -244,6 +245,7 @@ function draftSignature(draft: ScheduledTaskDraft): string {
     draft.enabled,
     draft.startFromOrigin,
     draft.runtimeMode,
+    draft.modeId,
   ]);
 }
 
@@ -306,6 +308,7 @@ export function createDraft(
     enabled: true,
     startFromOrigin: true,
     runtimeMode: "full-access",
+    modeId: "",
   };
 }
 
@@ -332,5 +335,6 @@ export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
         ? (task.workspaceStrategy.startFromOrigin ?? false)
         : true,
     runtimeMode: task.runtimeMode,
+    modeId: task.modeId ?? "",
   };
 }

@@ -3,6 +3,9 @@ import {
   DEFAULT_HARNESS_CAPABILITIES,
   HarnessCommandId,
   type HarnessLibrarySnapshot,
+  HarnessMcpServerId,
+  type HarnessModeEntry,
+  HarnessModeId,
   HarnessRuleId,
   HarnessSkillId,
   NonNegativeInt,
@@ -14,6 +17,7 @@ import {
   expandPortableCommand,
   extractMentionedSkills,
   extractReferencedPaths,
+  isMcpServerAllowedByMode,
   matchesRuleGlob,
   projectHarnessContext,
 } from "./HarnessProjector.ts";
@@ -34,6 +38,7 @@ function makeLibrary(overrides?: Partial<HarnessLibrarySnapshot>): HarnessLibrar
     skills: [],
     rules: [],
     commands: [],
+    modes: [],
     maxSystemContextBytes: PositiveInt.make(12_000),
     invalidEntries: [],
     managedPolicyAllowsHarness: true,
@@ -295,5 +300,62 @@ describe("HarnessProjector", () => {
     });
     expect(tightProjected.contextUsedBytes).toBeLessThanOrEqual(2500);
     expect(tightProjected.rules.find((r) => r.id === "rule-b")?.status).toBe("degraded");
+  });
+
+  it("projects active declarative Mode instructions, included manual rules, and MCP server filtering", () => {
+    const activeMode: HarnessModeEntry = {
+      id: HarnessModeId.make("security-audit"),
+      name: TrimmedNonEmptyString.make("Security Audit"),
+      scope: "user",
+      description: "Audit security boundaries",
+      baseInteractionMode: "default",
+      readonly: true,
+      proposePlan: false,
+      allowedMcpServers: [HarnessMcpServerId.make("github")],
+      disabledMcpServers: [HarnessMcpServerId.make("shell-exec")],
+      includedRules: [HarnessRuleId.make("sec-manual")],
+      enabled: true,
+      effectiveEnabled: true,
+      overriddenByProject: false,
+      sourcePath: "/home/user/.t3/harness/modes/security-audit.md",
+      contentDigest: "mode-sec-1",
+      bytes: NonNegativeInt.make(48),
+      body: "Focus on auth, secrets, and injection risks.",
+    };
+
+    expect(isMcpServerAllowedByMode("github", activeMode)).toBe(true);
+    expect(isMcpServerAllowedByMode("linear", activeMode)).toBe(false);
+    expect(isMcpServerAllowedByMode("shell-exec", activeMode)).toBe(false);
+
+    const lib = makeLibrary({
+      modes: [activeMode],
+      rules: [
+        {
+          id: HarnessRuleId.make("sec-manual"),
+          scope: "user",
+          apply: "manual",
+          globs: [],
+          enabled: true,
+          effectiveEnabled: true,
+          overriddenByProject: false,
+          sourcePath: "/home/user/.t3/harness/rules/sec-manual.md",
+          contentDigest: "rm-1",
+          bytes: NonNegativeInt.make(32),
+          body: "Check every RPC scope boundary.",
+        },
+      ],
+    });
+
+    const projected = projectHarnessContext({
+      library: lib,
+      activeMode,
+      harnessCapabilities: DEFAULT_HARNESS_CAPABILITIES,
+      supportsMcpTools: true,
+    });
+    const combined = projected.segments.map((s) => s.text).join("\n");
+    expect(combined).toContain("Security Audit");
+    expect(combined).toContain("Focus on auth, secrets, and injection risks.");
+    expect(combined).toContain("Check every RPC scope boundary.");
+    expect(projected.rules.find((r) => r.id === "sec-manual")?.status).toBe("inlined");
   });
 });

@@ -128,5 +128,31 @@ export function createHarnessEnvironmentAtoms<R, E>(
       label: "environment-command:harness:export:apply",
       tag: WS_METHODS.harnessExportApply,
     }),
+    upsertMode: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:mode:upsert",
+      tag: WS_METHODS.harnessModeUpsert,
+    }),
+    removeMode: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:mode:remove",
+      tag: WS_METHODS.harnessModeRemove,
+    }),
+    setModeEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:mode:set-enabled",
+      tag: WS_METHODS.harnessModeSetEnabled,
+    }),
+    approvalRulesQuery: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:harness:approval-rules:list",
+      tag: WS_METHODS.harnessApprovalRulesList,
+      staleTimeMs: 5_000,
+      idleTtlMs: 60_000,
+    }),
+    listApprovalRules: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:approval-rules:list",
+      tag: WS_METHODS.harnessApprovalRulesList,
+    }),
+    revokeApprovalRule: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:approval-rules:revoke",
+      tag: WS_METHODS.harnessApprovalRuleRevoke,
+    }),
   };
 }

@@ -11,6 +11,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   EnvironmentId,
+  HarnessModeId,
   ModelSelection,
   ProjectId,
   ProviderInstanceId,
@@ -481,6 +482,7 @@ export interface ComposerThreadDraftState {
   modelSelectionExplicit?: boolean;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
+  modeId?: HarnessModeId | null;
 }
 
 export function composerDraftHasUserContent(
@@ -674,6 +676,7 @@ interface ComposerDraftStoreState {
     threadRef: ComposerThreadTarget,
     interactionMode: ProviderInteractionMode | null | undefined,
   ) => void;
+  setModeId: (threadRef: ComposerThreadTarget, modeId: HarnessModeId | null | undefined) => void;
   addImage: (threadRef: ComposerThreadTarget, image: ComposerImageAttachment) => boolean;
   addImages: (
     threadRef: ComposerThreadTarget,
@@ -1040,7 +1043,8 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
-    draft.interactionMode === null
+    draft.interactionMode === null &&
+    (draft.modeId ?? null) === null
   );
 }
 
@@ -3588,6 +3592,34 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const nextDraft: ComposerThreadDraftState = {
               ...base,
               interactionMode: nextInteractionMode,
+            };
+            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(nextDraft)) {
+              delete nextDraftsByThreadKey[threadKey];
+            } else {
+              nextDraftsByThreadKey[threadKey] = nextDraft;
+            }
+            return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
+        setModeId: (threadRef, modeId) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
+          if (threadKey.length === 0) {
+            return;
+          }
+          const nextModeId = modeId ?? null;
+          set((state) => {
+            const existing = state.draftsByThreadKey[threadKey];
+            if (!existing && nextModeId === null) {
+              return state;
+            }
+            const base = existing ?? createEmptyThreadDraft();
+            if ((base.modeId ?? null) === nextModeId) {
+              return state;
+            }
+            const nextDraft: ComposerThreadDraftState = {
+              ...base,
+              modeId: nextModeId,
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {

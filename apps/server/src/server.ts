@@ -95,6 +95,7 @@ import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrid
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as HarnessStore from "./harness/HarnessStore.ts";
+import * as HarnessApprovalAuditStore from "./harness/HarnessApprovalAuditStore.ts";
 import * as HarnessLibraryStore from "./harness/HarnessLibraryStore.ts";
 import * as HarnessImporter from "./harness/HarnessImporter.ts";
 import * as HarnessLibraryImporter from "./harness/HarnessLibraryImporter.ts";
@@ -858,6 +859,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
       HarnessStore.layer,
+      HarnessApprovalAuditStore.layer.pipe(Layer.provide(HarnessStore.layer)),
       HarnessLibraryStore.layer.pipe(Layer.provide(HarnessStore.layer)),
       HarnessImporter.layer.pipe(Layer.provide(HarnessStore.layer)),
       HarnessLibraryImporter.layer.pipe(

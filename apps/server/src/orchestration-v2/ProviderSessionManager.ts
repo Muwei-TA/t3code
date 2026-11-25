@@ -695,11 +695,24 @@ export const layerWithOptions = (
                   Effect.orElseSucceed(() => [] as ReadonlyArray<NativeDiscoveredSkill>),
                 )
               : [];
+          const activeMode =
+            Option.isSome(harnessLibraryStore) && Option.isSome(threadRecord)
+              ? yield* harnessLibraryStore.value
+                  .resolveMode({
+                    ...(threadRecord.value.modeId !== undefined
+                      ? { modeId: threadRecord.value.modeId }
+                      : {}),
+                    interactionMode: threadRecord.value.interactionMode,
+                    workspaceRoot,
+                  })
+                  .pipe(Effect.orElseSucceed(() => null))
+              : null;
           const projectedLibrary =
             librarySnapshot !== null && Option.isSome(adapterCapabilities)
               ? projectHarnessContext({
                   library: librarySnapshot,
                   harnessCapabilities: adapterCapabilities.value.harness,
+                  activeMode,
                   nativeSkills,
                   nativeReadsProjectAgentsMd: true,
                   supportsMcpTools: adapterCapabilities.value.tools.supportsMcpTools,
@@ -715,7 +728,7 @@ export const layerWithOptions = (
               : undefined;
           const libraryDigest =
             librarySnapshot !== null
-              ? `${librarySnapshot.userAgentsMd.contentDigest}:${librarySnapshot.skills
+              ? `${activeMode ? `${activeMode.id}@${activeMode.contentDigest}:` : ""}${librarySnapshot.userAgentsMd.contentDigest}:${librarySnapshot.skills
                   .filter((s) => s.effectiveEnabled)
                   .map((s) => `${s.id}@${s.contentDigest}`)
                   .join(",")}:${librarySnapshot.rules

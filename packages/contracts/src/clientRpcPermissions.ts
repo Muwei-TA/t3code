@@ -128,6 +128,10 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.harnessLibraryApplyImports]: AuthSettingsWriteScope,
   [WS_METHODS.harnessExportPreview]: AuthSettingsWriteScope,
   [WS_METHODS.harnessExportApply]: AuthProvidersManageScope,
+  [WS_METHODS.harnessModeUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessModeRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessModeSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessApprovalRuleRevoke]: AuthOrchestrationOperateScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

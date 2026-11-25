@@ -73,6 +73,27 @@ export const HarnessCommandId = TrimmedNonEmptyString.check(
 });
 export type HarnessCommandId = typeof HarnessCommandId.Type;
 
+const BUILTIN_HARNESS_MODE_IDS = ["build", "plan", "review", "creator"] as const;
+export type BuiltinHarnessModeId = (typeof BUILTIN_HARNESS_MODE_IDS)[number];
+
+export const HarnessModeId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(64),
+  Schema.isPattern(HARNESS_ITEM_ID_PATTERN),
+).annotate({
+  description:
+    "Stable portable Mode identifier (built-in build/plan/review/creator or custom modes/*.md).",
+});
+export type HarnessModeId = typeof HarnessModeId.Type;
+
+export const HarnessModeScope = Schema.Literals(["builtin", "user"]);
+export type HarnessModeScope = typeof HarnessModeScope.Type;
+
+export const HarnessApprovalRuleId = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
+export type HarnessApprovalRuleId = typeof HarnessApprovalRuleId.Type;
+
+export const HarnessApprovalRuleScope = Schema.Literals(["session", "always"]);
+export type HarnessApprovalRuleScope = typeof HarnessApprovalRuleScope.Type;
+
 /** Built-in T3 MCP server identifiers and dynamic thread-scoped prefixes that user/project configs may never shadow. */
 const RESERVED_HARNESS_MCP_SERVER_IDS: ReadonlySet<string> = new Set([
   "t3-code",
@@ -222,6 +243,7 @@ export const HarnessConfigFile = Schema.Struct({
   disabledCommands: Schema.Array(HarnessCommandId).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  disabledModes: Schema.Array(HarnessModeId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   maxSystemContextBytes: Schema.NullOr(PositiveInt).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -235,9 +257,10 @@ export const ProjectHarnessConfig = Schema.Struct({
   disabledSkills: Schema.optionalKey(Schema.Array(HarnessSkillId)),
   disabledRules: Schema.optionalKey(Schema.Array(HarnessRuleId)),
   disabledCommands: Schema.optionalKey(Schema.Array(HarnessCommandId)),
+  disabledModes: Schema.optionalKey(Schema.Array(HarnessModeId)),
 }).annotate({
   description:
-    "Project-scoped portable harness configuration (MCP servers, skills, rules, commands overrides). Stdio servers require explicit owner trust confirmation before execution.",
+    "Project-scoped portable harness configuration (MCP servers, skills, rules, commands, modes overrides). Stdio servers require explicit owner trust confirmation before execution.",
 });
 export type ProjectHarnessConfig = typeof ProjectHarnessConfig.Type;
 
@@ -438,6 +461,100 @@ export const HarnessCommandEntry = Schema.Struct({
 });
 export type HarnessCommandEntry = typeof HarnessCommandEntry.Type;
 
+export const HarnessModeEntry = Schema.Struct({
+  id: HarnessModeId,
+  name: TrimmedNonEmptyString,
+  scope: HarnessModeScope,
+  overriddenBuiltin: Schema.optionalKey(Schema.Boolean),
+  description: Schema.optionalKey(Schema.String),
+  baseInteractionMode: ProviderInteractionMode,
+  readonly: Schema.Boolean,
+  proposePlan: Schema.Boolean,
+  defaultModel: Schema.optionalKey(TrimmedNonEmptyString),
+  allowedMcpServers: Schema.optionalKey(Schema.Array(HarnessMcpServerId)),
+  disabledMcpServers: Schema.optionalKey(Schema.Array(HarnessMcpServerId)),
+  includedRules: Schema.optionalKey(Schema.Array(HarnessRuleId)),
+  includedSkills: Schema.optionalKey(Schema.Array(HarnessSkillId)),
+  enabled: Schema.Boolean,
+  effectiveEnabled: Schema.Boolean,
+  overriddenByProject: Schema.Boolean,
+  sourcePath: Schema.NullOr(Schema.String),
+  contentDigest: Schema.String,
+  bytes: NonNegativeInt,
+  body: Schema.String,
+});
+export type HarnessModeEntry = typeof HarnessModeEntry.Type;
+
+export const HarnessModeUpsertInput = Schema.Struct({
+  id: HarnessModeId,
+  name: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+  description: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+  baseInteractionMode: ProviderInteractionMode,
+  readonly: Schema.optionalKey(Schema.Boolean),
+  proposePlan: Schema.optionalKey(Schema.Boolean),
+  defaultModel: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+  allowedMcpServers: Schema.optionalKey(Schema.Array(HarnessMcpServerId)),
+  disabledMcpServers: Schema.optionalKey(Schema.Array(HarnessMcpServerId)),
+  includedRules: Schema.optionalKey(Schema.Array(HarnessRuleId)),
+  includedSkills: Schema.optionalKey(Schema.Array(HarnessSkillId)),
+  enabled: Schema.optionalKey(Schema.Boolean),
+  body: Schema.String.check(Schema.isMaxLength(262_144)),
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessModeUpsertInput = typeof HarnessModeUpsertInput.Type;
+
+export const HarnessModeRemoveInput = Schema.Struct({
+  id: HarnessModeId,
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessModeRemoveInput = typeof HarnessModeRemoveInput.Type;
+
+export const HarnessModeSetEnabledInput = Schema.Struct({
+  id: HarnessModeId,
+  enabled: Schema.Boolean,
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type HarnessModeSetEnabledInput = typeof HarnessModeSetEnabledInput.Type;
+
+/** Audited native `allow_always` / session approval rule recorded for visibility and revocation. */
+export const HarnessApprovalRuleRecord = Schema.Struct({
+  id: HarnessApprovalRuleId,
+  threadId: ThreadId,
+  providerInstanceId: ProviderInstanceId,
+  requestKind: Schema.String,
+  scope: HarnessApprovalRuleScope,
+  summary: Schema.String,
+  appName: Schema.optionalKey(Schema.String),
+  workspaceRoot: Schema.NullOr(Schema.String),
+  createdAt: IsoDateTime,
+  revokedAt: Schema.NullOr(IsoDateTime),
+});
+export type HarnessApprovalRuleRecord = typeof HarnessApprovalRuleRecord.Type;
+
+export const HarnessApprovalRulesListInput = Schema.Struct({
+  threadId: Schema.optionalKey(ThreadId),
+  includeRevoked: Schema.optionalKey(Schema.Boolean),
+});
+export type HarnessApprovalRulesListInput = typeof HarnessApprovalRulesListInput.Type;
+
+export const HarnessApprovalRulesListResult = Schema.Struct({
+  rules: Schema.Array(HarnessApprovalRuleRecord),
+});
+export type HarnessApprovalRulesListResult = typeof HarnessApprovalRulesListResult.Type;
+
+export const HarnessApprovalRuleRevokeInput = Schema.Struct({
+  id: HarnessApprovalRuleId,
+  detachThreadSession: Schema.optionalKey(Schema.Boolean),
+});
+export type HarnessApprovalRuleRevokeInput = typeof HarnessApprovalRuleRevokeInput.Type;
+
+export const HarnessApprovalRuleRevokeResult = Schema.Struct({
+  rule: HarnessApprovalRuleRecord,
+  sessionDetached: Schema.Boolean,
+  note: Schema.String,
+});
+export type HarnessApprovalRuleRevokeResult = typeof HarnessApprovalRuleRevokeResult.Type;
+
 export const HarnessLibrarySnapshot = Schema.Struct({
   harnessDir: Schema.String,
   workspaceRoot: Schema.NullOr(Schema.String),
@@ -446,6 +563,7 @@ export const HarnessLibrarySnapshot = Schema.Struct({
   skills: Schema.Array(HarnessSkillEntry),
   rules: Schema.Array(HarnessRuleEntry),
   commands: Schema.Array(HarnessCommandEntry),
+  modes: Schema.Array(HarnessModeEntry).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   maxSystemContextBytes: PositiveInt,
   invalidEntries: Schema.Array(HarnessInvalidEntry),
   managedPolicyAllowsHarness: Schema.Boolean,
@@ -671,8 +789,15 @@ export const ThreadContextRuleItem = Schema.Struct({
 });
 export type ThreadContextRuleItem = typeof ThreadContextRuleItem.Type;
 
+export const ThreadContextTokenUsage = Schema.Struct({
+  usedTokens: NonNegativeInt,
+  maxTokens: Schema.NullOr(PositiveInt),
+  autoCompactThreshold: Schema.NullOr(PositiveInt),
+});
+export type ThreadContextTokenUsage = typeof ThreadContextTokenUsage.Type;
+
 export const ThreadContextDegradedItem = Schema.Struct({
-  kind: Schema.Literals(["mcp", "plan", "skill", "rule"]),
+  kind: Schema.Literals(["mcp", "plan", "skill", "rule", "mode"]),
   id: Schema.String,
   reason: Schema.String,
 });
@@ -684,6 +809,10 @@ export const ThreadContextManifest = Schema.Struct({
   generatedAt: IsoDateTime,
   providerInstanceId: ProviderInstanceId,
   interactionMode: ProviderInteractionMode,
+  modeId: Schema.optionalKey(HarnessModeId),
+  modeName: Schema.optionalKey(Schema.String),
+  modeDigest: Schema.optionalKey(Schema.String),
+  modeReadOnly: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   planModeSource: HarnessPlanModeKind,
   planModeReadOnlyEnforcement: HarnessPlanReadOnlyEnforcement,
   harnessGatewayActive: Schema.Boolean,
@@ -694,6 +823,10 @@ export const ThreadContextManifest = Schema.Struct({
   contextBudgetBytes: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   contextUsedBytes: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   scaffoldBytes: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  tokenUsage: Schema.NullOr(ThreadContextTokenUsage).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  approvalRulesCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   degradedItems: Schema.Array(ThreadContextDegradedItem),
 });
 export type ThreadContextManifest = typeof ThreadContextManifest.Type;

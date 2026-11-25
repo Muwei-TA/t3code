@@ -72,6 +72,7 @@ import {
   AuthSourceControlWriteScope,
   AuthPreviewOperateScope,
   AuthTerminalOperateScope,
+  HarnessModeId,
   type AssistantCitation,
   type ResponseContextRecord,
   type ChatFileAttachment,
@@ -641,6 +642,9 @@ export default function ChatView(props: ChatViewProps) {
   );
   const composerInteractionMode = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.interactionMode ?? null,
+  );
+  const composerModeId = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.modeId ?? null,
   );
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
@@ -1452,6 +1456,12 @@ export default function ChatView(props: ChatViewProps) {
   const interactionMode: ProviderInteractionMode = providerSupportsPlanMode
     ? rawInteractionMode
     : DEFAULT_INTERACTION_MODE;
+  const rawModeId: HarnessModeId =
+    composerModeId ??
+    (isServerThread ? activeThread?.modeId : undefined) ??
+    HarnessModeId.make(rawInteractionMode === "plan" ? "plan" : "build");
+  const modeId: HarnessModeId =
+    !providerSupportsPlanMode && rawModeId === "plan" ? HarnessModeId.make("build") : rawModeId;
   const activeUsageModel =
     [
       composerModelSelectionApplies ? composerSelectedModelSelection : null,
@@ -2195,6 +2205,7 @@ export default function ChatView(props: ChatViewProps) {
     branch?: string;
     runtimeMode: RuntimeMode;
     interactionMode: ProviderInteractionMode;
+    modeId?: HarnessModeId | undefined;
   }): Promise<AtomCommandResult<void, unknown>> => {
     if (!serverThread) {
       return AsyncResult.success(undefined);
@@ -2239,13 +2250,17 @@ export default function ChatView(props: ChatViewProps) {
       }
     }
 
-    if (input.interactionMode !== serverThread.interactionMode) {
+    if (
+      input.interactionMode !== serverThread.interactionMode ||
+      (input.modeId !== undefined && input.modeId !== serverThread.modeId)
+    ) {
       result = mapAtomCommandResult(
         await setThreadInteractionMode({
           environmentId,
           input: {
             threadId: input.threadId,
             interactionMode: input.interactionMode,
+            ...(input.modeId !== undefined ? { modeId: input.modeId } : {}),
             createdAt: input.createdAt,
           },
         }),
@@ -3080,6 +3095,7 @@ export default function ChatView(props: ChatViewProps) {
   const {
     getModelDisabledReason,
     handleInteractionModeChangeStable,
+    handleModeChangeStable,
     handleRuntimeModeChangeStable,
     onEnvModeChangeStable,
     onProviderModelSelectStable,
@@ -3098,7 +3114,6 @@ export default function ChatView(props: ChatViewProps) {
     supportsProviderSwitchingViaHandoff,
     multipleModelSelections,
     runtimeMode,
-    interactionMode,
     isLocalDraftThread,
     canOverrideServerThreadEnvMode,
     setPendingServerThreadEnvModeEntry,
@@ -3119,6 +3134,7 @@ export default function ChatView(props: ChatViewProps) {
     activeEnvironmentUnavailable,
     runtimeMode,
     interactionMode,
+    modeId,
     localCheckoutBranchMismatch,
     composerRef,
     persistThreadSettingsForNextTurn,
@@ -3145,6 +3161,7 @@ export default function ChatView(props: ChatViewProps) {
     phase,
     runtimeMode,
     interactionMode,
+    modeId,
     sendEnvMode,
     worktreeRepositories,
     startFromOrigin,
@@ -3258,6 +3275,7 @@ export default function ChatView(props: ChatViewProps) {
             titleSeed: planTitle,
             runtimeMode,
             interactionMode: DEFAULT_INTERACTION_MODE,
+            modeId: HarnessModeId.make("build"),
             sourceProposedPlan: { threadId: activeThread.id, planId: input.planId },
             bootstrap: {
               createThread: {
@@ -3266,6 +3284,7 @@ export default function ChatView(props: ChatViewProps) {
                 modelSelection,
                 runtimeMode,
                 interactionMode: DEFAULT_INTERACTION_MODE,
+                modeId: HarnessModeId.make("build"),
                 branch: activeThreadBranch,
                 worktreePath: null,
                 createdAt,
@@ -3310,6 +3329,7 @@ export default function ChatView(props: ChatViewProps) {
           : {}),
         runtimeMode,
         interactionMode: DEFAULT_INTERACTION_MODE,
+        modeId: HarnessModeId.make("build"),
       });
       if (settingsResult._tag === "Failure") {
         if (!isAtomCommandInterrupted(settingsResult)) {
@@ -4061,6 +4081,7 @@ export default function ChatView(props: ChatViewProps) {
                                 runtimeMode={runtimeMode}
                                 defaultRuntimeMode={defaultRuntimeMode}
                                 interactionMode={interactionMode}
+                                modeId={modeId}
                                 lockedProvider={modelPickerLockedProvider}
                                 providerStatuses={providerStatuses as ServerProvider[]}
                                 providerCatalogKnown={serverConfig !== null}
@@ -4121,6 +4142,7 @@ export default function ChatView(props: ChatViewProps) {
                                 getModelDisabledReason={getModelDisabledReason}
                                 handleRuntimeModeChange={handleRuntimeModeChangeStable}
                                 handleInteractionModeChange={handleInteractionModeChangeStable}
+                                handleModeChange={handleModeChangeStable}
                                 focusComposer={focusComposerStable}
                                 scheduleComposerFocus={scheduleComposerFocusStable}
                                 setThreadError={setThreadError}

@@ -2,8 +2,9 @@ import type { ChatComposerProps } from "./ChatComposer";
 import type { PromptUltrathink } from "./TraitsPicker";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { type AppModelOption } from "../../modelSelection";
+import { useNavigate } from "@tanstack/react-router";
 import { useGT, useMessages } from "gt-react";
-import { CircleAlertIcon, MapIcon } from "lucide-react";
+import { CheckIcon, CircleAlertIcon, CompassIcon, MapIcon, Settings2Icon } from "lucide-react";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
 import {
@@ -13,6 +14,7 @@ import {
 } from "./ComposerFooterControls";
 import {
   type EnvironmentId,
+  type HarnessModeId,
   type ModelSelection,
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -21,6 +23,7 @@ import {
   type ServerProvider,
   type ThreadId,
 } from "@t3tools/contracts";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThreadContextInspectorButton } from "./ThreadContextInspectorButton";
 import type { EffortDisplay } from "@t3tools/contracts/settings";
@@ -43,6 +46,14 @@ import { resolveComposerControlsOwnership } from "./composerControlsOwnership";
  */
 // Model and effort share one trigger; it stays filled while its popup is open.
 const MODEL_TRIGGER_STATES = "data-popup-open:bg-accent data-popup-open:text-foreground";
+
+export interface ComposerPortableModeOption {
+  readonly id: HarnessModeId;
+  readonly name: string;
+  readonly description?: string | undefined;
+  readonly baseInteractionMode: ProviderInteractionMode;
+  readonly readonly: boolean;
+}
 
 export function ComposerControlsBar(props: {
   environmentId: EnvironmentId;
@@ -67,9 +78,12 @@ export function ComposerControlsBar(props: {
   compatibleRuntimeModeOptions: ReadonlyArray<RuntimeModeOption>;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
   interactionMode: ProviderInteractionMode;
+  modeId: HarnessModeId;
+  availableModes: ReadonlyArray<ComposerPortableModeOption>;
   showPlanModeToggle: boolean;
   planReadOnlyEnforcement: "native" | "advisory" | "none";
   handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
+  handleModeChange: (modeId: HarnessModeId, baseInteractionMode: ProviderInteractionMode) => void;
   composerControlsCollapsed: boolean;
   composerControlsHidden: boolean;
   restingHiddenBlockCount: number;
@@ -116,9 +130,11 @@ export function ComposerControlsBar(props: {
     compatibleRuntimeModeOptions,
     handleRuntimeModeChange,
     interactionMode,
+    modeId,
+    availableModes,
     showPlanModeToggle,
     planReadOnlyEnforcement,
-    handleInteractionModeChange,
+    handleModeChange,
     composerControlsCollapsed,
     composerControlsHidden,
     restingHiddenBlockCount: measuredHiddenBlockCount,
@@ -162,6 +178,7 @@ export function ComposerControlsBar(props: {
   const controlSize = composerControlsCollapsed ? "xs" : "sm";
   const gt = useGT();
   const m = useMessages();
+  const navigate = useNavigate();
   const applyThreadModelPick = useApplyThreadModelPick();
   const applyRouteThreadModelPick = useStableCallback(() => applyThreadModelPick(routeThreadRef));
   const traitsInput = resolveComposerTraitsInput({
@@ -263,17 +280,29 @@ export function ComposerControlsBar(props: {
     />
   );
   const isPlanMode = interactionMode === "plan";
-  const planModeTooltip = isPlanMode
+  const activeModeOption =
+    availableModes.find((mode) => mode.id === modeId) ??
+    availableModes.find((mode) => mode.id === (isPlanMode ? "plan" : "build")) ??
+    null;
+  const activeModeLabel =
+    isPlanMode && planReadOnlyEnforcement === "advisory"
+      ? `${activeModeOption?.name ?? gt("Plan", { $context: "composer mode toggle" })} (${gt("advisory")})`
+      : (activeModeOption?.name ??
+        (isPlanMode
+          ? gt("Plan", { $context: "composer mode toggle" })
+          : gt("Build", { $context: "composer mode toggle" })));
+  const isNonDefaultMode = modeId !== "build" || isPlanMode;
+  const modeTooltip = isPlanMode
     ? planReadOnlyEnforcement === "advisory"
       ? gt(
-          "Plan mode active (advisory read-only): T3 harness MCP write tools are blocked; native provider tools follow provider instructions. Click to return to Build mode.",
+          "Plan mode active (advisory read-only): T3 harness MCP write tools are blocked; native provider tools follow provider instructions. Press Shift+Tab to cycle modes.",
         )
       : gt(
-          "Plan mode active: read-only planning before implementation. Click to return to Build mode.",
+          "Plan mode active: read-only planning before implementation. Press Shift+Tab to cycle modes.",
         )
-    : planReadOnlyEnforcement === "advisory"
-      ? gt("Switch to Plan mode (advisory read-only with structured plan output)")
-      : gt("Switch to Plan mode");
+    : activeModeOption?.description
+      ? `${activeModeOption.name}: ${activeModeOption.description} (${gt("Shift+Tab to cycle")})`
+      : gt("Switch portable mode (Shift+Tab to cycle)");
 
   return showProviderUnavailable ? (
     <ComposerControl
@@ -294,38 +323,79 @@ export function ComposerControlsBar(props: {
     <>
       {composerModelPicker}
 
-      {showPlanModeToggle && !composerControlsHidden ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <ComposerControl
-                type="button"
+      {!composerControlsHidden && (showPlanModeToggle || availableModes.length > 1) ? (
+        <Menu>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <MenuTrigger
+                  render={
+                    <ComposerControl
+                      type="button"
+                      size={controlSize}
+                      aria-label={gt("Switch portable mode ({mode})", { mode: activeModeLabel })}
+                      data-composer-plan-mode={isPlanMode ? "plan" : "default"}
+                      data-composer-mode-id={modeId}
+                      className={cn("shrink-0", isNonDefaultMode && "bg-accent text-foreground")}
+                    />
+                  }
+                />
+              }
+            >
+              <ComposerControlIcon
+                icon={isPlanMode ? MapIcon : CompassIcon}
                 size={controlSize}
-                aria-pressed={isPlanMode}
-                aria-label={
-                  isPlanMode
-                    ? gt("Plan mode active, switch to Build mode")
-                    : gt("Switch to Plan mode")
-                }
-                data-composer-plan-mode={isPlanMode ? "plan" : "default"}
-                className={cn("shrink-0", isPlanMode && "bg-accent text-foreground")}
-                onClick={() => handleInteractionModeChange(isPlanMode ? "default" : "plan")}
+                {...(isNonDefaultMode ? { className: "text-current" } : {})}
               />
-            }
-          >
-            <ComposerControlIcon
-              icon={MapIcon}
-              size={controlSize}
-              {...(isPlanMode ? { className: "text-current" } : {})}
-            />
-            <span data-composer-control-label>
-              {isPlanMode && planReadOnlyEnforcement === "advisory"
-                ? gt("Plan (advisory)")
-                : gt("Plan", { $context: "composer mode toggle" })}
-            </span>
-          </TooltipTrigger>
-          <TooltipPopup side="top">{planModeTooltip}</TooltipPopup>
-        </Tooltip>
+              <span data-composer-control-label>{activeModeLabel}</span>
+            </TooltipTrigger>
+            <TooltipPopup side="top">{modeTooltip}</TooltipPopup>
+          </Tooltip>
+          <MenuPopup align="start" side="top" className="min-w-60">
+            <div className="flex items-center justify-between px-2 py-1 text-2xs text-muted-foreground">
+              <span>{gt("Portable Mode")}</span>
+              <span className="font-mono">{gt("Shift+Tab")}</span>
+            </div>
+            <MenuSeparator />
+            {availableModes.map((mode) => {
+              const selected = mode.id === modeId;
+              return (
+                <MenuItem
+                  key={mode.id}
+                  onClick={() => handleModeChange(mode.id, mode.baseInteractionMode)}
+                >
+                  <div className="flex min-w-0 flex-1 items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 font-medium">
+                        <span className="truncate">{mode.name}</span>
+                        {mode.readonly ? (
+                          <span className="rounded bg-muted px-1 py-0.5 text-2xs font-normal text-muted-foreground">
+                            {gt("read-only")}
+                          </span>
+                        ) : null}
+                      </div>
+                      {mode.description ? (
+                        <p className="mt-0.5 line-clamp-2 text-2xs text-muted-foreground">
+                          {mode.description}
+                        </p>
+                      ) : null}
+                    </div>
+                    {selected ? <CheckIcon className="mt-0.5 size-3.5 shrink-0" /> : null}
+                  </div>
+                </MenuItem>
+              );
+            })}
+            <MenuSeparator />
+            <MenuItem
+              onClick={() => {
+                void navigate({ to: "/settings/harness" });
+              }}
+            >
+              <Settings2Icon className="size-3.5 text-muted-foreground" />
+              <span>{gt("Manage modes in Harness")}</span>
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
       ) : null}
 
       {!composerControlsHidden && routeKind === "server" && activeThreadId !== null ? (
