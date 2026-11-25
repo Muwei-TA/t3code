@@ -44,6 +44,8 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import type * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import { parse as parseYaml } from "yaml";
 
 import * as HarnessHooksService from "./HarnessHooksService.ts";
@@ -128,17 +130,15 @@ function isContainedIn(rootReal: string, candidateReal: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !NodePath.isAbsolute(rel));
 }
 
-async function walkContainedFiles(
-  rootDir: string,
-): Promise<
-  ReadonlyArray<{ readonly relPath: string; readonly fullPath: string; readonly content: Buffer }>
-> {
+interface ContainedPluginFile {
+  readonly relPath: string;
+  readonly fullPath: string;
+  readonly content: Buffer;
+}
+
+async function walkContainedFiles(rootDir: string): Promise<ReadonlyArray<ContainedPluginFile>> {
   const rootReal = await NodeFSP.realpath(rootDir);
-  const files: Array<{
-    readonly relPath: string;
-    readonly fullPath: string;
-    readonly content: Buffer;
-  }> = [];
+  const files: Array<ContainedPluginFile> = [];
   let totalBytes = 0;
 
   const visit = async (dir: string): Promise<void> => {
@@ -174,8 +174,10 @@ async function walkContainedFiles(
   return files;
 }
 
-async function copyContainedDirectory(sourceDir: string, destDir: string): Promise<void> {
-  const files = await walkContainedFiles(sourceDir);
+async function copyPluginFiles(
+  files: ReadonlyArray<ContainedPluginFile>,
+  destDir: string,
+): Promise<void> {
   await NodeFSP.rm(destDir, { recursive: true, force: true });
   await NodeFSP.mkdir(destDir, { recursive: true });
   for (const file of files) {
@@ -569,6 +571,11 @@ async function spawnOutOfProcessSdkPlugin(
   };
 }
 
+interface PluginWorkflowSource {
+  readonly relativePath: string;
+  readonly source: string;
+}
+
 export interface PluginActiveContribution {
   readonly pluginId: HarnessPluginId;
   readonly skills: ReadonlyArray<HarnessSkillEntry>;
@@ -576,6 +583,7 @@ export interface PluginActiveContribution {
   readonly commands: ReadonlyArray<HarnessCommandEntry>;
   readonly modes: ReadonlyArray<HarnessModeEntry>;
   readonly hooks: ReadonlyArray<HarnessHookDefinition>;
+  readonly workflows: ReadonlyArray<PluginWorkflowSource>;
 }
 
 interface ParsedPluginBundle {
@@ -596,7 +604,9 @@ interface ParsedPluginBundle {
   readonly modes: ReadonlyArray<HarnessModeEntry>;
   readonly hooks: ReadonlyArray<HarnessHookDefinition>;
   readonly mcpServerIds: ReadonlyArray<string>;
-  readonly workflowFiles: ReadonlyArray<string>;
+  readonly workflows: ReadonlyArray<PluginWorkflowSource>;
+  readonly manifestDigest: string;
+  readonly files: ReadonlyArray<ContainedPluginFile>;
 }
 
 async function parsePluginDirectory(
@@ -685,7 +695,7 @@ async function parsePluginDirectory(
   const rules: Array<HarnessRuleEntry> = [];
   const commands: Array<HarnessCommandEntry> = [];
   const modes: Array<HarnessModeEntry> = [];
-  const workflowFiles: Array<string> = [];
+  const workflows: Array<PluginWorkflowSource> = [];
 
   for (const file of files) {
     if (file.relPath.startsWith(`${skillsPrefix}/`) && file.relPath.endsWith("/SKILL.md")) {
@@ -812,7 +822,7 @@ async function parsePluginDirectory(
       file.relPath.startsWith(`${workflowsPrefix}/`) &&
       (file.relPath.endsWith(".yaml") || file.relPath.endsWith(".yml"))
     ) {
-      workflowFiles.push(file.relPath);
+      workflows.push({ relativePath: file.relPath, source: file.content.toString("utf8") });
     }
   }
 
@@ -897,7 +907,9 @@ async function parsePluginDirectory(
     modes,
     hooks,
     mcpServerIds,
-    workflowFiles,
+    workflows,
+    manifestDigest: sha256Hex(manifestFile.content),
+    files,
   };
 }
 
@@ -928,9 +940,19 @@ export interface PluginHostShape {
         }
       | { readonly kind: "installedId"; readonly id: HarnessPluginId }
       | { readonly kind: "allInstalled" },
-  ) => Effect.Effect<{ readonly requiresTerminalOperate: boolean }, HarnessError>;
+  ) => Effect.Effect<
+    {
+      readonly requiresTerminalOperate: boolean;
+      readonly manifestDigest?: string | undefined;
+      readonly contentDigest?: string | undefined;
+    },
+    HarnessError
+  >;
   readonly install: (
-    input: HarnessPluginInstallInput,
+    input: HarnessPluginInstallInput & {
+      readonly expectedManifestDigest?: string | undefined;
+      readonly expectedContentDigest?: string | undefined;
+    },
   ) => Effect.Effect<HarnessPluginsSnapshot, HarnessError>;
   readonly trust: (
     input: HarnessPluginTrustInput,
@@ -946,6 +968,7 @@ export interface PluginHostShape {
   ) => Effect.Effect<HarnessPluginsSnapshot, HarnessError>;
   readonly packPlugin: (input: PluginPackInput) => Effect.Effect<PluginPackResult, HarnessError>;
   /** Returns merged contributions from all currently active (trusted + enabled) plugins. */
+  readonly activeContributionChanges: Stream.Stream<number>;
   readonly getActiveContributions: () => ReadonlyArray<PluginActiveContribution>;
   /** Returns tools declared by active out-of-process `@t3tools/plugin-sdk` plugins. */
   readonly listActiveSdkTools: () => ReadonlyArray<PluginSdkExposedTool>;
@@ -971,6 +994,7 @@ export const layer = Layer.effect(
     const hooksService = yield* HarnessHooksService.HarnessHooksService;
 
     const activeScopes = new Map<HarnessPluginId, Scope.Closeable>();
+    const contributionRevision = yield* SubscriptionRef.make(0);
     const activeContributions = new Map<HarnessPluginId, PluginActiveContribution>();
     const activeSdkRuntimes = new Map<HarnessPluginId, OutOfProcessSdkRuntime>();
     const activationErrors = new Map<HarnessPluginId, string>();
@@ -1107,6 +1131,7 @@ export const layer = Layer.effect(
           commands: bundle.commands,
           modes: [...bundle.modes, ...sdkModes],
           hooks: combinedHooks,
+          workflows: bundle.workflows,
         };
         yield* hooksService.registerPluginHooks(
           bundle.id,
@@ -1116,11 +1141,17 @@ export const layer = Layer.effect(
         yield* Effect.acquireRelease(
           Effect.sync(() => {
             activeContributions.set(bundle.id, contribution);
-          }),
+          }).pipe(
+            Effect.andThen(
+              SubscriptionRef.update(contributionRevision, (revision) => revision + 1),
+            ),
+          ),
           () =>
-            Effect.sync(() => {
-              activeContributions.delete(bundle.id);
-            }),
+            Effect.sync(() => activeContributions.delete(bundle.id)).pipe(
+              Effect.andThen(
+                SubscriptionRef.update(contributionRevision, (revision) => revision + 1),
+              ),
+            ),
         );
       }).pipe(Scope.provide(pluginScope), Effect.result);
 
@@ -1285,7 +1316,7 @@ export const layer = Layer.effect(
           modeIds: activeModeIds,
           hookIds: activeHookIds,
           mcpServerIds: bundle.mcpServerIds,
-          workflowFiles: bundle.workflowFiles,
+          workflowFiles: bundle.workflows.map((workflow) => workflow.relativePath),
           ...(bundle.entrypoint ? { entrypoint: bundle.entrypoint } : {}),
           ...(runtimeAlive ? { toolNames: sdkRuntime.tools.map((t) => t.exposedName) } : {}),
           lastError: activationErrors.get(pluginId) ?? null,
@@ -1324,7 +1355,11 @@ export const layer = Layer.effect(
                 detail: error instanceof Error ? error.message : String(error),
               }),
           });
-          return { requiresTerminalOperate: bundleRequiresTerminalOperate(parsed) };
+          return {
+            requiresTerminalOperate: bundleRequiresTerminalOperate(parsed),
+            manifestDigest: parsed.manifestDigest,
+            contentDigest: parsed.contentDigest,
+          };
         }
         if (input.kind === "installedId") {
           const dirPath = NodePath.join(pluginsDir(), input.id);
@@ -1336,7 +1371,11 @@ export const layer = Layer.effect(
                 detail: error instanceof Error ? error.message : String(error),
               }),
           });
-          return { requiresTerminalOperate: bundleRequiresTerminalOperate(parsed) };
+          return {
+            requiresTerminalOperate: bundleRequiresTerminalOperate(parsed),
+            manifestDigest: parsed.manifestDigest,
+            contentDigest: parsed.contentDigest,
+          };
         }
         const root = pluginsDir();
         const dirExists = yield* fs.exists(root).pipe(Effect.orElseSucceed(() => false));
@@ -1377,13 +1416,25 @@ export const layer = Layer.effect(
                   detail: error instanceof Error ? error.message : String(error),
                 }),
             });
+            if (
+              (input.expectedManifestDigest !== undefined &&
+                parsed.manifestDigest !== input.expectedManifestDigest) ||
+              (input.expectedContentDigest !== undefined &&
+                parsed.contentDigest !== input.expectedContentDigest)
+            ) {
+              return yield* new HarnessError({
+                code: "invalid_config",
+                detail:
+                  "The plugin changed since it was inspected. Review it again before installing.",
+              });
+            }
             const targetId = input.id ?? parsed.id;
             const root = pluginsDir();
             const destDir = NodePath.join(root, targetId);
             yield* Effect.tryPromise({
               try: async () => {
                 await assertContainedNoSymlinks(root, destDir, { createRoot: true });
-                await copyContainedDirectory(sourceDir, destDir);
+                await copyPluginFiles(parsed.files, destDir);
               },
               catch: (error) =>
                 new HarnessError({
@@ -1529,14 +1580,6 @@ export const layer = Layer.effect(
                   detail: `Failed to pack plugin "${input.id}": ${error instanceof Error ? error.message : String(error)}`,
                 }),
             });
-            const files = yield* Effect.tryPromise({
-              try: () => walkContainedFiles(pluginDir),
-              catch: (error) =>
-                new HarnessError({
-                  code: "invalid_config",
-                  detail: error instanceof Error ? error.message : String(error),
-                }),
-            });
             const parsed = yield* Effect.tryPromise({
               try: () => parsePluginDirectory(pluginDir, input.id),
               catch: (error) =>
@@ -1545,19 +1588,22 @@ export const layer = Layer.effect(
                   detail: error instanceof Error ? error.message : String(error),
                 }),
             });
-            // Reconcile without trusting — owner must explicitly review and trust the packed plugin.
-            yield* discoverAndSnapshot({ reconcile: true, forceReloadId: input.id });
+            const state = yield* readState();
+            if (state.trustedDigests[input.id] !== parsed.contentDigest) {
+              yield* deactivatePlugin(input.id);
+            }
             return {
               id: input.id,
               pluginDir,
               manifestPath,
               contentDigest: parsed.contentDigest,
-              fileCount: files.length,
+              fileCount: parsed.files.length,
             } satisfies PluginPackResult;
           }),
         );
       }),
 
+      activeContributionChanges: SubscriptionRef.changes(contributionRevision),
       getActiveContributions: () => Array.from(activeContributions.values()),
       listActiveSdkTools: () =>
         Array.from(activeSdkRuntimes.values())

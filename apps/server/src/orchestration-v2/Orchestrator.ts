@@ -40,6 +40,7 @@ import {
   type OrchestrationV2LimitRecoveryUpdate,
   type OrchestrationV2Notification,
   type OrchestrationV2ServerCommand,
+  type OrchestrationV2RunHarnessMode,
   type ThreadPullRequestLink,
   type ThreadPullRequestWatch,
   type PullRequestWatchUntil,
@@ -432,6 +433,7 @@ export interface OrchestratorV2Shape {
   readonly awaitRestartContinuation: (run: OrchestrationV2Run) => Effect.Effect<void>;
   readonly dispatch: (
     command: OrchestrationV2ServerCommand,
+    options?: MessageDispatchOptions,
   ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>;
   readonly autoArmLimitRecovery: (input: {
     readonly commandId: CommandId;
@@ -636,6 +638,11 @@ export function threadHasUnfinishedWork(records: {
         run.status !== "rolled_back",
     ) || records.runtimeRequests.some((request) => request.status === "pending")
   );
+}
+
+export interface MessageDispatchOptions {
+  readonly preprocessedGuestText?: string | undefined;
+  readonly harnessMode?: OrchestrationV2RunHarnessMode | undefined;
 }
 
 function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
@@ -4370,9 +4377,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     guestMessageId: GuestMessageId,
     thread: OrchestrationV2AppThread,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    preprocessedText: string | undefined,
   ) {
     const now = yield* DateTime.now;
-    const decided = decideGuestMessageSend({ thread, guestMessageId, now });
+    const decided = decideGuestMessageSend({ thread, guestMessageId, now, preprocessedText });
     if (Result.isFailure(decided)) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
@@ -7203,6 +7211,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    harnessMode?: OrchestrationV2RunHarnessMode,
   ) {
     // A compacted thread reads every run, but attempts, nodes, messages, provider turns and prompts
     // only for its recent runs and the runs this command names. An idle compaction reads in full:
@@ -8175,6 +8184,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ) + 1;
       }
       const run: OrchestrationV2Run = {
+        ...(harnessMode === undefined ? {} : { harnessMode }),
         id: runId,
         threadId: command.threadId,
         ordinal,
@@ -8617,6 +8627,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 mapDispatchError(command),
               );
       const run: OrchestrationV2Run = {
+        ...(harnessMode === undefined ? {} : { harnessMode }),
         id: runId,
         threadId: command.threadId,
         ordinal,
@@ -9428,6 +9439,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
     const run: OrchestrationV2Run = {
+      ...(harnessMode === undefined ? {} : { harnessMode }),
       id: runId,
       threadId: command.threadId,
       ordinal,
@@ -16012,6 +16024,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const dispatchOnce = Effect.fn("orchestrationV2.dispatch.once")(function* (
     command: OrchestrationV2ServerCommand,
     sideChatIds: ReadonlyArray<ThreadId>,
+    options: MessageDispatchOptions | undefined,
   ): Effect.fn.Return<
     {
       readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
@@ -16239,7 +16252,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const guestSend =
           command.guestMessageId === undefined
             ? undefined
-            : yield* emitGuestMessageSent(command, command.guestMessageId, thread, events);
+            : yield* emitGuestMessageSent(
+                command,
+                command.guestMessageId,
+                thread,
+                events,
+                options?.preprocessedGuestText,
+              );
         const dispatched =
           guestSend === undefined
             ? withoutGuestAttribution(command)
@@ -16248,7 +16267,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 text: guestSend.text,
                 context: { version: 1 as const, records: [], guest: guestSend.guest },
               };
-        cancelUnsettledEffects = yield* dispatchMessage(dispatched, events, effects);
+        cancelUnsettledEffects = yield* dispatchMessage(
+          dispatched,
+          events,
+          effects,
+          options?.harnessMode,
+        );
         yield* recordSubagentFollowup(dispatched, events).pipe(mapDispatchError(command));
         break;
       }
@@ -16538,6 +16562,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     command: OrchestrationV2ServerCommand,
     sideChatIds: ReadonlyArray<ThreadId> = [],
     cancelledTask?: OrchestrationV2Subagent,
+    options?: MessageDispatchOptions,
   ): Effect.fn.Return<OrchestratorV2DispatchResult, OrchestratorV2Error> {
     yield* Effect.annotateCurrentSpan({
       "orchestration_v2.command_id": command.commandId,
@@ -16590,7 +16615,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
     }
 
-    const plan = yield* dispatchOnce(command, sideChatIds).pipe(
+    const plan = yield* dispatchOnce(command, sideChatIds, options).pipe(
       Effect.tap((planned) => refuseAboveRuntimeModeCeiling(command, planned.events)),
       Effect.filterOrFail(
         (planned) =>
@@ -16826,10 +16851,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     );
 
   // dispatchWithReceiptEffect owns the dispatch span; this wrapper selects the thread locks.
-  const dispatchWithReceipt = Effect.fnUntraced(function* (command: OrchestrationV2ServerCommand) {
+  const dispatchWithReceipt = Effect.fnUntraced(function* (
+    command: OrchestrationV2ServerCommand,
+    options?: MessageDispatchOptions,
+  ) {
     const dispatch = threadDispatch.withLock(
       commandThreadId(command),
-      dispatchWithReceiptEffect(command),
+      dispatchWithReceiptEffect(command, [], undefined, options),
     );
     // A fork holds its source's lock, so a source deletion and its fork never interleave. A
     // parent's lock comes before its side chats' locks. A side chat fork from a side chat or a

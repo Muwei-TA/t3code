@@ -1,3 +1,4 @@
+import { resolveRunHarnessMode, runInteractionMode } from "../harness/HarnessTurnPreprocess.ts";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import type { HarnessNativeMcpServer } from "@t3tools/provider-core/server/mcpSession";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -699,17 +700,29 @@ export const layerWithOptions = (
                   Effect.orElseSucceed(() => [] as ReadonlyArray<NativeDiscoveredSkill>),
                 )
               : [];
+          const threadShell =
+            Option.isSome(harnessLibraryStore) && Option.isSome(threadRecord)
+              ? yield* projectionStore
+                  .getThreadShell(threadId)
+                  .pipe(Effect.orElseSucceed(() => null))
+              : null;
+          const activeRunId = threadShell?.activeRunId;
+          const runMode = activeRunId
+            ? (yield* projectionStore
+                .getRun(threadId, activeRunId)
+                .pipe(Effect.orElseSucceed(() => undefined)))?.harnessMode
+            : undefined;
+          const threadInteractionMode = Option.isSome(threadRecord)
+            ? threadRecord.value.interactionMode
+            : "default";
           const activeMode =
             Option.isSome(harnessLibraryStore) && Option.isSome(threadRecord)
-              ? yield* harnessLibraryStore.value
-                  .resolveMode({
-                    ...(threadRecord.value.modeId !== undefined
-                      ? { modeId: threadRecord.value.modeId }
-                      : {}),
-                    interactionMode: threadRecord.value.interactionMode,
-                    workspaceRoot,
-                  })
-                  .pipe(Effect.orElseSucceed(() => null))
+              ? yield* resolveRunHarnessMode(harnessLibraryStore.value, {
+                  modeId: threadRecord.value.modeId,
+                  interactionMode: threadInteractionMode,
+                  workspaceRoot,
+                  override: runMode,
+                })
               : null;
           const projectedLibrary =
             librarySnapshot !== null && Option.isSome(adapterCapabilities)
@@ -747,14 +760,12 @@ export const layerWithOptions = (
                 .toSorted()
                 .join(",")
             : "";
-          const effectiveInteractionMode = Option.isSome(threadRecord)
-            ? threadRecord.value.interactionMode
-            : "default";
+          const effectiveInteractionMode = runInteractionMode(threadInteractionMode, runMode);
           const hasCreatorTools =
             effectiveInteractionMode !== "plan" &&
             activeMode?.readonly !== true &&
-            (activeMode?.id === "creator" ||
-              (Option.isSome(threadRecord) && threadRecord.value.modeId === "creator"));
+            (activeMode?.id ?? runMode?.id ?? Option.getOrUndefined(threadRecord)?.modeId) ===
+              "creator";
           const harnessInjection =
             Option.isSome(mcpGateway) && Option.isSome(adapterCapabilities)
               ? yield* mcpGateway.value

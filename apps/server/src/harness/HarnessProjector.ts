@@ -244,7 +244,7 @@ export function isMcpServerAllowedByMode(
   if (activeMode.disabledMcpServers && activeMode.disabledMcpServers.includes(serverId as never)) {
     return false;
   }
-  if (activeMode.allowedMcpServers && activeMode.allowedMcpServers.length > 0) {
+  if (activeMode.allowedMcpServers !== undefined) {
     return activeMode.allowedMcpServers.includes(serverId as never);
   }
   return true;

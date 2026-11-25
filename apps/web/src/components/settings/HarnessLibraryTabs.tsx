@@ -273,6 +273,9 @@ export function HarnessLibraryPanels({
                     </span>
                     <Badge variant="outline">{mode.id}</Badge>
                     <Badge variant="secondary">{mode.scope}</Badge>
+                    {mode.overriddenBuiltin ? (
+                      <Badge variant="outline">{gt("Overridden built-in")}</Badge>
+                    ) : null}
                     {mode.readonly ? <Badge variant="warning">{gt("Read-only")}</Badge> : null}
                     {mode.proposePlan ? <Badge variant="info">{gt("Propose plan")}</Badge> : null}
                   </div>
@@ -314,6 +317,9 @@ export function HarnessLibraryPanels({
                       variant="outline"
                       size="sm"
                       disabled={!editable || busy}
+                      aria-label={
+                        mode.overriddenBuiltin ? gt("Restore built-in") : gt("Remove mode")
+                      }
                       onClick={async () => {
                         setBusy(true);
                         const res = await removeMode({
@@ -323,11 +329,29 @@ export function HarnessLibraryPanels({
                         setBusy(false);
                         if (res._tag === "Success") {
                           setOverrideSnapshot(res.value);
-                          toastManager.add({ type: "success", title: gt("Mode removed") });
+                          toastManager.add({
+                            type: "success",
+                            title: mode.overriddenBuiltin
+                              ? gt("Built-in mode restored")
+                              : gt("Mode removed"),
+                          });
+                        } else if (!isAtomCommandInterrupted(res)) {
+                          toastManager.add({
+                            type: "error",
+                            title: gt("Could not remove mode"),
+                            description: formatError(
+                              squashAtomCommandFailure(res),
+                              gt("Try again."),
+                            ),
+                          });
                         }
                       }}
                     >
-                      <Trash2Icon className="size-3.5" aria-hidden />
+                      {mode.overriddenBuiltin ? (
+                        <T>Restore built-in</T>
+                      ) : (
+                        <Trash2Icon className="size-3.5" aria-hidden />
+                      )}
                     </Button>
                   ) : null}
                 </div>
@@ -340,10 +364,23 @@ export function HarnessLibraryPanels({
           state={modeModal}
           onClose={() => setModeModal(null)}
           onSave={async (payload) => {
+            const editedMode = modeModal?.mode === "edit" ? modeModal.item : null;
             setBusy(true);
             const res = await upsertMode({
               environmentId,
-              input: { ...payload, ...wsInput },
+              input: {
+                ...payload,
+                ...wsInput,
+                ...(editedMode?.defaultModel === undefined
+                  ? {}
+                  : { defaultModel: editedMode.defaultModel }),
+                ...(editedMode?.disabledMcpServers === undefined
+                  ? {}
+                  : { disabledMcpServers: editedMode.disabledMcpServers }),
+                ...(editedMode?.scope === "builtin" || editedMode?.overriddenBuiltin
+                  ? { overrideBuiltin: true }
+                  : {}),
+              },
             });
             setBusy(false);
             if (res._tag === "Success") {

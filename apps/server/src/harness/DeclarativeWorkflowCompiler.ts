@@ -51,8 +51,8 @@ function renderCompiledWorkflowPreview(input: {
       optParts.push(`project: payload.project`);
       optParts.push(`title: ${JSON.stringify(`${input.name}: ${step.name ?? step.id}`)}`);
     }
-    if (step.modeId === "plan") {
-      optParts.push(`interactionMode: "plan"`);
+    if (step.modeId !== undefined) {
+      optParts.push(`modeId: ${JSON.stringify(step.modeId)}`);
     }
     if (step.timeoutSeconds !== undefined) {
       optParts.push(`timeout: ${JSON.stringify(`${step.timeoutSeconds} seconds`)}`);
@@ -486,7 +486,6 @@ export function compileDeclarativeWorkflowToDefinition(
           .join("\n\n");
 
         const briefParts = [
-          ...(step.modeId ? [`[Workflow step mode: ${step.modeId}]`] : []),
           ...(payload.input ? [`[Workflow input]\n${payload.input}`] : []),
           ...(depContext ? [depContext] : []),
           step.prompt,
@@ -502,8 +501,8 @@ export function compileDeclarativeWorkflowToDefinition(
                 ...(step.kind === "child"
                   ? { title: `${workflowName}: ${step.name ?? step.id}` }
                   : {}),
-                ...(step.modeId === "plan" ? { interactionMode: "plan" as const } : {}),
               }),
+          ...(step.modeId === undefined ? {} : { modeId: step.modeId }),
           ...(step.timeoutSeconds !== undefined
             ? { timeout: `${step.timeoutSeconds} seconds` as const }
             : {}),

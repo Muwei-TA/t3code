@@ -542,6 +542,7 @@ import {
   HarnessSkillUpsertInput,
   HarnessSyncConfigureInput,
   HarnessSyncPreviewPushResult,
+  HarnessSyncPullInput,
   HarnessSyncPullResult,
   HarnessSyncPushInput,
   HarnessSyncPushResult,
@@ -2882,7 +2883,7 @@ const WsHarnessSyncPushRpc = Rpc.make(WS_METHODS.harnessSyncPush, {
 });
 
 const WsHarnessSyncPullRpc = Rpc.make(WS_METHODS.harnessSyncPull, {
-  payload: Schema.Struct({}),
+  payload: HarnessSyncPullInput,
   success: HarnessSyncPullResult,
   error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
 });

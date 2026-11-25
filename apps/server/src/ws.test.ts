@@ -14,16 +14,20 @@ import {
   type WorkflowRun,
   type WorkflowStep,
   AuthSessionId,
+  AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
+  AuthTerminalOperateScope,
   ORCHESTRATION_PROTOCOL_VERSION,
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
   EnvironmentId,
   EventId,
   GitManagerError,
+  HarnessHookId,
   VcsProcessSpawnError,
   MessageId,
   ProjectId,
   ThreadId,
+  TrimmedNonEmptyString,
   TurnItemId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -63,6 +67,9 @@ import { Headers, HttpRouter, HttpServer } from "effect/http";
 import * as Context from "effect/Context";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
+import * as HarnessHooksService from "./harness/HarnessHooksService.ts";
+import * as HarnessStore from "./harness/HarnessStore.ts";
+import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as ProviderInstallationGate from "./provider/ProviderInstallationGate.ts";
 import * as Ws from "./ws.ts";
 import { RpcGroup, RpcMessage, RpcServer } from "effect/rpc";
@@ -2748,6 +2755,102 @@ const layerWorkflowRpcTest = Layer.mergeAll(
   Layer.fresh(layerConfigSources),
   Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
   Layer.mock(ServerBrowser.ServerBrowser)({}),
+);
+
+const hookMutationTags = [WS_METHODS.harnessHookUpsert, WS_METHODS.harnessHookSetEnabled] as const;
+const hookMutationRpcs = WsRpcGroup.omit(
+  ...[...WsRpcGroup.requests.keys()].filter(
+    (
+      tag,
+    ): tag is Exclude<
+      keyof typeof RpcAuthorization.RPC_REQUIRED_SCOPES,
+      (typeof hookMutationTags)[number]
+    > => !(hookMutationTags as ReadonlyArray<string>).includes(tag),
+  ),
+);
+const layerHookRpcTest = HarnessHooksService.layer.pipe(
+  Layer.provide(HarnessStore.layer),
+  Layer.provide(Layer.merge(T3ProjectFileLoader.layer, ManagedPolicy.layerTest())),
+  Layer.provideMerge(layerWorkflowRpcTest),
+);
+
+it.effect("requires terminal access only when saving or enabling an active command hook", () =>
+  Effect.gen(function* () {
+    const hooks = yield* HarnessHooksService.HarnessHooksService;
+    const browser = yield* ServerBrowser.ServerBrowser;
+    const services = Layer.mergeAll(
+      layerUnusedConfigRpcServices,
+      Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+      Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+      Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+      Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+      Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+      Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+      Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+    );
+    const connect = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
+      RpcTest.makeClient(hookMutationRpcs).pipe(
+        Effect.provide(
+          layerWsRpc(
+            {
+              sessionId: AuthSessionId.make("hook-test"),
+              subject: "hook-test",
+              method: "browser-session-cookie",
+              scopes: [...scopes],
+            },
+            {},
+            browser,
+            () => Effect.void,
+            { secretReferences: true },
+            { harnessHooks: hooks },
+          ).pipe(Layer.provide(services), Layer.merge(RpcAuthorization.layer(scopes))),
+        ),
+      );
+    const settingsOnly = yield* connect([AuthSettingsWriteScope]);
+    const withTerminal = yield* connect([AuthSettingsWriteScope, AuthTerminalOperateScope]);
+    const terminalOnly = yield* connect([AuthTerminalOperateScope]);
+    const commandHook = {
+      id: HarnessHookId.make("command-hook"),
+      event: "turn.beforeStart",
+      target: { type: "command", command: TrimmedNonEmptyString.make("echo") },
+    } as const;
+    const httpHook = {
+      ...commandHook,
+      id: HarnessHookId.make("http-hook"),
+      target: { type: "http", url: TrimmedNonEmptyString.make("https://example.com/hook") },
+    } as const;
+    for (const payload of [commandHook, { ...commandHook, enabled: true }]) {
+      assert.strictEqual(
+        (yield* settingsOnly[WS_METHODS.harnessHookUpsert](payload).pipe(Effect.flip))._tag,
+        "EnvironmentAuthorizationError",
+      );
+    }
+    yield* settingsOnly[WS_METHODS.harnessHookUpsert]({ ...commandHook, enabled: false });
+    const enable = { id: commandHook.id, enabled: true } as const;
+    assert.strictEqual(
+      (yield* settingsOnly[WS_METHODS.harnessHookSetEnabled](enable).pipe(Effect.flip))._tag,
+      "EnvironmentAuthorizationError",
+    );
+    assert.strictEqual(
+      (yield* terminalOnly[WS_METHODS.harnessHookSetEnabled](enable).pipe(Effect.flip))._tag,
+      "EnvironmentAuthorizationError",
+    );
+    const enabled = yield* withTerminal[WS_METHODS.harnessHookSetEnabled](enable);
+    assert.isTrue(enabled.hooks.find((hook) => hook.id === commandHook.id)?.enabled);
+    const disabled = yield* settingsOnly[WS_METHODS.harnessHookSetEnabled]({
+      ...enable,
+      enabled: false,
+    });
+    assert.isFalse(disabled.hooks.find((hook) => hook.id === commandHook.id)?.enabled);
+    yield* settingsOnly[WS_METHODS.harnessHookUpsert]({ ...httpHook, enabled: false });
+    const httpEnabled = yield* settingsOnly[WS_METHODS.harnessHookSetEnabled]({
+      id: httpHook.id,
+      enabled: true,
+    });
+    assert.isTrue(httpEnabled.hooks.find((hook) => hook.id === httpHook.id)?.enabled);
+  }).pipe(Effect.provide(layerHookRpcTest)),
 );
 
 it.effect("workflow RPCs read a run and pass an answer, a resume and a cancel to the service", () =>

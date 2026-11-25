@@ -300,13 +300,7 @@ interface MobileModeChoice {
   readonly readonly: boolean;
 }
 
-const FALLBACK_MOBILE_MODES: ReadonlyArray<{
-  readonly id: HarnessModeId;
-  readonly name: string;
-  readonly description: ReturnType<typeof msg>;
-  readonly baseInteractionMode: ProviderInteractionMode;
-  readonly readonly: boolean;
-}> = [
+const FALLBACK_MOBILE_MODES = [
   {
     id: HarnessModeId.make("build"),
     name: "Build",
@@ -335,7 +329,7 @@ const FALLBACK_MOBILE_MODES: ReadonlyArray<{
     baseInteractionMode: "default",
     readonly: false,
   },
-];
+] as const;
 
 type ThreadSettingsSessionProps = {
   readonly environmentId: EnvironmentId | null;
@@ -718,7 +712,7 @@ function ThreadSettingsSessionProvider(
     return serverModes.map((mode) => ({
       id: mode.id,
       name: mode.name,
-      ...(mode.description ? { description: mode.description } : {}),
+      description: mode.description ?? undefined,
       baseInteractionMode: mode.baseInteractionMode,
       readonly: mode.readonly,
     }));

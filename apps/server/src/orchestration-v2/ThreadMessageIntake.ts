@@ -2,6 +2,7 @@ import { remapComposerContextAttachments } from "@t3tools/shared/composerContext
 import { appendUserInputAttachmentPaths } from "../provider/userInputAttachments.ts";
 import {
   AuthProvidersManageScope,
+  HarnessError,
   type ChatAttachment,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
@@ -94,10 +95,10 @@ const releaseUnusedClaims = Effect.fn("ThreadMessageIntake.releaseUnusedClaims")
  * are already the thread's attachments. A message no longer waiting gets none; the orchestrator
  * then refuses or replays the send.
  */
-const withGuestAttachments = Effect.fn("ThreadMessageIntake.withGuestAttachments")(function* (
+const readGuestMessage = Effect.fn("ThreadMessageIntake.readGuestMessage")(function* (
   command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
 ) {
-  if (command.guestMessageId === undefined) return command;
+  if (command.guestMessageId === undefined) return undefined;
   const threads = yield* ThreadManagement.ThreadManagementService;
   // Only the thread record is needed; the window keeps the read small.
   const { projection } = yield* threads
@@ -111,10 +112,9 @@ const withGuestAttachments = Effect.fn("ThreadMessageIntake.withGuestAttachments
           }),
       ),
     );
-  const message = projection.thread.guestShare?.messages.find(
+  return projection.thread.guestShare?.messages.find(
     (candidate) => candidate.id === command.guestMessageId && candidate.status === "pending",
   );
-  return { ...command, attachments: message?.attachments ?? [] };
 });
 
 /**
@@ -153,225 +153,243 @@ export const withQueuedAttachmentsOnSignOutText = Effect.fn(
  * has already checked every command whose payload shows a provider sign-out; a queued edit
  * that keeps its attachments is the one case decided here.
  */
-export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(function* (
-  incoming: OrchestrationV2Command,
-  sender: { readonly managesProviders: boolean },
-) {
-  const rawCommand =
-    incoming.type === "message.dispatch"
-      ? yield* withGuestAttachments(incoming)
-      : incoming.type === "queued-run.edit" && !sender.managesProviders
-        ? yield* withQueuedAttachmentsOnSignOutText(incoming)
+export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
+  function* (incoming: OrchestrationV2Command, sender: { readonly managesProviders: boolean }) {
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    if (
+      (incoming.type === "message.dispatch" || incoming.type === "queued-run.edit") &&
+      (yield* threads.hasReceipt(incoming.commandId))
+    ) {
+      return yield* threads.dispatch(incoming);
+    }
+    const { command, guestText } = yield* Effect.gen(function* () {
+      if (incoming.type !== "message.dispatch" && incoming.type !== "queued-run.edit") {
+        return { command: incoming };
+      }
+
+      const guestMessage =
+        incoming.type === "message.dispatch" ? yield* readGuestMessage(incoming) : undefined;
+      const isGuest = incoming.type === "message.dispatch" && incoming.guestMessageId !== undefined;
+      const input = isGuest
+        ? { ...incoming, attachments: guestMessage?.attachments ?? [] }
         : incoming;
-  const threads = yield* ThreadManagement.ThreadManagementService;
-  const command = yield* Effect.gen(function* () {
-    if (
-      rawCommand.type !== "message.dispatch" ||
-      rawCommand.guestMessageId !== undefined ||
-      (yield* threads.hasReceipt(rawCommand.commandId))
-    ) {
-      return rawCommand;
-    }
-    const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
-    const hooksService = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
-    const { shell, workspaceRoot } = yield* resolveWorkspaceRootForThread(rawCommand.threadId);
-    const preprocessed = yield* preprocessTurnText({
-      text: rawCommand.text,
-      threadId: rawCommand.threadId,
-      workspaceRoot,
-      modeId: shell?.modeId,
-      interactionMode: shell?.interactionMode,
-      libraryStore,
-      hooksService,
-    });
-    if (
-      preprocessed.expanded &&
-      !sender.managesProviders &&
-      isProviderSignOutPrompt({
-        text: preprocessed.text,
-        attachments: rawCommand.attachments ?? [],
-      })
-    ) {
-      return yield* rpcAuthorizationError(AuthProvidersManageScope);
-    }
-    if (preprocessed.blocked) {
-      return yield* new AttachmentClaims.AttachmentClaimError({
-        message: preprocessed.blockReason ?? "Turn blocked by turn.beforeStart hook.",
+      if (isGuest && guestMessage === undefined) return { command: input };
+      const originalText = isGuest ? (guestMessage?.text ?? "") : input.text;
+      const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+      const hooksService = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
+      const { shell, workspaceRoot } = yield* resolveWorkspaceRootForThread(input.threadId);
+      const preprocessed = yield* preprocessTurnText({
+        text: originalText,
+        threadId: input.threadId,
+        workspaceRoot,
+        modeId: shell?.modeId,
+        interactionMode: shell?.interactionMode,
+        libraryStore,
+        hooksService,
       });
-    }
-    return preprocessed.text === rawCommand.text
-      ? rawCommand
-      : { ...rawCommand, text: preprocessed.text };
-  });
-  if (command.type === "runtime-request.respond" && command.attachmentsByQuestionId) {
-    const config = yield* ServerConfig.ServerConfig;
-    const incomingByQuestionId = command.attachmentsByQuestionId;
-    yield* AttachmentClaims.validateAttachmentLimits(Object.values(incomingByQuestionId).flat());
-    const claimedPaths: string[] = [];
-    const prepared = yield* Effect.gen(function* () {
-      const attachmentsByQuestionId: import("@t3tools/contracts").UserInputAttachments = {};
-      for (const [questionId, attachments] of Object.entries(incomingByQuestionId)) {
-        const claimed = yield* AttachmentClaims.claimPendingAttachments({
-          threadId: command.threadId,
-          attachments,
-        });
-        claimedPaths.push(...claimed.claimedPaths);
-        Object.defineProperty(attachmentsByQuestionId, questionId, {
-          value: claimed.attachments,
-          enumerable: true,
+
+      if (preprocessed.blocked) {
+        return yield* new HarnessError({
+          code: "policy_denied",
+          detail: preprocessed.blockReason ?? "Turn blocked by turn.beforeStart hook.",
         });
       }
-      const answers = yield* appendUserInputAttachmentPaths({
-        answers: command.answers ?? {},
-        attachmentsByQuestionId,
-        attachmentsDir: config.attachmentsDir,
-      }).pipe(
-        Effect.mapError(
-          (cause) => new AttachmentClaims.AttachmentClaimError({ message: cause.issue }),
-        ),
-      );
-      return { answers, attachmentsByQuestionId };
-    }).pipe(Effect.onError(() => AttachmentClaims.releaseClaimedAttachments(claimedPaths)));
+      if (isGuest) {
+        return { command: input, guestText: preprocessed.text };
+      }
+      const next = { ...input, text: preprocessed.text };
+      if (!sender.managesProviders) {
+        if (next.type === "queued-run.edit" && next.attachments === undefined) {
+          return { command: yield* withQueuedAttachmentsOnSignOutText(next) };
+        }
+        if (
+          (next.type === "queued-run.edit" || preprocessed.text !== originalText) &&
+          isProviderSignOutPrompt({ text: next.text, attachments: next.attachments ?? [] })
+        ) {
+          return yield* rpcAuthorizationError(AuthProvidersManageScope);
+        }
+      }
+      return { command: next };
+    });
+    if (command.type === "runtime-request.respond" && command.attachmentsByQuestionId) {
+      const config = yield* ServerConfig.ServerConfig;
+      const incomingByQuestionId = command.attachmentsByQuestionId;
+      yield* AttachmentClaims.validateAttachmentLimits(Object.values(incomingByQuestionId).flat());
+      const claimedPaths: string[] = [];
+      const prepared = yield* Effect.gen(function* () {
+        const attachmentsByQuestionId: import("@t3tools/contracts").UserInputAttachments = {};
+        for (const [questionId, attachments] of Object.entries(incomingByQuestionId)) {
+          const claimed = yield* AttachmentClaims.claimPendingAttachments({
+            threadId: command.threadId,
+            attachments,
+          });
+          claimedPaths.push(...claimed.claimedPaths);
+          Object.defineProperty(attachmentsByQuestionId, questionId, {
+            value: claimed.attachments,
+            enumerable: true,
+          });
+        }
+        const answers = yield* appendUserInputAttachmentPaths({
+          answers: command.answers ?? {},
+          attachmentsByQuestionId,
+          attachmentsDir: config.attachmentsDir,
+        }).pipe(
+          Effect.mapError(
+            (cause) => new AttachmentClaims.AttachmentClaimError({ message: cause.issue }),
+          ),
+        );
+        return { answers, attachmentsByQuestionId };
+      }).pipe(Effect.onError(() => AttachmentClaims.releaseClaimedAttachments(claimedPaths)));
+      return yield* threads
+        .dispatch({
+          ...command,
+          answers: prepared.answers,
+          attachmentsByQuestionId: prepared.attachmentsByQuestionId,
+        })
+        .pipe(
+          Effect.tap((result) => {
+            // Replayed receipts refer to the first answer; release this attempt's unused copies only with a resolved item.
+            // Missing questionAnswer means no accepted attachments; missing resolution leaves delivery ambiguous.
+            const answeredItems = result.storedEvents.flatMap(({ event }) =>
+              event.type === "turn-item.updated" &&
+              event.payload.type === "user_input_request" &&
+              event.payload.requestId === command.requestId
+                ? [event.payload]
+                : [],
+            );
+            return answeredItems.length > 0
+              ? releaseUnusedClaims(
+                  claimedPaths,
+                  answeredItems.flatMap((item) =>
+                    item.questionAnswer === undefined
+                      ? []
+                      : Object.values(item.questionAnswer.attachmentsByQuestionId).flat(),
+                  ),
+                )
+              : Effect.void;
+          }),
+          Effect.tapError((error) =>
+            dispatchWasNotAccepted(error)
+              ? AttachmentClaims.releaseClaimedAttachments(claimedPaths)
+              : Effect.void,
+          ),
+        );
+    }
+    const commandWithModeDigest = yield* Effect.gen(function* () {
+      if (
+        (command.type === "thread.create" || command.type === "thread.interaction-mode.set") &&
+        command.modeId !== undefined &&
+        command.modeDigest === undefined
+      ) {
+        const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+        const workspaceRoot =
+          command.type === "thread.interaction-mode.set"
+            ? (yield* resolveWorkspaceRootForThread(command.threadId)).workspaceRoot
+            : undefined;
+        const normalized = yield* normalizeModeSelection({
+          modeId: command.modeId,
+          modeDigest: command.modeDigest,
+          interactionMode: command.interactionMode,
+          workspaceRoot,
+          libraryStore,
+        });
+        if (
+          normalized.interactionMode !== command.interactionMode ||
+          normalized.modeDigest !== command.modeDigest
+        ) {
+          return {
+            ...command,
+            interactionMode: normalized.interactionMode,
+            ...(normalized.modeDigest !== undefined ? { modeDigest: normalized.modeDigest } : {}),
+          };
+        }
+      }
+      return command;
+    });
+
+    if (
+      commandWithModeDigest.type !== "message.dispatch" &&
+      (commandWithModeDigest.type !== "queued-run.edit" ||
+        commandWithModeDigest.attachments === undefined)
+    ) {
+      const dispatched = yield* threads.dispatch(commandWithModeDigest);
+      if (commandWithModeDigest.type === "thread.create" && dispatched.replayed !== true) {
+        const hooksOpt = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
+        if (Option.isSome(hooksOpt)) {
+          yield* hooksOpt.value.emitLifecycleEvent("thread.created", {
+            threadId: commandWithModeDigest.threadId,
+            projectId: commandWithModeDigest.projectId,
+            ...(commandWithModeDigest.modeId ? { modeId: commandWithModeDigest.modeId } : {}),
+          });
+        }
+      }
+      return dispatched;
+    }
+    // An accepted edit's retry replays its receipt even if a later cleanup removed its files.
+    if (
+      commandWithModeDigest.type === "queued-run.edit" &&
+      !(yield* threads.hasReceipt(commandWithModeDigest.commandId))
+    ) {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      // A stale view can keep a file that another client's edit dropped and deleted.
+      for (const attachment of commandWithModeDigest.attachments ?? []) {
+        if (AttachmentClaims.attachmentIsPendingUpload(attachment)) continue;
+        const path = resolveAttachmentPath({ attachmentsDir: config.attachmentsDir, attachment });
+        if (
+          path !== null &&
+          !(yield* fileSystem.exists(path).pipe(Effect.orElseSucceed(() => false)))
+        ) {
+          return yield* new AttachmentClaims.AttachmentClaimError({
+            message: `Attachment '${attachment.name}' cannot be sent: attachment not found.`,
+          });
+        }
+      }
+    }
+    const claimed = yield* AttachmentClaims.claimPendingAttachments({
+      threadId: commandWithModeDigest.threadId,
+      attachments: commandWithModeDigest.attachments ?? [],
+    });
     return yield* threads
-      .dispatch({
-        ...command,
-        answers: prepared.answers,
-        attachmentsByQuestionId: prepared.attachmentsByQuestionId,
-      })
-      .pipe(
-        Effect.tap((result) => {
-          // Replayed receipts refer to the first answer; release this attempt's unused copies only with a resolved item.
-          // Missing questionAnswer means no accepted attachments; missing resolution leaves delivery ambiguous.
-          const answeredItems = result.storedEvents.flatMap(({ event }) =>
-            event.type === "turn-item.updated" &&
-            event.payload.type === "user_input_request" &&
-            event.payload.requestId === command.requestId
-              ? [event.payload]
-              : [],
-          );
-          return answeredItems.length > 0
-            ? releaseUnusedClaims(
-                claimedPaths,
-                answeredItems.flatMap((item) =>
-                  item.questionAnswer === undefined
-                    ? []
-                    : Object.values(item.questionAnswer.attachmentsByQuestionId).flat(),
+      .dispatch(
+        {
+          ...commandWithModeDigest,
+          attachments: claimed.attachments,
+          ...(commandWithModeDigest.context
+            ? {
+                context: remapComposerContextAttachments(
+                  commandWithModeDigest.context,
+                  commandWithModeDigest.attachments ?? [],
+                  claimed.attachments,
                 ),
-              )
-            : Effect.void;
-        }),
+              }
+            : {}),
+        },
+        guestText === undefined ? undefined : { preprocessedGuestText: guestText },
+      )
+      .pipe(
+        Effect.tap((result) =>
+          releaseUnusedClaims(
+            claimed.claimedPaths,
+            result.storedEvents.flatMap(({ event }) =>
+              event.type === "message.updated" ? event.payload.attachments : [],
+            ),
+          ),
+        ),
         Effect.tapError((error) =>
           dispatchWasNotAccepted(error)
-            ? AttachmentClaims.releaseClaimedAttachments(claimedPaths)
+            ? AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths)
             : Effect.void,
         ),
       );
-  }
-  const commandWithModeDigest = yield* Effect.gen(function* () {
-    if (
-      (command.type === "thread.create" || command.type === "thread.interaction-mode.set") &&
-      command.modeId !== undefined &&
-      command.modeDigest === undefined
-    ) {
-      const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
-      const workspaceRoot =
-        command.type === "thread.interaction-mode.set"
-          ? (yield* resolveWorkspaceRootForThread(command.threadId)).workspaceRoot
-          : undefined;
-      const normalized = yield* normalizeModeSelection({
-        modeId: command.modeId,
-        modeDigest: command.modeDigest,
-        interactionMode: command.interactionMode,
-        workspaceRoot,
-        libraryStore,
-      });
-      if (
-        normalized.interactionMode !== command.interactionMode ||
-        normalized.modeDigest !== command.modeDigest
-      ) {
-        return {
-          ...command,
-          interactionMode: normalized.interactionMode,
-          ...(normalized.modeDigest !== undefined ? { modeDigest: normalized.modeDigest } : {}),
-        };
-      }
-    }
-    return command;
-  });
-
-  if (
-    commandWithModeDigest.type !== "message.dispatch" &&
-    (commandWithModeDigest.type !== "queued-run.edit" ||
-      commandWithModeDigest.attachments === undefined)
-  ) {
-    const dispatched = yield* threads.dispatch(commandWithModeDigest);
-    if (commandWithModeDigest.type === "thread.create" && dispatched.replayed !== true) {
-      const hooksOpt = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
-      if (Option.isSome(hooksOpt)) {
-        yield* hooksOpt.value.emitLifecycleEvent("thread.created", {
-          threadId: commandWithModeDigest.threadId,
-          projectId: commandWithModeDigest.projectId,
-          ...(commandWithModeDigest.modeId ? { modeId: commandWithModeDigest.modeId } : {}),
-        });
-      }
-    }
-    return dispatched;
-  }
-  // An accepted edit's retry replays its receipt even if a later cleanup removed its files.
-  if (
-    commandWithModeDigest.type === "queued-run.edit" &&
-    !(yield* threads.hasReceipt(commandWithModeDigest.commandId))
-  ) {
-    const config = yield* ServerConfig.ServerConfig;
-    const fileSystem = yield* FileSystem.FileSystem;
-    // A stale view can keep a file that another client's edit dropped and deleted.
-    for (const attachment of commandWithModeDigest.attachments ?? []) {
-      if (AttachmentClaims.attachmentIsPendingUpload(attachment)) continue;
-      const path = resolveAttachmentPath({ attachmentsDir: config.attachmentsDir, attachment });
-      if (
-        path !== null &&
-        !(yield* fileSystem.exists(path).pipe(Effect.orElseSucceed(() => false)))
-      ) {
-        return yield* new AttachmentClaims.AttachmentClaimError({
-          message: `Attachment '${attachment.name}' cannot be sent: attachment not found.`,
-        });
-      }
-    }
-  }
-  const claimed = yield* AttachmentClaims.claimPendingAttachments({
-    threadId: commandWithModeDigest.threadId,
-    attachments: commandWithModeDigest.attachments ?? [],
-  });
-  return yield* threads
-    .dispatch({
-      ...commandWithModeDigest,
-      attachments: claimed.attachments,
-      ...(commandWithModeDigest.context
-        ? {
-            context: remapComposerContextAttachments(
-              commandWithModeDigest.context,
-              commandWithModeDigest.attachments ?? [],
-              claimed.attachments,
-            ),
-          }
-        : {}),
-    })
-    .pipe(
-      Effect.tap((result) =>
-        releaseUnusedClaims(
-          claimed.claimedPaths,
-          result.storedEvents.flatMap(({ event }) =>
-            event.type === "message.updated" ? event.payload.attachments : [],
-          ),
-        ),
-      ),
-      Effect.tapError((error) =>
-        dispatchWasNotAccepted(error)
-          ? AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths)
-          : Effect.void,
-      ),
-    );
-});
+  },
+  (effect, incoming) =>
+    incoming.type === "message.dispatch" || incoming.type === "queued-run.edit"
+      ? Effect.flatMap(ThreadManagement.ThreadManagementService, (threads) =>
+          threads.withMessageIntakeLock(incoming.commandId, effect),
+        )
+      : effect,
+);
 
 export const sendToThread = Effect.fn("ThreadMessageIntake.sendToThread")(function* (
   input: ThreadManagement.ThreadManagementSendInput,

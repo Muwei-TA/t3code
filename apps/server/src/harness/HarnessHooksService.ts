@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalFetch:off -- Spawns user-configured command and HTTP hooks with explicit abort/kill deadlines.
 import * as NodeChildProcess from "node:child_process";
-import * as NodeCrypto from "node:crypto";
 import {
+  type EnvironmentAuthorizationError,
   HarnessError,
   HarnessHookDefinition,
   type HarnessHookEvent,
@@ -18,13 +18,14 @@ import {
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 
 import * as HarnessStore from "./HarnessStore.ts";
+import { safeReadFileUtf8, safeWriteFileAtomic } from "./safeFileOps.ts";
 
 const DEFAULT_HOOK_TIMEOUT_MS = 3_000;
 const MIN_HOOK_TIMEOUT_MS = 100;
@@ -282,7 +283,8 @@ export interface HarnessHooksServiceShape {
   ) => Effect.Effect<HarnessHooksSnapshot, HarnessError>;
   readonly setUserHookEnabled: (
     input: HarnessHookSetEnabledInput,
-  ) => Effect.Effect<HarnessHooksSnapshot, HarnessError>;
+    authorizeCommand: Effect.Effect<void, EnvironmentAuthorizationError>,
+  ) => Effect.Effect<HarnessHooksSnapshot, HarnessError | EnvironmentAuthorizationError>;
   readonly testHook: (
     input: HarnessHookTestInput,
   ) => Effect.Effect<HarnessHookExecutionResult, HarnessError>;
@@ -326,7 +328,7 @@ export class HarnessHooksService extends Context.Service<
 export const layer = Layer.effect(
   HarnessHooksService,
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
+    const writeLock = yield* Semaphore.make(1);
     const path = yield* Path.Path;
     const store = yield* HarnessStore.HarnessStore;
     const pluginHooksByPluginId = new Map<HarnessPluginId, ReadonlyArray<HarnessHookDefinition>>();
@@ -346,18 +348,26 @@ export const layer = Layer.effect(
     });
 
     const readUserHooks = Effect.fn("HarnessHooksService.readUserHooks")(function* () {
-      const filePath = hooksFilePath();
-      const exists = yield* fs.exists(filePath).pipe(Effect.orElseSucceed(() => false));
-      if (!exists) return [] as ReadonlyArray<HarnessHookDefinition>;
-      const raw = yield* fs.readFileString(filePath).pipe(
-        Effect.mapError(
-          (error) =>
-            new HarnessError({
-              code: "io_error",
-              detail: `Failed to read hooks.json: ${error.message}`,
-            }),
-        ),
-      );
+      const raw = yield* Effect.tryPromise({
+        try: () =>
+          safeReadFileUtf8(store.harnessDir, hooksFilePath()).catch((error: unknown) => {
+            if (
+              typeof error === "object" &&
+              error !== null &&
+              "code" in error &&
+              error.code === "ENOENT"
+            ) {
+              return "";
+            }
+            throw error;
+          }),
+        catch: () =>
+          new HarnessError({
+            code: "io_error",
+            detail:
+              "Could not safely read hooks.json. Check that the file and harness directory are not symbolic links.",
+          }),
+      });
       const parsedRecord = tryParseJsonRecord(raw);
       if (!parsedRecord) return [] as ReadonlyArray<HarnessHookDefinition>;
       const decoded = decodeHooksConfigFile(parsedRecord);
@@ -368,33 +378,20 @@ export const layer = Layer.effect(
     const writeUserHooks = Effect.fn("HarnessHooksService.writeUserHooks")(function* (
       hooks: ReadonlyArray<HarnessHookDefinition>,
     ) {
-      const dir = store.harnessDir;
-      yield* fs.makeDirectory(dir, { recursive: true }).pipe(
-        Effect.mapError(
-          (error) =>
-            new HarnessError({
-              code: "io_error",
-              detail: `Failed to create harness directory: ${error.message}`,
-            }),
-        ),
-      );
-      const target = hooksFilePath();
-      const tmp = `${target}.${NodeCrypto.randomBytes(6).toString("hex")}.tmp`;
       const content = encodePrettyJson({ version: 1, hooks });
-      yield* fs.writeFileString(tmp, content).pipe(
-        Effect.andThen(fs.rename(tmp, target)),
-        Effect.mapError(
-          (error) =>
-            new HarnessError({
-              code: "io_error",
-              detail: `Failed to write hooks.json: ${error.message}`,
-            }),
-        ),
-      );
+      yield* Effect.tryPromise({
+        try: () => safeWriteFileAtomic(store.harnessDir, hooksFilePath(), content),
+        catch: () =>
+          new HarnessError({
+            code: "io_error",
+            detail:
+              "Could not safely write hooks.json. Check that the file and harness directory are not symbolic links.",
+          }),
+      });
     });
 
     const allHooks = Effect.fn("HarnessHooksService.allHooks")(function* () {
-      const userHooks = yield* readUserHooks().pipe(Effect.orElseSucceed(() => []));
+      const userHooks = yield* readUserHooks();
       const pluginHooks: Array<HarnessHookDefinition> = [];
       for (const list of pluginHooksByPluginId.values()) {
         pluginHooks.push(...list);
@@ -416,8 +413,8 @@ export const layer = Layer.effect(
       hook: HarnessHookDefinition,
       event: HarnessHookEvent,
       payload: Record<string, unknown>,
+      policy: { readonly allowsHarness: boolean; readonly allowsStdio: boolean },
     ): Effect.fn.Return<HarnessHookExecutionResult> {
-      const policy = yield* readPolicy();
       if (!policy.allowsHarness) {
         return {
           hookId: hook.id,
@@ -553,16 +550,19 @@ export const layer = Layer.effect(
         );
         yield* writeUserHooks(nextHooks);
         return yield* buildSnapshot();
-      }),
+      }, writeLock.withPermits(1)),
 
       removeUserHook: Effect.fn("HarnessHooksService.removeUserHook")(function* (input) {
         const existing = yield* readUserHooks();
         const nextHooks = existing.filter((h) => h.id !== input.id);
         yield* writeUserHooks(nextHooks);
         return yield* buildSnapshot();
-      }),
+      }, writeLock.withPermits(1)),
 
-      setUserHookEnabled: Effect.fn("HarnessHooksService.setUserHookEnabled")(function* (input) {
+      setUserHookEnabled: Effect.fn("HarnessHooksService.setUserHookEnabled")(function* (
+        input,
+        authorizeCommand,
+      ) {
         const existing = yield* readUserHooks();
         const found = existing.find((h) => h.id === input.id);
         if (!found) {
@@ -571,12 +571,13 @@ export const layer = Layer.effect(
             detail: `Hook "${input.id}" was not found.`,
           });
         }
+        if (input.enabled && found.target.type === "command") yield* authorizeCommand;
         const nextHooks = existing.map((h) =>
           h.id === input.id ? { ...h, enabled: input.enabled } : h,
         );
         yield* writeUserHooks(nextHooks);
         return yield* buildSnapshot();
-      }),
+      }, writeLock.withPermits(1)),
 
       testHook: Effect.fn("HarnessHooksService.testHook")(function* (input) {
         const hooks = yield* allHooks();
@@ -587,7 +588,12 @@ export const layer = Layer.effect(
             detail: `Hook "${input.id}" was not found.`,
           });
         }
-        return yield* executeOneHook(hook, hook.event, input.samplePayload ?? { dryRun: true });
+        return yield* executeOneHook(
+          hook,
+          hook.event,
+          input.samplePayload ?? { dryRun: true },
+          yield* readPolicy(),
+        );
       }),
 
       registerPluginHooks: Effect.fn("HarnessHooksService.registerPluginHooks")(
@@ -611,7 +617,11 @@ export const layer = Layer.effect(
       ),
 
       runBeforeTurnStart: Effect.fn("HarnessHooksService.runBeforeTurnStart")(function* (payload) {
-        const hooks = (yield* allHooks()).filter(
+        const loaded = yield* allHooks().pipe(Effect.result);
+        if (loaded._tag === "Failure") {
+          return { blocked: true, blockReason: loaded.failure.detail, results: [] };
+        }
+        const hooks = loaded.success.filter(
           (hook) =>
             hook.enabled &&
             hook.event === "turn.beforeStart" &&
@@ -620,10 +630,11 @@ export const layer = Layer.effect(
         if (hooks.length === 0) {
           return { blocked: false, results: [] } satisfies BeforeTurnStartHookOutcome;
         }
+        const policy = yield* readPolicy();
         const results: Array<HarnessHookExecutionResult> = [];
         const injectedParts: Array<string> = [];
         for (const hook of hooks) {
-          const result = yield* executeOneHook(hook, "turn.beforeStart", payload);
+          const result = yield* executeOneHook(hook, "turn.beforeStart", payload, policy);
           results.push(result);
           if (!result.ok) {
             yield* Effect.logWarning("harness.hook.turn-before-start.failed", {
@@ -652,7 +663,11 @@ export const layer = Layer.effect(
       }),
 
       runToolHook: Effect.fn("HarnessHooksService.runToolHook")(function* (phase, payload) {
-        const hooks = (yield* allHooks()).filter(
+        const loaded = yield* allHooks().pipe(Effect.result);
+        if (loaded._tag === "Failure") {
+          return { blocked: true, blockReason: loaded.failure.detail, results: [] };
+        }
+        const hooks = loaded.success.filter(
           (hook) =>
             hook.enabled &&
             hook.event === phase &&
@@ -661,10 +676,11 @@ export const layer = Layer.effect(
         if (hooks.length === 0) {
           return { blocked: false, results: [] } satisfies ToolHookOutcome;
         }
+        const policy = yield* readPolicy();
         if (phase === "PostToolUse") {
           // PostToolUse runs asynchronously so tool responses never stall on audit hooks.
           yield* Effect.forkDetach(
-            Effect.forEach(hooks, (hook) => executeOneHook(hook, "PostToolUse", payload), {
+            Effect.forEach(hooks, (hook) => executeOneHook(hook, "PostToolUse", payload, policy), {
               concurrency: 4,
             }).pipe(
               Effect.catchCause((cause) =>
@@ -676,7 +692,7 @@ export const layer = Layer.effect(
         }
         const results: Array<HarnessHookExecutionResult> = [];
         for (const hook of hooks) {
-          const result = yield* executeOneHook(hook, "PreToolUse", payload);
+          const result = yield* executeOneHook(hook, "PreToolUse", payload, policy);
           results.push(result);
           if (result.blocked) {
             return {
@@ -691,10 +707,17 @@ export const layer = Layer.effect(
 
       emitLifecycleEvent: Effect.fn("HarnessHooksService.emitLifecycleEvent")(
         function* (event, payload) {
-          const hooks = (yield* allHooks()).filter((hook) => hook.enabled && hook.event === event);
+          const hooks = (yield* allHooks().pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("harness.hook.load.failed", { detail: error.detail }).pipe(
+                Effect.as([]),
+              ),
+            ),
+          )).filter((hook) => hook.enabled && hook.event === event);
           if (hooks.length === 0) return;
+          const policy = yield* readPolicy();
           yield* Effect.forkDetach(
-            Effect.forEach(hooks, (hook) => executeOneHook(hook, event, payload), {
+            Effect.forEach(hooks, (hook) => executeOneHook(hook, event, payload, policy), {
               concurrency: 4,
             }).pipe(
               Effect.catchCause((cause) =>

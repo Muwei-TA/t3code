@@ -3719,6 +3719,7 @@ const make = Effect.gen(function* () {
           text: input.message,
           attachments: [],
           mode,
+          modeId: input.modeId,
           ...(input.freshContext ? { freshContext: true } : {}),
           ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
           createdBy: "agent",

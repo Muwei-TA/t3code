@@ -1,3 +1,4 @@
+import { resolveRunHarnessMode } from "../harness/HarnessTurnPreprocess.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
@@ -2314,15 +2315,12 @@ export const layer: Layer.Layer<
                     Effect.orElseSucceed(() => [] as ReadonlyArray<NativeDiscoveredSkill>),
                   )
                 : [];
-              const activeMode = yield* harnessLibraryStore.value
-                .resolveMode({
-                  ...(input.appThread.modeId !== undefined
-                    ? { modeId: input.appThread.modeId }
-                    : {}),
-                  interactionMode: input.runtimePolicy.interactionMode,
-                  workspaceRoot,
-                })
-                .pipe(Effect.orElseSucceed(() => null));
+              const activeMode = yield* resolveRunHarnessMode(harnessLibraryStore.value, {
+                modeId: input.appThread.modeId,
+                interactionMode: input.appThread.interactionMode,
+                workspaceRoot,
+                override: input.run.harnessMode,
+              });
               const capabilities = input.session.providerSession.capabilities;
               const projected = projectHarnessContext({
                 library: librarySnapshot,

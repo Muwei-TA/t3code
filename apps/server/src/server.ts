@@ -652,6 +652,28 @@ const layerTaskFolders = TaskFolders.layer.pipe(
   Layer.provide(layerGitWorkflow),
 );
 
+const layerHarness = Layer.mergeAll(HarnessLibraryImporter.layer, HarnessExporter.layer).pipe(
+  Layer.provideMerge(HarnessLibraryStore.layer),
+  Layer.provideMerge(PluginHost.layer),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      HarnessApprovalAuditStore.layer,
+      HarnessHooksService.layer,
+      HarnessMemoryStore.layer,
+      HarnessSyncService.layer,
+      HarnessImporter.layer,
+      McpGateway.layer.pipe(
+        Layer.provide(SecretResolver.layer.pipe(Layer.provide(layerServerSettings))),
+        Layer.provide(ServerSecretStore.layer),
+      ),
+    ),
+  ),
+  Layer.provideMerge(HarnessStore.layer),
+  Layer.provide(ManagedPolicy.layer),
+  Layer.provide(T3ProjectFileLoader.layer),
+  Layer.provide(layerWorkspace),
+);
+
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   Layer.provide(
     WorkflowForge.layer.pipe(
@@ -788,7 +810,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
 ).pipe(
-  Layer.provideMerge(layerOrchestrationApplication),
+  Layer.provideMerge(layerOrchestrationApplication.pipe(Layer.provideMerge(layerHarness))),
   // One hub, which the feeders above and the workflow store inside the runtime publish to.
   Layer.provideMerge(MilestoneHub.layer),
   Layer.provideMerge(layerTaskFolders),
@@ -860,29 +882,6 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
     Layer.mergeAll(AssetSigner.layer, EnvironmentKeys.layer, WorkspacePreviewRevisions.layer),
   ),
   Layer.provideMerge(ServerSecretStore.layer),
-  Layer.provideMerge(
-    Layer.mergeAll(HarnessLibraryImporter.layer, HarnessExporter.layer).pipe(
-      Layer.provideMerge(HarnessLibraryStore.layer),
-      Layer.provideMerge(PluginHost.layer),
-      Layer.provideMerge(
-        Layer.mergeAll(
-          HarnessApprovalAuditStore.layer,
-          HarnessHooksService.layer,
-          HarnessMemoryStore.layer,
-          HarnessSyncService.layer,
-          HarnessImporter.layer,
-          McpGateway.layer.pipe(
-            Layer.provide(SecretResolver.layer.pipe(Layer.provide(layerServerSettings))),
-            Layer.provide(ServerSecretStore.layer),
-          ),
-        ),
-      ),
-      Layer.provideMerge(HarnessStore.layer),
-      Layer.provide(ManagedPolicy.layer),
-      Layer.provide(T3ProjectFileLoader.layer),
-      Layer.provide(layerWorkspace),
-    ),
-  ),
   Layer.provideMerge(
     Layer.mergeAll(
       CloudCliTokenManager.layer.pipe(

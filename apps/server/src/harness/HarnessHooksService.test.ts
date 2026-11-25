@@ -37,6 +37,26 @@ function makeTestLayer(baseDir: string, paths: ServerConfig.ServerDerivedPaths) 
 }
 
 describe("HarnessHooksService", () => {
+  it.effect("refuses to load a symlinked hooks.json", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-link-hook-" });
+      const paths = yield* ServerConfig.deriveServerPaths(root, undefined);
+      yield* Effect.gen(function* () {
+        const hooks = yield* HarnessHooksService.HarnessHooksService;
+        const store = yield* HarnessStore.HarnessStore;
+        const target = path.join(root, "elsewhere.json");
+        yield* fs.makeDirectory(store.harnessDir, { recursive: true });
+        yield* fs.writeFileString(target, '{"version":1,"hooks":[]}');
+        yield* fs.symlink(target, path.join(store.harnessDir, "hooks.json"));
+        const failure = yield* hooks.list().pipe(Effect.flip);
+        expect(failure.code).toBe("io_error");
+        expect(failure.detail).toContain("symbolic links");
+      }).pipe(Effect.provide(makeTestLayer(root, paths)));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect(
     "supports turn.beforeStart context injection, blocking, bounded timeout degradation, and PreToolUse gating",
     () =>

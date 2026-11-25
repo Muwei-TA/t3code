@@ -487,6 +487,7 @@ export type HarnessModeEntry = typeof HarnessModeEntry.Type;
 
 export const HarnessModeUpsertInput = Schema.Struct({
   id: HarnessModeId,
+  overrideBuiltin: Schema.optionalKey(Schema.Boolean),
   name: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
   description: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
   baseInteractionMode: ProviderInteractionMode,
@@ -1236,10 +1237,22 @@ export const HarnessSyncPushResult = Schema.Struct({
 });
 export type HarnessSyncPushResult = typeof HarnessSyncPushResult.Type;
 
+export const HarnessSyncPullInput = Schema.Struct({
+  force: Schema.optionalKey(Schema.Boolean),
+});
+export type HarnessSyncPullInput = typeof HarnessSyncPullInput.Type;
+
+export const HarnessSyncPullConflict = Schema.Struct({
+  path: Schema.String,
+  reason: Schema.Literals(["modified_both", "deleted_upstream_modified_locally", "added_both"]),
+});
+export type HarnessSyncPullConflict = typeof HarnessSyncPullConflict.Type;
+
 export const HarnessSyncPullResult = Schema.Struct({
   pulled: Schema.Boolean,
   updatedFiles: Schema.Array(Schema.String),
   skippedFiles: Schema.optionalKey(Schema.Array(Schema.String)),
+  conflicts: Schema.optionalKey(Schema.Array(HarnessSyncPullConflict)),
   summary: Schema.String,
 });
 export type HarnessSyncPullResult = typeof HarnessSyncPullResult.Type;

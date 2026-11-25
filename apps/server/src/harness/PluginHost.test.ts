@@ -3,7 +3,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { HarnessPluginId, TrimmedNonEmptyString } from "@t3tools/contracts";
+import { HarnessModeId, HarnessPluginId, TrimmedNonEmptyString } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -75,6 +75,7 @@ describe("PluginHost", () => {
             recursive: true,
           });
           await NodeFSP.mkdir(NodePath.join(srcNative, "modes"), { recursive: true });
+          await NodeFSP.mkdir(NodePath.join(srcNative, "workflows"), { recursive: true });
           await NodeFSP.writeFile(
             NodePath.join(srcNative, "t3-plugin.json"),
             JSON.stringify(
@@ -110,6 +111,10 @@ describe("PluginHost", () => {
             NodePath.join(srcNative, "modes", "sec-audit.md"),
             "---\nname: Sec Audit\nreadonly: true\nbaseInteractionMode: plan\n---\n\nInspect security invariants.\n",
           );
+          await NodeFSP.writeFile(
+            NodePath.join(srcNative, "workflows", "audit.yaml"),
+            "name: audit-workflow\nsteps:\n  - id: review\n    modeId: review\n    prompt: Review the change\n",
+          );
         });
 
         // Prepare a .claude-plugin compatible directory
@@ -133,6 +138,21 @@ describe("PluginHost", () => {
           const host = yield* PluginHost.PluginHost;
           const hooks = yield* HarnessHooksService.HarnessHooksService;
           const library = yield* HarnessLibraryStore.HarnessLibraryStore;
+
+          const sourcePath = TrimmedNonEmptyString.make(srcNative);
+          const risk = yield* host.inspectExecutableRisk({ kind: "sourcePath", sourcePath });
+          expect(risk.manifestDigest).toMatch(/^[a-f0-9]{64}$/u);
+          yield* Effect.promise(() =>
+            NodeFSP.appendFile(path.join(srcNative, "t3-plugin.json"), "\n"),
+          );
+          const changedManifest = yield* host
+            .install({
+              sourcePath,
+              expectedManifestDigest: risk.manifestDigest,
+            })
+            .pipe(Effect.flip);
+          expect(changedManifest.detail).toContain("changed since it was inspected");
+          expect((yield* host.list()).plugins).toEqual([]);
 
           // 1. Install without trustOnInstall -> untrusted and inactive (zero hooks/skills leaked)
           const installed = yield* host.install({
@@ -166,6 +186,23 @@ describe("PluginHost", () => {
           const libWhileActive = yield* library.getSnapshot();
           expect(libWhileActive.skills.some((s) => s.id === "audit-skill")).toBe(true);
           expect(libWhileActive.modes.some((m) => m.id === "sec-audit")).toBe(true);
+          const duplicateMode = yield* library
+            .createUserMode({
+              id: HarnessModeId.make("sec-audit"),
+              baseInteractionMode: "default",
+              body: "Replacement mode",
+            })
+            .pipe(Effect.flip);
+          expect(duplicateMode.code).toBe("invalid_config");
+          expect(
+            (yield* library.getSnapshot()).modes.find((mode) => mode.id === "sec-audit")?.body,
+          ).toContain("Inspect security invariants.");
+          expect(trusted.plugins.find((p) => p.id === "acme-audit")?.workflowFiles).toEqual([
+            "workflows/audit.yaml",
+          ]);
+          expect(host.getActiveContributions().flatMap((item) => item.workflows)).toEqual([
+            expect.objectContaining({ relativePath: "workflows/audit.yaml" }),
+          ]);
 
           // 4. Reversible unload: disabling closes the plugin's Scope -> ZERO leaked hooks or skills
           const disabled = yield* host.setEnabled({
@@ -174,6 +211,7 @@ describe("PluginHost", () => {
           });
           expect(disabled.plugins.find((p) => p.id === "acme-audit")?.active).toBe(false);
           expect((yield* hooks.list()).hooks).toHaveLength(0);
+          expect(host.getActiveContributions()).toEqual([]);
           expect((yield* library.getSnapshot()).skills.some((s) => s.id === "audit-skill")).toBe(
             false,
           );
@@ -222,6 +260,10 @@ describe("PluginHost", () => {
           const afterPack = yield* host.list();
           expect(afterPack.plugins.find((p) => p.id === "packed-demo")?.trustStatus).toBe(
             "untrusted",
+          );
+          expect(afterPack.plugins.find((p) => p.id === "claude-compat")).toEqual(claudeView);
+          expect((yield* library.getSnapshot()).skills.map((skill) => skill.id)).toContain(
+            "claude-helper",
           );
         }).pipe(Effect.provide(makeTestLayer(baseDir, paths)));
       }).pipe(Effect.provide(NodeServices.layer)),

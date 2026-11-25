@@ -38,6 +38,7 @@ steps:
     expect(result.compiledPreview).toContain('T3.workflow(\n  "pr-release-pipeline"');
     expect(result.compiledPreview).toContain("T3.agent.try");
     expect(result.compiledPreview).toContain('T3.agent("implement"');
+    expect(result.compiledPreview).toContain('modeId: "review"');
     expect(result.compiledPreview).toContain("T3.stop");
   });
 

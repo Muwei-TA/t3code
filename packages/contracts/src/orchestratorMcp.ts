@@ -562,6 +562,7 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
   threadId: ThreadId,
   message: OrchestratorMcpPrompt,
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
+  modeId: Schema.optional(HarnessModeId),
   freshContext: Schema.optional(
     Schema.Boolean.annotate({
       description:

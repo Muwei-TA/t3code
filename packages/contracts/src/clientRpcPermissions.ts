@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./git.ts";
-import { HarnessMcpUpsertInput } from "./harness.ts";
+import { HarnessHookUpsertInput, HarnessMcpUpsertInput } from "./harness.ts";
 import {
   AuthAccessWriteScope,
   AuthDiagnosticsReadScope,
@@ -154,6 +154,7 @@ export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 const decodePrepareThread = Schema.decodeUnknownSync(GitPreparePullRequestThreadInput);
 const decodeStackedAction = Schema.decodeUnknownSync(GitRunStackedActionInput);
 const decodeHarnessUpsert = Schema.decodeUnknownOption(HarnessMcpUpsertInput);
+const decodeHookUpsert = Schema.decodeUnknownOption(HarnessHookUpsertInput);
 
 const HARNESS_SECRET_PLACEHOLDER = /\$\{secret:/;
 
@@ -199,15 +200,15 @@ export function clientRpcRequiredScopes(
   if (method === WS_METHODS.harnessExportApply) {
     return [AuthSettingsWriteScope, AuthProvidersManageScope];
   }
-  if (
-    method === WS_METHODS.harnessHookUpsert &&
-    input !== null &&
-    typeof input === "object" &&
-    typeof Reflect.get(input, "target") === "object" &&
-    Reflect.get(input, "target") !== null &&
-    Reflect.get(Reflect.get(input, "target") as object, "type") === "command"
-  ) {
-    return [AuthSettingsWriteScope, AuthTerminalOperateScope];
+  if (method === WS_METHODS.harnessHookUpsert) {
+    const parsed = decodeHookUpsert(input);
+    if (
+      parsed._tag === "Some" &&
+      parsed.value.target.type === "command" &&
+      parsed.value.enabled !== false
+    ) {
+      return [AuthSettingsWriteScope, AuthTerminalOperateScope];
+    }
   }
   if (method === WS_METHODS.harnessHookTest) {
     return [AuthSettingsWriteScope, AuthTerminalOperateScope];

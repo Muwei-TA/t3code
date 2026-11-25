@@ -10,10 +10,12 @@ import {
   EnvironmentId,
   HarnessHookId,
   HarnessMcpServerId,
+  HarnessModeId,
   HarnessPluginId,
   HarnessRuleId,
   HarnessSkillId,
   type OrchestrationV2ServerCommand,
+  type RuntimeMode,
   PositiveInt,
   ProjectId,
   ProviderInstanceId,
@@ -23,6 +25,7 @@ import {
 } from "@t3tools/contracts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -70,7 +73,8 @@ describe("HarnessMcpHttpServer", () => {
           projectId,
           providerInstanceId,
           interactionMode: "plan" as "plan" | "default",
-          runtimeMode: "full-access" as const,
+          modeId: undefined as HarnessModeId | undefined,
+          runtimeMode: "full-access" as RuntimeMode,
           worktreePath: null,
           deletedAt: null,
           archivedAt: null,
@@ -78,6 +82,7 @@ describe("HarnessMcpHttpServer", () => {
           pendingBackgroundTasks: [],
         };
         let emitsProposedPlan = false;
+        let upstreamCalls = 0;
 
         const configLayer = Layer.succeed(ServerConfig.ServerConfig, {
           ...paths,
@@ -121,8 +126,18 @@ describe("HarnessMcpHttpServer", () => {
                       description: "Mutates an issue",
                       inputSchema: { type: "object", properties: {} },
                     },
+                    {
+                      name: "read_issue",
+                      description: "Reads an issue",
+                      inputSchema: { type: "object", properties: {} },
+                      annotations: { readOnlyHint: true },
+                    },
                   ]),
-                callTool: () => Effect.succeed({ content: [{ type: "text", text: "written" }] }),
+                callTool: () =>
+                  Effect.sync(() => {
+                    upstreamCalls++;
+                    return { content: [{ type: "text", text: "called" }] };
+                  }),
                 close: () => Effect.void,
                 isClosed: () => false,
               }),
@@ -170,6 +185,7 @@ describe("HarnessMcpHttpServer", () => {
         } as unknown as Orchestrator.OrchestratorV2["Service"]);
 
         const libraryLayer = HarnessLibraryStore.layer.pipe(Layer.provideMerge(storeLayer));
+        const hooksLayer = HarnessHooksService.layer.pipe(Layer.provideMerge(storeLayer));
 
         const serverLayer = HttpRouter.serve(HarnessMcpHttpServer.layer, {
           disableLogger: true,
@@ -177,6 +193,7 @@ describe("HarnessMcpHttpServer", () => {
           Layer.provideMerge(McpSessionRegistry.layer),
           Layer.provideMerge(gatewayLayer),
           Layer.provideMerge(libraryLayer),
+          Layer.provideMerge(hooksLayer),
           Layer.provideMerge(NodeHttpServer.layerTest),
           Layer.provide(mockEnvLayer),
           Layer.provide(mockProjectionLayer),
@@ -203,7 +220,7 @@ describe("HarnessMcpHttpServer", () => {
               enabled: true,
               transport: { type: "http", url: "https://tracker.example.com/mcp" },
               injectionMode: "gateway",
-              approvalPolicy: "auto-read",
+              approvalPolicy: "auto-all",
             },
           });
 
@@ -256,7 +273,7 @@ describe("HarnessMcpHttpServer", () => {
           );
           expect(unauthRes.status).toBe(401);
 
-          // 3. Valid tools/list exposes propose_plan and tracker__write_issue.
+          // 3. Plan mode hides the mutating upstream tool.
           const listRes = yield* Effect.promise(() =>
             fetch(harnessUrl, {
               method: "POST",
@@ -269,7 +286,7 @@ describe("HarnessMcpHttpServer", () => {
           );
           expect(listRes.result.tools.map((t) => t.name)).toEqual([
             "propose_plan",
-            "tracker__write_issue",
+            "tracker__read_issue",
           ]);
 
           // 4. Calling propose_plan in active Plan mode dispatches plan.propose bound to activeRunId + providerInstanceId.
@@ -506,6 +523,125 @@ describe("HarnessMcpHttpServer", () => {
           );
           expect(ruleRes.result.isError).not.toBe(true);
           expect(ruleRes.result.content[0]?.text).toContain("Always set CSP and HSTS.");
+
+          yield* store.upsertUserServer({
+            id: HarnessMcpServerId.make("allowed"),
+            config: {
+              enabled: true,
+              transport: { type: "http", url: "https://allowed.example.com/mcp" },
+              injectionMode: "gateway",
+              approvalPolicy: "auto-all",
+              allowedTools: [
+                TrimmedNonEmptyString.make("read_issue"),
+                TrimmedNonEmptyString.make("write_issue"),
+              ],
+            },
+          });
+          const callRpc = (method: string, params: Record<string, unknown>) =>
+            Effect.promise(() =>
+              fetch(harnessUrl, {
+                method: "POST",
+                headers: { authorization: authHeader, "content-type": "application/json" },
+                body: JSON.stringify({ jsonrpc: "2.0", id: 20, method, params }),
+              }).then(
+                (r) =>
+                  r.json() as Promise<{
+                    result: {
+                      tools?: Array<{ name: string }>;
+                      structuredContent?: { tools: Array<{ name: string }> };
+                      isError?: boolean;
+                      content?: Array<{ text?: string }>;
+                    };
+                  }>,
+              ),
+            );
+          const callTool = (name: string) => callRpc("tools/call", { name, arguments: {} });
+          const toolNames = [
+            "allowed__read_issue",
+            "allowed__write_issue",
+            "tracker__read_issue",
+            "tracker__write_issue",
+          ];
+          for (const [interaction, mode, runtime, permitted] of [
+            ["plan", undefined, "full-access", ["allowed__read_issue", "tracker__read_issue"]],
+            [
+              "default",
+              HarnessModeId.make("review"),
+              "full-access",
+              ["allowed__read_issue", "tracker__read_issue"],
+            ],
+            ["default", undefined, "approval-required", ["allowed__read_issue"]],
+            [
+              "default",
+              undefined,
+              "auto-accept-edits",
+              ["allowed__read_issue", "tracker__read_issue"],
+            ],
+            ["default", undefined, "full-access", toolNames],
+          ] as const) {
+            mutableShell.interactionMode = interaction;
+            mutableShell.modeId = mode;
+            mutableShell.runtimeMode = runtime;
+            const { result: listed } = yield* callRpc("tools/list", {});
+            expect(
+              listed.tools
+                ?.map((tool) => tool.name)
+                .filter((name) => toolNames.includes(name))
+                .sort(),
+            ).toEqual(permitted);
+            const { result: search } = yield* callTool("harness_tool_search");
+            expect(search.structuredContent?.tools.map((tool) => tool.name).sort()).toEqual(
+              permitted,
+            );
+            for (const name of toolNames) {
+              const { result: called } = yield* callTool(name);
+              expect(called.isError === true, `${runtime}/${mode ?? interaction}/${name}`).toBe(
+                !permitted.some((toolName) => toolName === name),
+              );
+            }
+          }
+
+          const hooks = yield* HarnessHooksService.HarnessHooksService;
+          const hookId = HarnessHookId.make("wait-for-mode-change");
+          const pluginId = HarnessPluginId.make("mode-test");
+          const entered = Promise.withResolvers<void>();
+          const resume = Promise.withResolvers<void>();
+          yield* hooks.registerPluginHooks(
+            pluginId,
+            [
+              {
+                id: hookId,
+                event: "PreToolUse",
+                enabled: true,
+                matcher: TrimmedNonEmptyString.make("tracker__write_issue"),
+                source: "plugin",
+                pluginId,
+                target: {
+                  type: "http",
+                  url: TrimmedNonEmptyString.make("https://example.com/hook"),
+                },
+              },
+            ],
+            new Map([
+              [
+                hookId,
+                async () => {
+                  entered.resolve();
+                  await resume.promise;
+                  return { ok: true, timedOut: false, durationMs: 0, stdout: "{}" };
+                },
+              ],
+            ]),
+          );
+          const callsBeforeSwitch = upstreamCalls;
+          const pendingCall = yield* callTool("tracker__write_issue").pipe(Effect.forkScoped);
+          yield* Effect.promise(() => entered.promise).pipe(Effect.timeout("3 seconds"));
+          mutableShell.modeId = HarnessModeId.make("review");
+          resume.resolve();
+          const afterSwitch = yield* Fiber.join(pendingCall);
+          expect(afterSwitch.result.isError).toBe(true);
+          expect(afterSwitch.result.content?.[0]?.text).toContain('read-only mode "review"');
+          expect(upstreamCalls).toBe(callsBeforeSwitch);
         }).pipe(Effect.provide(serverLayer));
       }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -708,6 +844,20 @@ describe("HarnessMcpHttpServer", () => {
           },
         });
         expect(modeCreate.result.isError).not.toBe(true);
+
+        for (const id of ["review", "release-pilot"]) {
+          const overwritten = yield* callRpc(12, "tools/call", {
+            name: "harness_create_mode",
+            arguments: { id, baseInteractionMode: "default", body: "Replacement" },
+          });
+          expect(overwritten.result.isError).toBe(true);
+        }
+        const library = yield* HarnessLibraryStore.HarnessLibraryStore;
+        const { modes } = yield* library.getSnapshot();
+        expect(modes.find((mode) => mode.id === "review")?.scope).toBe("builtin");
+        expect(modes.find((mode) => mode.id === "release-pilot")?.body).toContain(
+          "Verify changelog",
+        );
 
         const wfValidate = yield* callRpc(6, "tools/call", {
           name: "workflow_validate",

@@ -506,7 +506,7 @@ export const layerExecutor: Layer.Layer<
                 ),
               );
           case "runtime-request.respond": {
-            const requestId = effect.request.requestId;
+            const { requestId, decision } = effect.request;
             return runtimeRequests
               .respond({
                 threadId: effect.threadId,
@@ -524,7 +524,6 @@ export const layerExecutor: Layer.Layer<
               })
               .pipe(
                 Effect.tap(() => {
-                  const decision = effect.request.decision;
                   if (
                     (decision !== "acceptForSession" && decision !== "acceptAlways") ||
                     Option.isNone(approvalAuditOption)

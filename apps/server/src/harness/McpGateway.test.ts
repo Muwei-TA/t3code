@@ -258,11 +258,9 @@ describe("McpGateway", () => {
           const readEnvToolName = listedEchoTools.find(
             (t) => t.serverId === "my__echo" && t.upstreamName === "read_env",
           )!.exposedName;
-          const mutateItemToolName = listedEchoTools.find(
-            (t) => t.serverId === "my__echo" && t.upstreamName === "mutate_item",
-          )!.exposedName;
+          const mutateItemToolName = "my__echo__mutate_item__8";
           expect(readEnvToolName).toBe("my__echo__read_env__8");
-          expect(mutateItemToolName).toBe("my__echo__mutate_item__8");
+          expect(listedEchoTools.some((t) => t.exposedName === mutateItemToolName)).toBe(false);
           expect(McpGateway.decodeCanonicalExposedToolName(readEnvToolName)).toEqual({
             serverId: "my__echo",
             upstreamToolName: "read_env",

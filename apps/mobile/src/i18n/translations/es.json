@@ -5978,5 +5978,15 @@
   "ad208e3e32c85029": "Ocultar todo",
   "3328503592789bed": "Zen",
   "856812e7e1fc445e": "Llamadas a herramientas en el chat",
-  "8d545d54c0a9e950": "Oculta los comandos, ediciones y búsquedas que ejecutan los agentes. Ocultar las correctas mantiene los fallos. Zen solo muestra las respuestas finales. Las aprobaciones, preguntas y errores siempre se muestran."
+  "8d545d54c0a9e950": "Oculta los comandos, ediciones y búsquedas que ejecutan los agentes. Ocultar las correctas mantiene los fallos. Zen solo muestra las respuestas finales. Las aprobaciones, preguntas y errores siempre se muestran.",
+  "d30c3d64f997cdda": "Restaurar modo integrado",
+  "671d792ab63f5317": "¿Eliminar tus personalizaciones y restaurar el modo integrado «{id}»?",
+  "856e4a5a2ed893f9": "Modo integrado personalizado",
+  "f39bade00396a5b1": "Modificado localmente y en el repositorio remoto",
+  "ee73e8e4c0ee7bd3": "Modificado localmente y eliminado en el repositorio remoto",
+  "7c853db0cc47553d": "Añadido localmente y en el repositorio remoto",
+  "34735826d0694cc6": "Forzar descarga",
+  "02b3fbf612e5a864": "Conflictos al traer cambios",
+  "90285a3737126abb": "Forzar la descarga reemplaza los cambios locales en conflicto con la versión remota, incluidas las eliminaciones.",
+  "0dce15f46a89dcbd": "Para habilitar los hooks de comando, se necesita acceso a la terminal."
 }

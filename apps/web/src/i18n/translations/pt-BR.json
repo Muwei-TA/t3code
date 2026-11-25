@@ -13411,5 +13411,18 @@
   "27d76249d09eb69f": "Guia de revisão pronto",
   "faa3bb26abb39c93": "O guia de revisão falhou",
   "b7df38b7d8792d78": "Abrir guia",
-  "9e91e9a77b664e4e": "Não foi possível iniciar um guia de revisão"
+  "9e91e9a77b664e4e": "Não foi possível iniciar um guia de revisão",
+  "ceee7a38b04806df": "Modo integrado personalizado",
+  "d30c3d64f997cdda": "Restaurar modo integrado",
+  "d618ada08df611b3": "Remover modo",
+  "65142da4a01af142": "Modo integrado restaurado",
+  "1bc22218e603fe08": "Não foi possível remover o modo",
+  "e87d09a5ba440036": "Restaurar modo integrado",
+  "f39bade00396a5b1": "Alterado localmente e no repositório remoto",
+  "ee73e8e4c0ee7bd3": "Alterado localmente e excluído no repositório remoto",
+  "7c853db0cc47553d": "Adicionado localmente e no repositório remoto",
+  "02b3fbf612e5a864": "Conflitos ao baixar alterações",
+  "90285a3737126abb": "Forçar a atualização substitui as alterações locais em conflito pela versão remota, incluindo exclusões.",
+  "15a0e7308e320bc1": "Forçar atualização",
+  "0dce15f46a89dcbd": "Ativar hooks de comando exige acesso ao terminal."
 }

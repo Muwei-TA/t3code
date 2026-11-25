@@ -79,6 +79,7 @@ const AGENT_OPTIONS = [
   "workspace",
   "runtimeMode",
   "interactionMode",
+  "modeId",
 ];
 
 // What only shapes a new thread: a continued one keeps its project, machine, model and modes.
@@ -128,12 +129,14 @@ const attempt = Effect.fn("workflow.agent")(function* <A, I>(
   const launch: AgentLaunch | undefined =
     options.workspace === undefined &&
     options.runtimeMode === undefined &&
-    options.interactionMode === undefined
+    options.interactionMode === undefined &&
+    options.modeId === undefined
       ? undefined
       : {
           workspace: options.workspace,
           runtimeMode: options.runtimeMode,
           interactionMode: options.interactionMode,
+          modeId: options.modeId,
         };
   // What the agent's thread touches, its issue and the pull requests it links, is this step's.
   const touches = stepReferences(run.store, run.runId, name);
@@ -144,7 +147,12 @@ const attempt = Effect.fn("workflow.agent")(function* <A, I>(
         origin: { runId: run.runId, workflow: run.workflow, step: name },
         title: options.title ?? `${run.workflow}: ${name}`,
         // Only the step's own `thread` is refused them; a correction on the thread it made is not.
-        launch: thread === undefined || thread === options.thread ? launch : undefined,
+        launch:
+          thread === undefined || thread === options.thread
+            ? launch
+            : options.modeId === undefined
+              ? undefined
+              : { modeId: options.modeId },
         prompt,
         outputSchema,
         model: options.model,

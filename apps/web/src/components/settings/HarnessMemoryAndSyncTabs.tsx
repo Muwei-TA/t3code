@@ -10,6 +10,7 @@ import {
   type HarnessMemoryEntry,
   HarnessMemoryId,
   type HarnessMemorySnapshot,
+  type HarnessSyncPullConflict,
   type HarnessSyncPreviewPushResult,
   type HarnessSyncStatus,
   TrimmedNonEmptyString,
@@ -368,15 +369,47 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
 
   const [busy, setBusy] = useState(false);
   const [remoteUrl, setRemoteUrl] = useState("");
-  const [branch, setBranch] = useState("main");
+  const [branchDraft, setBranchDraft] = useState<string | null>(null);
+  const branch = branchDraft ?? status?.branch ?? "main";
   const [commitMessage, setCommitMessage] = useState("");
   const [preview, setPreview] = useState<HarnessSyncPreviewPushResult | null>(null);
+  const [conflicts, setConflicts] = useState<ReadonlyArray<HarnessSyncPullConflict>>([]);
+  const conflictReasons = {
+    modified_both: gt("Changed locally and upstream"),
+    deleted_upstream_modified_locally: gt("Changed locally and deleted upstream"),
+    added_both: gt("Added locally and upstream"),
+  };
 
   const refreshStatus = async () => {
     setBusy(true);
     const res = await getSyncStatus({ environmentId, input: {} });
     setBusy(false);
     if (res._tag === "Success") setOverrideStatus(res.value);
+  };
+
+  const pull = async (force: boolean) => {
+    setBusy(true);
+    const res = await pullSync({ environmentId, input: force ? { force: true } : {} });
+    setBusy(false);
+    if (res._tag === "Success") {
+      const remainingConflicts = force ? [] : (res.value.conflicts ?? []);
+      setConflicts(remainingConflicts);
+      setPreview(null);
+      if (remainingConflicts.length === 0) {
+        toastManager.add({
+          type: "success",
+          title: gt("Pulled harness updates"),
+          description: res.value.summary,
+        });
+      }
+      void refreshStatus();
+    } else if (!isAtomCommandInterrupted(res)) {
+      toastManager.add({
+        type: "error",
+        title: gt("Pull failed"),
+        description: formatError(squashAtomCommandFailure(res), gt("Try again.")),
+      });
+    }
   };
 
   return (
@@ -469,7 +502,7 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
               <Input
                 value={branch}
                 disabled={!canWriteSettings || busy}
-                onChange={(e) => setBranch(e.target.value)}
+                onChange={(e) => setBranchDraft(e.target.value)}
               />
             </div>
           </div>
@@ -493,6 +526,9 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
                 setBusy(false);
                 if (res._tag === "Success") {
                   setOverrideStatus(res.value);
+                  setBranchDraft(null);
+                  setConflicts([]);
+                  setPreview(null);
                   toastManager.add({ type: "success", title: gt("Harness Git remote saved") });
                 } else if (!isAtomCommandInterrupted(res)) {
                   toastManager.add({
@@ -533,30 +569,42 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
               size="sm"
               variant="outline"
               disabled={!canSyncRemote || !status?.initialized || !status.remoteUrl || busy}
-              onClick={async () => {
-                setBusy(true);
-                const res = await pullSync({ environmentId, input: {} });
-                setBusy(false);
-                if (res._tag === "Success") {
-                  toastManager.add({
-                    type: "success",
-                    title: gt("Pulled harness updates"),
-                    description: res.value.summary,
-                  });
-                  void refreshStatus();
-                } else if (!isAtomCommandInterrupted(res)) {
-                  toastManager.add({
-                    type: "error",
-                    title: gt("Pull failed"),
-                    description: formatError(squashAtomCommandFailure(res), gt("Try again.")),
-                  });
-                }
-              }}
+              onClick={() => void pull(false)}
             >
               <ArrowDownToLineIcon className="size-3.5" />
               <T>Pull</T>
             </Button>
           </div>
+
+          {conflicts.length > 0 ? (
+            <div className="space-y-2 rounded-lg border border-border/70 p-3">
+              <p className="text-xs font-medium">
+                <T>Pull conflicts</T>
+              </p>
+              <ul className="space-y-1 text-xs">
+                {conflicts.map(({ path, reason }) => (
+                  <li key={path} className="wrap-anywhere">
+                    <code>{path}</code>
+                    <p className="text-muted-foreground">{conflictReasons[reason]}</p>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-muted-foreground">
+                <T>
+                  Force Pull replaces conflicting local changes with the remote version, including
+                  deletions.
+                </T>
+              </p>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={!canSyncRemote || !status?.initialized || !status.remoteUrl || busy}
+                onClick={() => void pull(true)}
+              >
+                <T>Force Pull</T>
+              </Button>
+            </div>
+          ) : null}
 
           {preview ? (
             <div className="space-y-3 rounded-lg border border-border/70 p-3">

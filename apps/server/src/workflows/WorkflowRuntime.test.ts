@@ -2,6 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import { HarnessPluginId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -14,6 +15,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import * as PluginHost from "../harness/PluginHost.ts";
 import WorkflowsMigration from "../persistence/Migrations/110_Workflows.ts";
 import { WorkflowAgents } from "./WorkflowAgents.ts";
 import * as WorkflowEngine from "./WorkflowEngine.ts";
@@ -39,6 +41,7 @@ workflow("greet", { version: 1, payload: Schema.Struct({}), returns: Schema.Stri
 const setup = Effect.fn("setup")(function* (
   wrap: (fileSystem: FileSystem.FileSystem) => FileSystem.FileSystem = (fileSystem) => fileSystem,
   engine?: (definitions: ReadonlyArray<WorkflowDefinition>) => Layer.Layer<Workflows.Workflows>,
+  agents: Layer.Layer<WorkflowAgents> = Layer.mock(WorkflowAgents)({}),
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -54,7 +57,7 @@ const setup = Effect.fn("setup")(function* (
       (definitions: ReadonlyArray<WorkflowDefinition>) =>
         engine?.(definitions) ??
         WorkflowEngine.layer(definitions).pipe(
-          Layer.provide(Layer.mock(WorkflowAgents)({})),
+          Layer.provide(agents),
           Layer.provide(database),
           Layer.provide(NodeCrypto.layer),
         ),
@@ -64,6 +67,111 @@ const setup = Effect.fn("setup")(function* (
   ).pipe(Effect.provideService(FileSystem.FileSystem, wrap(fileSystem)));
   return { fileSystem, at, directory, made, runtime: Layer.effectContext(made) };
 });
+
+it.effect("executes declarative child and in-thread steps with their non-plan modes", () =>
+  Effect.gen(function* () {
+    const starts: Array<Parameters<WorkflowAgents["Service"]["start"]>[0]> = [];
+    const agents = Layer.mock(WorkflowAgents)({
+      start: (input) =>
+        Effect.sync(() => {
+          starts.push(input);
+          return { threadId: input.thread ?? "new-child", turnId: input.origin.step };
+        }),
+      result: () => Effect.succeed({ ending: "completed", detail: "", reply: "Done" }),
+    });
+    const { runtime } = yield* setup(undefined, undefined, agents);
+    yield* Effect.gen(function* () {
+      const definitions = yield* WorkflowRuntime.WorkflowDefinitions;
+      const workflows = yield* Workflows.Workflows;
+      const saved = yield* definitions.save(
+        "mode-flow.yaml",
+        `name: mode-flow
+steps:
+  - id: review
+    kind: in-thread
+    modeId: review
+    prompt: Review this change
+  - id: audit
+    kind: child
+    modeId: custom-audit
+    prompt: Audit the result
+    dependsOn: [review]
+`,
+      );
+      assert.deepStrictEqual(saved.problems, []);
+      const run = yield* workflows.start(
+        "mode-flow",
+        {
+          thread: { threadId: "existing-thread" },
+          project: "project-1",
+        },
+        { idempotencyKey: "mode-flow" },
+      );
+      const finished = yield* workflows.waitFor(
+        run.runId,
+        (current) => current.status === "completed",
+      );
+      assert.equal(finished.status, "completed");
+      assert.deepStrictEqual(
+        starts.map(({ thread, project, launch }) => ({ thread, project, modeId: launch?.modeId })),
+        [
+          { thread: "existing-thread", project: undefined, modeId: "review" },
+          { thread: undefined, project: "project-1", modeId: "custom-audit" },
+        ],
+      );
+    }).pipe(Effect.provide(runtime), Effect.scoped);
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+it.effect("loads active plugin workflows and drops them when their contribution is removed", () =>
+  Effect.gen(function* () {
+    const changes = yield* Queue.unbounded<number>();
+    const contribution = {
+      pluginId: HarnessPluginId.make("audit"),
+      skills: [],
+      rules: [],
+      commands: [],
+      modes: [],
+      hooks: [],
+      workflows: [
+        {
+          relativePath: "workflows/review.yaml",
+          source:
+            "name: plugin-review\nsteps:\n  - id: review\n    modeId: review\n    prompt: Review the change\n",
+        },
+      ],
+    } satisfies PluginHost.PluginActiveContribution;
+    let active = true;
+    const plugin = Layer.mock(PluginHost.PluginHost)({
+      getActiveContributions: () => (active ? [contribution] : []),
+      activeContributionChanges: Stream.fromQueue(changes),
+      listActiveSdkTools: () => [],
+    });
+    const { runtime } = yield* setup();
+    yield* Effect.gen(function* () {
+      const workflows = yield* Workflows.Workflows;
+      const first = yield* Stream.runHead(workflows.watch).pipe(Effect.map(Option.getOrThrow));
+      assert.include(
+        first.workflows.map(({ name }) => name),
+        "plugin-review",
+      );
+      active = false;
+      yield* Queue.offer(changes, 1);
+      yield* TestClock.adjust("1 second");
+      const next = yield* workflows.watch.pipe(
+        Stream.filter(
+          (snapshot) => (snapshot.definition?.revision ?? 0) > (first.definition?.revision ?? 0),
+        ),
+        Stream.runHead,
+        Effect.map(Option.getOrThrow),
+      );
+      assert.notInclude(
+        next.workflows.map(({ name }) => name),
+        "plugin-review",
+      );
+    }).pipe(Effect.provide(runtime.pipe(Layer.provide(plugin))), Effect.scoped);
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
 
 it.effect(
   "every file in the folder defines workflows, and a saved file is verified before it runs",

@@ -235,8 +235,14 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
         // Pre-populate unrelated keys in Codex config.toml and Claude ~/.claude.json
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         const claudeJsonPath = path.join(homeDir, ".claude.json");
+        const codexRulesPath = path.join(homeDir, ".codex", "AGENTS.md");
+        const claudeRulesPath = path.join(homeDir, ".claude", "CLAUDE.md");
+        const handWritten = "# My notes\n\nKeep these instructions.\n";
         yield* fs.makeDirectory(path.dirname(codexConfigPath), { recursive: true });
+        yield* fs.makeDirectory(path.dirname(claudeRulesPath), { recursive: true });
         yield* fs.makeDirectory(repoRoot, { recursive: true });
+        yield* fs.writeFileString(codexRulesPath, handWritten);
+        yield* fs.writeFileString(claudeRulesPath, handWritten);
         yield* fs.writeFileString(
           codexConfigPath,
           'model = "gpt-5.4"\napproval_policy = "on-request"\n',
@@ -327,6 +333,21 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
             true,
           );
 
+          for (const [target, rulesPath] of [
+            ["codex", codexRulesPath],
+            ["claude", claudeRulesPath],
+          ] as const) {
+            const exported = yield* fs.readFileString(rulesPath);
+            expect(exported.startsWith(handWritten)).toBe(true);
+            expect(exported).toContain("<!-- T3-HARNESS-BEGIN -->");
+            expect(exported).toContain("Prefer small pure functions.");
+            expect(exported).toContain("<!-- T3-HARNESS-END -->");
+            const second = yield* exporter.preview({ target });
+            expect(second.files.find((file) => file.targetPath === rulesPath)?.action).toBe(
+              "unchanged",
+            );
+          }
+
           // 3. Cursor export writes ~/.cursor/mcp.json + ~/.cursor/rules/*.mdc (never dirties repo tree)
           const cursorPreview = yield* exporter.preview({
             target: "cursor",
@@ -342,6 +363,12 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
           const cursorRuleContent = yield* fs.readFileString(cursorRuleFile);
           expect(cursorRuleContent).toContain("globs:");
           expect(cursorRuleContent).toContain("Never use any.");
+
+          const linkedHome = path.join(homeDir, ".claude");
+          yield* fs.rename(linkedHome, path.join(homeDir, "linked-claude"));
+          yield* fs.symlink(path.join(homeDir, "linked-claude"), linkedHome);
+          const rejectedExport = yield* exporter.preview({ target: "claude" }).pipe(Effect.flip);
+          expect(rejectedExport.detail).toContain("symlinked dotfile directory");
         }).pipe(Effect.provide(makeTestLayer(baseDir, homeDir, paths)));
       }).pipe(Effect.provide(NodeServices.layer)),
   );

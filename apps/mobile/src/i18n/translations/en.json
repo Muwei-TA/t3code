@@ -5986,5 +5986,15 @@
   "ad208e3e32c85029": "Hide all",
   "3328503592789bed": "Zen",
   "856812e7e1fc445e": "Tool calls in chat",
-  "8d545d54c0a9e950": "Hide the commands, edits, and searches agents run. Hide successful keeps failures. Zen shows only final answers. Approvals, questions, and errors always show."
+  "8d545d54c0a9e950": "Hide the commands, edits, and searches agents run. Hide successful keeps failures. Zen shows only final answers. Approvals, questions, and errors always show.",
+  "d30c3d64f997cdda": "Restore built-in",
+  "671d792ab63f5317": "Remove your customizations and restore the built-in mode \"{id}\"?",
+  "856e4a5a2ed893f9": "Overridden built-in",
+  "f39bade00396a5b1": "Changed locally and upstream",
+  "ee73e8e4c0ee7bd3": "Changed locally and deleted upstream",
+  "7c853db0cc47553d": "Added locally and upstream",
+  "34735826d0694cc6": "Force Pull",
+  "02b3fbf612e5a864": "Pull conflicts",
+  "90285a3737126abb": "Force Pull replaces conflicting local changes with the remote version, including deletions.",
+  "0dce15f46a89dcbd": "Enabling command hooks requires terminal access."
 }

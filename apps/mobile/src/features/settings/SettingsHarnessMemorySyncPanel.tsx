@@ -6,6 +6,7 @@ import {
 import {
   type EnvironmentId,
   HarnessMemoryId,
+  type HarnessSyncPullConflict,
   type HarnessSyncPreviewPushResult,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
@@ -272,11 +273,37 @@ function MobileSyncPanel({
   const [busy, setBusy] = useState(false);
   const [remoteUrl, setRemoteUrl] = useState("");
   const [preview, setPreview] = useState<HarnessSyncPreviewPushResult | null>(null);
+  const [conflicts, setConflicts] = useState<ReadonlyArray<HarnessSyncPullConflict>>([]);
+  const conflictReasons = {
+    modified_both: gt("Changed locally and upstream"),
+    deleted_upstream_modified_locally: gt("Changed locally and deleted upstream"),
+    added_both: gt("Added locally and upstream"),
+  };
 
   if (statusQuery.isPending && !statusQuery.data) {
     return <AppActivityIndicator size="small" />;
   }
   const status = statusQuery.data;
+
+  const pull = async (force: boolean) => {
+    setBusy(true);
+    const res = await pullSync({ environmentId, input: force ? { force: true } : {} });
+    setBusy(false);
+    if (res._tag === "Success") {
+      const remainingConflicts = force ? [] : (res.value.conflicts ?? []);
+      setConflicts(remainingConflicts);
+      setPreview(null);
+      if (remainingConflicts.length === 0) {
+        Dialog.alert(gt("Pulled harness updates"), res.value.summary);
+      }
+      statusQuery.refresh();
+    } else if (!isAtomCommandInterrupted(res)) {
+      Dialog.alert(
+        gt("Pull failed"),
+        errorDisplayMessage(squashAtomCommandFailure(res), m) ?? gt("Try again."),
+      );
+    }
+  };
 
   return (
     <View className="gap-3">
@@ -322,6 +349,8 @@ function MobileSyncPanel({
               });
               setBusy(false);
               if (res._tag === "Success") {
+                setConflicts([]);
+                setPreview(null);
                 statusQuery.refresh();
               } else if (!isAtomCommandInterrupted(res)) {
                 Dialog.alert(
@@ -355,25 +384,36 @@ function MobileSyncPanel({
         <Button
           label={gt("Pull")}
           tone="secondary"
-          disabled={!canSyncRemote || !status?.initialized || busy}
-          onPress={() => {
-            void (async () => {
-              setBusy(true);
-              const res = await pullSync({ environmentId, input: {} });
-              setBusy(false);
-              if (res._tag === "Success") {
-                Dialog.alert(gt("Pulled harness updates"), res.value.summary);
-                statusQuery.refresh();
-              } else if (!isAtomCommandInterrupted(res)) {
-                Dialog.alert(
-                  gt("Pull failed"),
-                  errorDisplayMessage(squashAtomCommandFailure(res), m) ?? gt("Try again."),
-                );
-              }
-            })();
-          }}
+          disabled={!canSyncRemote || !status?.initialized || !status.remoteUrl || busy}
+          onPress={() => void pull(false)}
         />
       </View>
+
+      {conflicts.length > 0 ? (
+        <View className="gap-2 rounded-xl border border-border-subtle bg-card p-3">
+          <Text className="font-t3-semibold text-xs text-foreground">
+            <T>Pull conflicts</T>
+          </Text>
+          {conflicts.map(({ path, reason }) => (
+            <View key={path}>
+              <Text className="font-mono text-xs text-foreground">{path}</Text>
+              <Text className="text-xs text-foreground-muted">{conflictReasons[reason]}</Text>
+            </View>
+          ))}
+          <Text className="text-xs text-foreground-muted">
+            <T>
+              Force Pull replaces conflicting local changes with the remote version, including
+              deletions.
+            </T>
+          </Text>
+          <Button
+            label={gt("Force Pull")}
+            tone="danger"
+            disabled={!canSyncRemote || !status?.initialized || !status.remoteUrl || busy}
+            onPress={() => void pull(true)}
+          />
+        </View>
+      ) : null}
 
       {preview ? (
         <View className="gap-2 rounded-xl border border-border-subtle bg-card p-3">

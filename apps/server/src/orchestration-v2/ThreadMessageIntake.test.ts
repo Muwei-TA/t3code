@@ -9,10 +9,14 @@ import {
   CommandId,
   EventId,
   GuestMessageId,
+  HarnessCommandId,
+  HarnessHookId,
+  HarnessPluginId,
   MessageId,
   RunId,
   RuntimeRequestId,
   ThreadId,
+  TrimmedNonEmptyString,
   TurnItemId,
   type OrchestrationV2Command,
   type OrchestrationV2ServerCommand,
@@ -22,12 +26,18 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import {
   createAttachmentId,
   createPendingAttachmentId,
   resolveAttachmentPath,
 } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import * as HarnessHooksService from "../harness/HarnessHooksService.ts";
+import * as HarnessLibraryStore from "../harness/HarnessLibraryStore.ts";
+import * as HarnessStore from "../harness/HarnessStore.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
+import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   OrchestratorCommandPreviouslyRejectedError,
@@ -44,6 +54,14 @@ const layerIntakeTest = ServerConfig.layerTest(process.cwd(), {
 }).pipe(
   Layer.provideMerge(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
   Layer.provideMerge(ServerSettings.layerTest()),
+);
+const layerHarnessIntakeTest = Layer.merge(
+  HarnessLibraryStore.layer,
+  HarnessHooksService.layer,
+).pipe(
+  Layer.provide(HarnessStore.layer),
+  Layer.provide(Layer.merge(T3ProjectFileLoader.layer, ManagedPolicy.layerTest())),
+  Layer.provideMerge(layerIntakeTest),
 );
 
 const layerFailingDispatchHandler =
@@ -395,6 +413,9 @@ it.effect("sends a guest message with the guest's files, never ones the client n
     const captured: OrchestrationV2ServerCommand[] = [];
     const layerGuestShare = Layer.mock(ThreadManagementService.ThreadManagementService)({
       dispatch: layerFailingDispatchHandler(captured),
+      withMessageIntakeLock: (_id, effect) => effect,
+      hasReceipt: () => Effect.succeed(false),
+      getThreadShell: () => Effect.succeed(null),
       // Only the share is read.
       getThreadSnapshotWindow: () =>
         Effect.succeed({
@@ -460,6 +481,8 @@ it.effect("refuses a queued edit that keeps a file another edit already deleted"
         Effect.provide(
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             dispatch: layerFailingDispatchHandler(captured),
+            withMessageIntakeLock: (_id, effect) => effect,
+            getThreadShell: () => Effect.succeed(null),
             hasReceipt: (commandId) =>
               Effect.succeed(captured.some((command) => command.commandId === commandId)),
           }),
@@ -477,6 +500,132 @@ it.effect("refuses a queued edit that keeps a file another edit already deleted"
     yield* edit([kept]);
     expect(captured).toHaveLength(2);
   }).pipe(Effect.provide(layerIntakeTest)),
+);
+
+it.effect("preprocesses guest sends and queued edits once per accepted command", () =>
+  Effect.gen(function* () {
+    const library = yield* HarnessLibraryStore.HarnessLibraryStore;
+    const hooks = yield* HarnessHooksService.HarnessHooksService;
+    yield* library.upsertUserCommand({
+      id: HarnessCommandId.make("review-change"),
+      body: "Review $ARGUMENTS",
+    });
+    const observed: Array<unknown> = [];
+    const hookId = HarnessHookId.make("check-prompt");
+    const pluginId = HarnessPluginId.make("intake-test");
+    yield* hooks.registerPluginHooks(
+      pluginId,
+      [
+        {
+          id: hookId,
+          event: "turn.beforeStart",
+          enabled: true,
+          source: "plugin",
+          pluginId,
+          target: { type: "http", url: TrimmedNonEmptyString.make("https://example.com/hook") },
+        },
+      ],
+      new Map([
+        [
+          hookId,
+          async ({ payload }) => {
+            observed.push(payload.text);
+            return {
+              ok: true,
+              timedOut: false,
+              durationMs: 0,
+              stdout:
+                payload.text === "Review blocked"
+                  ? '{"block":true,"reason":"Review is frozen"}'
+                  : "{}",
+            };
+          },
+        ],
+      ]),
+    );
+
+    const threadId = ThreadId.make("thread-intake");
+    const guestMessageId = GuestMessageId.make("guest-intake");
+    const guestCommand = {
+      type: "message.dispatch",
+      commandId: CommandId.make("guest-intake-dispatch"),
+      threadId,
+      messageId: MessageId.make("message-intake"),
+      guestMessageId,
+      text: "Ignore client text",
+      attachments: [],
+      dispatchMode: { type: "queue_after_active" },
+      createdBy: "user",
+      creationSource: "web",
+    } as const satisfies OrchestrationV2Command;
+    const edit = {
+      type: "queued-run.edit",
+      commandId: CommandId.make("edit-intake"),
+      threadId,
+      runId: RunId.make("run-intake"),
+      text: "/review-change queued",
+    } as const satisfies OrchestrationV2Command;
+    let guestMessageText = "/review-change guest";
+    const accepted = new Map<CommandId, string>();
+    const intakeLock = yield* KeyedLock.make<CommandId>();
+    const threadLayer = Layer.mock(ThreadManagementService.ThreadManagementService)({
+      withMessageIntakeLock: intakeLock.withLock,
+      hasReceipt: (id) => Effect.succeed(accepted.has(id)),
+      getThreadShell: () => Effect.succeed(null),
+      getThreadSnapshotWindow: () =>
+        Effect.succeed({
+          projection: {
+            thread: {
+              guestShare: {
+                messages: [
+                  {
+                    id: guestMessageId,
+                    status: "pending",
+                    text: guestMessageText,
+                    attachments: [],
+                  },
+                ],
+              },
+            },
+          },
+        } as unknown as Effect.Success<
+          ReturnType<
+            ThreadManagementService.ThreadManagementServiceShape["getThreadSnapshotWindow"]
+          >
+        >),
+      dispatch: (command, options) =>
+        Effect.sync(() => {
+          if (
+            !accepted.has(command.commandId) &&
+            (command.type === "message.dispatch" || command.type === "queued-run.edit")
+          ) {
+            accepted.set(command.commandId, options?.preprocessedGuestText ?? command.text);
+          }
+          return { sequence: 1, storedEvents: [] };
+        }),
+    });
+    const send = (command: OrchestrationV2Command) =>
+      dispatchCommand(command).pipe(Effect.provide(threadLayer));
+
+    yield* Effect.all([send(guestCommand), send(guestCommand)], { concurrency: 2 });
+    yield* Effect.all([send(edit), send(edit)], { concurrency: 2 });
+    expect(observed).toEqual(["Review guest", "Review queued"]);
+    expect([...accepted.values()]).toEqual(["Review guest", "Review queued"]);
+
+    guestMessageText = "/review-change blocked";
+    for (const command of [
+      { ...guestCommand, commandId: CommandId.make("guest-blocked") },
+      { ...edit, commandId: CommandId.make("edit-blocked"), text: "/review-change blocked" },
+    ]) {
+      const result = yield* send(command).pipe(Effect.flip);
+      expect(result).toMatchObject({
+        _tag: "HarnessError",
+        code: "policy_denied",
+        detail: "Review is frozen",
+      });
+      expect(accepted.has(command.commandId)).toBe(false);
+    }
+  }).pipe(Effect.provide(layerHarnessIntakeTest)),
 );
 
 it.effect("a queued /logout edit without provider management must keep an attachment", () =>
@@ -511,6 +660,8 @@ it.effect("a queued /logout edit without provider management must keep an attach
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             dispatch: layerFailingDispatchHandler(captured),
             hasReceipt: (commandId) => Effect.succeed(commandId === "edit-replayed-false"),
+            withMessageIntakeLock: (_id, effect) => effect,
+            getThreadShell: () => Effect.succeed(null),
             getThreadRecords: () =>
               Effect.succeed({
                 runs: ["attached", "bare"].map((id) => ({

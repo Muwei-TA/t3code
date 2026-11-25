@@ -220,9 +220,11 @@ export function SettingsHarnessLibraryPanel({
   const handleRemoveMode = (entry: HarnessModeEntry) => {
     if (!canWriteSettings || entry.scope !== "user") return;
     Dialog.confirm({
-      title: gt("Remove mode"),
-      message: gt('Remove portable mode "{id}" from this host?', { id: entry.id }),
-      confirmText: gt("Remove"),
+      title: entry.overriddenBuiltin ? gt("Restore built-in") : gt("Remove mode"),
+      message: entry.overriddenBuiltin
+        ? gt('Remove your customizations and restore the built-in mode "{id}"?', { id: entry.id })
+        : gt('Remove portable mode "{id}" from this host?', { id: entry.id }),
+      confirmText: entry.overriddenBuiltin ? gt("Restore built-in") : gt("Remove"),
       destructive: true,
       onConfirm: () => {
         void (async () => {
@@ -618,10 +620,17 @@ export function SettingsHarnessLibraryPanel({
                         {mode.readonly ? ` · ${gt("read-only")}` : ""}
                         {mode.proposePlan ? ` · ${gt("propose-plan")}` : ""}
                       </Text>
+                      {mode.overriddenBuiltin ? (
+                        <Text className="text-xs text-foreground-muted">
+                          <T>Overridden built-in</T>
+                        </Text>
+                      ) : null}
                     </View>
                     <Switch
                       value={mode.effectiveEnabled}
-                      disabled={!canWriteSettings || busyId === `mode:${mode.id}`}
+                      disabled={
+                        !canWriteSettings || busyId === `mode:${mode.id}` || mode.id === "build"
+                      }
                       onValueChange={() => void handleToggleMode(mode)}
                     />
                   </View>
@@ -639,7 +648,7 @@ export function SettingsHarnessLibraryPanel({
                     />
                     {mode.scope === "user" ? (
                       <Button
-                        label={gt("Remove")}
+                        label={mode.overriddenBuiltin ? gt("Restore built-in") : gt("Remove")}
                         tone="secondary"
                         disabled={!canWriteSettings || busyId === `mode:${mode.id}`}
                         onPress={() => handleRemoveMode(mode)}
@@ -1339,6 +1348,7 @@ export function SettingsHarnessLibraryPanel({
                 );
                 return;
               }
+              const editedMode = modeModal.mode === "edit" ? modeModal.entry : null;
               setBusyId("__mode_save__");
               const result = await upsertMode({
                 environmentId,
@@ -1350,6 +1360,24 @@ export function SettingsHarnessLibraryPanel({
                   readonly: draft.readonly,
                   proposePlan: draft.proposePlan,
                   body: draft.body,
+                  ...(editedMode?.defaultModel === undefined
+                    ? {}
+                    : { defaultModel: editedMode.defaultModel }),
+                  ...(editedMode?.allowedMcpServers === undefined
+                    ? {}
+                    : { allowedMcpServers: editedMode.allowedMcpServers }),
+                  ...(editedMode?.disabledMcpServers === undefined
+                    ? {}
+                    : { disabledMcpServers: editedMode.disabledMcpServers }),
+                  ...(editedMode?.includedRules === undefined
+                    ? {}
+                    : { includedRules: editedMode.includedRules }),
+                  ...(editedMode?.includedSkills === undefined
+                    ? {}
+                    : { includedSkills: editedMode.includedSkills }),
+                  ...(editedMode?.scope === "builtin" || editedMode?.overriddenBuiltin
+                    ? { overrideBuiltin: true }
+                    : {}),
                   ...(workspaceRoot ? { workspaceRoot } : {}),
                 },
               });

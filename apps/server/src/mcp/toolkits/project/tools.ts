@@ -3,6 +3,7 @@ import {
   clampedPositiveInt,
   NonNegativeInt,
   ModelSelection,
+  HarnessModeId,
   TrimmedNonEmptyString,
   ThreadId,
   RunId,
@@ -146,6 +147,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     modelSelection: Schema.optional(ModelSelection),
     runtimeMode: Schema.optional(RuntimeMode),
     interactionMode: Schema.optional(ProviderInteractionMode),
+    modeId: Schema.optional(HarnessModeId),
     workspaceStrategy: Schema.optional(
       OrchestrationV2ThreadLaunchWorkspaceStrategy.annotate({
         description:

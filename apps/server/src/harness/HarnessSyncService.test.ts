@@ -10,6 +10,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
+import { vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
@@ -17,7 +18,11 @@ import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 import * as HarnessSyncService from "./HarnessSyncService.ts";
 
-function makeTestLayer(baseDir: string, paths: ServerConfig.ServerDerivedPaths) {
+function makeTestLayer(
+  baseDir: string,
+  paths: ServerConfig.ServerDerivedPaths,
+  allowLocalRemoteForTest = true,
+) {
   const configLayer = Layer.succeed(ServerConfig.ServerConfig, {
     ...paths,
     mode: "web",
@@ -37,7 +42,9 @@ function makeTestLayer(baseDir: string, paths: ServerConfig.ServerDerivedPaths) 
     Layer.provideMerge(T3ProjectFileLoader.layer),
     Layer.provideMerge(NodeServices.layer),
   );
-  return HarnessSyncService.layer.pipe(Layer.provideMerge(storeLayer));
+  return HarnessSyncService.makeLayer({ allowLocalRemoteForTest }).pipe(
+    Layer.provideMerge(storeLayer),
+  );
 }
 
 function execGit(cwd: string, args: ReadonlyArray<string>): Promise<void> {
@@ -52,6 +59,18 @@ function execGit(cwd: string, args: ReadonlyArray<string>): Promise<void> {
       code === 0 ? resolve() : reject(new Error(`git ${args.join(" ")} failed (${code})`)),
     );
   });
+}
+
+function commit(cwd: string, message: string) {
+  return execGit(cwd, [
+    "-c",
+    "user.name=Harness test",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "-m",
+    message,
+  ]);
 }
 
 describe("HarnessSyncService", () => {
@@ -131,7 +150,12 @@ describe("HarnessSyncService", () => {
 
           const blockedPreview = yield* sync.previewPush();
           expect(blockedPreview.canPush).toBe(false);
-          expect(blockedPreview.secretFindings.some((f) => f.rule === "github-token")).toBe(true);
+          expect(blockedPreview.secretFindings).toContainEqual({
+            path: "memory/leak.md",
+            line: 1,
+            rule: "github-token",
+            preview: "***",
+          });
           // Excluded local trust ledgers & executable configs must never appear in outbound files.
           expect(blockedPreview.files.some((f) => f.path.includes("plugins-state.json"))).toBe(
             false,
@@ -264,7 +288,138 @@ describe("HarnessSyncService", () => {
           );
           expect(localPluginsState).toContain("demo");
           expect(localPluginsState).not.toContain("evil");
+
+          const localRule = path.join(store.harnessDir, "rules", "safe-rule.md");
+          const localNote = path.join(store.harnessDir, "memory", "leak.md");
+          yield* fs.writeFileString(localRule, "Local rule edit\n");
+          yield* fs.writeFileString(localNote, "Local note edit\n");
+          yield* Effect.promise(async () => {
+            await NodeFSP.writeFile(
+              path.join(attackerClone, "rules", "safe-rule.md"),
+              "Remote rule edit\n",
+            );
+            await NodeFSP.unlink(path.join(attackerClone, "memory", "leak.md"));
+            await NodeFSP.symlink("safe-rule.md", path.join(attackerClone, "rules", "linked.md"));
+            await execGit(attackerClone, ["add", "-A"]);
+            await commit(attackerClone, "Update rule and remove note");
+            await execGit(attackerClone, ["push", "origin", "main"]);
+          });
+
+          const conflicted = yield* sync.pull();
+          expect(conflicted.conflicts).toEqual(
+            expect.arrayContaining([
+              { path: "rules/safe-rule.md", reason: "modified_both" },
+              { path: "memory/leak.md", reason: "deleted_upstream_modified_locally" },
+            ]),
+          );
+          expect(conflicted.skippedFiles).toContain("rules/linked.md");
+          expect(yield* fs.exists(path.join(store.harnessDir, "rules", "linked.md"))).toBe(false);
+          expect(yield* fs.readFileString(localRule)).toBe("Local rule edit\n");
+          expect(yield* fs.readFileString(localNote)).toBe("Local note edit\n");
+          expect((yield* sync.pull()).conflicts).toEqual(conflicted.conflicts);
+
+          const forced = yield* sync.pull({ force: true });
+          expect(forced.updatedFiles).toEqual(
+            expect.arrayContaining(["rules/safe-rule.md", "memory/leak.md"]),
+          );
+          expect(yield* fs.readFileString(localRule)).toBe("Remote rule edit\n");
+          expect(yield* fs.exists(localNote)).toBe(false);
+          expect((yield* sync.pull()).conflicts).toBeUndefined();
         }).pipe(Effect.provide(makeTestLayer(baseDir, paths)));
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "blocks an earlier outbound secret and symlink even after both disappear from HEAD",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-harness-history-" });
+        const paths = yield* ServerConfig.deriveServerPaths(root, undefined);
+
+        yield* Effect.gen(function* () {
+          const sync = yield* HarnessSyncService.HarnessSyncService;
+          const store = yield* HarnessStore.HarnessStore;
+          const remote = path.join(root, "remote.git");
+          yield* Effect.promise(() => execGit(root, ["init", "--bare", "-b", "main", remote]));
+          yield* sync.configureRemote({ remoteUrl: TrimmedNonEmptyString.make(remote) });
+          const checkout = path.join(path.dirname(store.harnessDir), "harness-sync");
+          yield* Effect.promise(async () => {
+            const memory = path.join(checkout, "memory");
+            await NodeFSP.mkdir(memory);
+            await NodeFSP.writeFile(
+              path.join(memory, "note.md"),
+              "private note ghp_1234567890abcdefghij1234567890\n",
+            );
+            await NodeFSP.symlink("note.md", path.join(memory, "linked.md"));
+            await execGit(checkout, ["add", "-A"]);
+            await commit(checkout, "First version");
+            await NodeFSP.rm(path.join(memory, "linked.md"));
+            await NodeFSP.writeFile(path.join(memory, "note.md"), "clean note\n");
+            await execGit(checkout, ["add", "-A"]);
+            await commit(checkout, "Clean version");
+          });
+          const preview = yield* sync.previewPush();
+          expect(preview.canPush).toBe(false);
+          expect(preview.secretFindings).toEqual(
+            expect.arrayContaining([
+              { path: "memory/note.md", line: 1, rule: "github-token", preview: "***" },
+              expect.objectContaining({ path: "memory/linked.md", rule: "unscannable-symlink" }),
+            ]),
+          );
+          const blocked = yield* sync
+            .push({
+              expectedRemoteUrl: TrimmedNonEmptyString.make(remote),
+              expectedBranch: TrimmedNonEmptyString.make("main"),
+              expectedTreeDigest: TrimmedNonEmptyString.make(preview.previewTreeDigest!),
+            })
+            .pipe(Effect.flip);
+          expect(blocked.code).toBe("policy_denied");
+        }).pipe(Effect.provide(makeTestLayer(root, paths)));
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "rejects unsupported remotes and initializes its own repository despite ambient GIT_DIR",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-harness-remotes-" });
+        const paths = yield* ServerConfig.deriveServerPaths(root, undefined);
+
+        yield* Effect.gen(function* () {
+          const sync = yield* HarnessSyncService.HarnessSyncService;
+          const store = yield* HarnessStore.HarnessStore;
+          for (const remoteUrl of [
+            "ext::disabled",
+            "file:///tmp/remote",
+            "/tmp/remote",
+            "--not-a-remote",
+          ]) {
+            const rejected = yield* sync
+              .configureRemote({
+                remoteUrl: TrimmedNonEmptyString.make(remoteUrl),
+              })
+              .pipe(Effect.flip);
+            expect(rejected.code).toBe("invalid_config");
+          }
+          const unrelated = path.join(root, "unrelated.git");
+          vi.stubEnv("GIT_DIR", unrelated);
+          try {
+            const status = yield* sync.configureRemote({
+              remoteUrl: TrimmedNonEmptyString.make("https://example.com/harness.git"),
+            });
+            expect(status.initialized).toBe(true);
+            expect(
+              yield* fs.exists(path.join(path.dirname(store.harnessDir), "harness-sync", ".git")),
+            ).toBe(true);
+            expect(yield* fs.exists(unrelated)).toBe(false);
+          } finally {
+            vi.unstubAllEnvs();
+          }
+        }).pipe(Effect.provide(makeTestLayer(root, paths, false)));
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 

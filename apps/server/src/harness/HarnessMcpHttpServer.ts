@@ -30,6 +30,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import { compileAndValidateDeclarativeWorkflow } from "./DeclarativeWorkflowCompiler.ts";
+import { resolveRunHarnessMode, runInteractionMode } from "./HarnessTurnPreprocess.ts";
 import * as HarnessHooksService from "./HarnessHooksService.ts";
 import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import * as HarnessMemoryStore from "./HarnessMemoryStore.ts";
@@ -224,24 +225,26 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
       : null;
     const activeRun =
       shell.activeRunId !== null && typeof projections.getThreadRecords === "function"
-        ? yield* projections.getThreadRecords(scope.thread.threadId, ["runs"]).pipe(
-            Effect.map(
-              (records) => records.runs.find((run) => run.id === shell.activeRunId) ?? null,
-            ),
-            Effect.orElseSucceed(() => null),
-          )
+        ? yield* projections
+            .getThreadRecords(scope.thread.threadId, ["runs"], { runIds: [shell.activeRunId] })
+            .pipe(
+              Effect.map(
+                (records) => records.runs.find((run) => run.id === shell.activeRunId) ?? null,
+              ),
+              Effect.orElseSucceed(() => null),
+            )
         : null;
-    const effectiveInteractionMode =
-      activeRun?.runtimePolicy.interactionMode ?? shell.interactionMode;
-    const effectiveRuntimeMode = activeRun?.runtimePolicy.runtimeMode ?? shell.runtimeMode;
+    const effectiveInteractionMode = runInteractionMode(
+      shell.interactionMode,
+      activeRun?.harnessMode,
+    );
     const activeMode = Option.isSome(libraryStore)
-      ? yield* libraryStore.value
-          .resolveMode({
-            ...(shell.modeId !== undefined ? { modeId: shell.modeId } : {}),
-            interactionMode: effectiveInteractionMode,
-            workspaceRoot,
-          })
-          .pipe(Effect.orElseSucceed(() => null))
+      ? yield* resolveRunHarnessMode(libraryStore.value, {
+          modeId: shell.modeId,
+          interactionMode: shell.interactionMode,
+          workspaceRoot,
+          override: activeRun?.harnessMode,
+        }).pipe(Effect.orElseSucceed(() => null))
       : null;
     const includeLibraryTools =
       snapshot.managedPolicyAllowsHarness &&
@@ -256,12 +259,12 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
       supportsMcpTools &&
       effectiveInteractionMode !== "plan" &&
       activeMode?.readonly !== true &&
-      (activeMode?.id === "creator" || shell.modeId === "creator");
+      (activeMode?.id ?? activeRun?.harnessMode?.id ?? shell.modeId) === "creator";
     const context: McpGateway.GatewaySessionContext = {
       providerSessionId: scope.thread.providerSessionId,
       workspaceRoot,
       interactionMode: effectiveInteractionMode,
-      runtimeMode: effectiveRuntimeMode,
+      runtimeMode: shell.runtimeMode,
       activeMode,
       includeProposePlan:
         snapshot.managedPolicyAllowsHarness &&
@@ -386,7 +389,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
         ? (params.arguments as Record<string, unknown>)
         : {};
 
-    const state = yield* resolveThreadState;
+    let state = yield* resolveThreadState;
     if (state === null || !isLiveCallerShell(state.shell, scope.thread.providerInstanceId)) {
       return jsonRpcSuccess(
         rpc.id,
@@ -441,7 +444,41 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
           sessionId,
         );
       }
+      const freshState = yield* resolveThreadState;
+      if (
+        freshState === null ||
+        !isLiveCallerShell(freshState.shell, scope.thread.providerInstanceId) ||
+        freshState.shell.activeRunId !== state.shell.activeRunId
+      ) {
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [
+              { type: "text", text: "The calling provider no longer owns an active thread run." },
+            ],
+          },
+          sessionId,
+        );
+      }
+      if (!freshState.managedPolicyAllowsHarness) {
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "Portable harness extensions are disabled by this environment's managed policy.",
+              },
+            ],
+          },
+          sessionId,
+        );
+      }
+      state = freshState;
     }
+    const { context } = state;
 
     const emitPostToolHook = (isError: boolean) =>
       Option.isSome(hooksService)
@@ -449,7 +486,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
             threadId: scope.thread.threadId,
             toolName,
             arguments: toolArgs,
-            workspaceRoot: state.context.workspaceRoot,
+            workspaceRoot: context.workspaceRoot,
             isError,
           })
         : Effect.void;
@@ -479,34 +516,17 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
       );
     }
 
-    const enforceLiveRuntimeCeiling = Effect.fn("HarnessMcpHttpServer.enforceLiveRuntimeCeiling")(
-      function* (input: {
-        readonly readOnly: boolean;
-        readonly isBuiltInReadOnly?: boolean | undefined;
-      }) {
-        const freshState = yield* resolveThreadState;
-        if (
-          freshState === null ||
-          !isLiveCallerShell(freshState.shell, scope.thread.providerInstanceId)
-        ) {
-          return "The calling provider no longer owns an active thread run.";
-        }
-        if (!freshState.managedPolicyAllowsHarness) {
-          return "Portable harness extensions are disabled by this environment's managed policy.";
-        }
-        return McpGateway.checkHarnessRuntimeToolCeiling({
-          toolName,
-          interactionMode: freshState.context.interactionMode,
-          runtimeMode: freshState.context.runtimeMode,
-          activeMode: freshState.context.activeMode,
-          readOnly: input.readOnly,
-          isBuiltInReadOnly: input.isBuiltInReadOnly,
-        });
-      },
-    );
+    const checkRuntimeCeiling = (readOnly: boolean) =>
+      McpGateway.checkHarnessRuntimeToolCeiling({
+        toolName,
+        interactionMode: context.interactionMode,
+        runtimeMode: context.runtimeMode,
+        activeMode: context.activeMode,
+        readOnly,
+      });
 
     if (toolName === McpGateway.HARNESS_WRITE_SKILL_NAME) {
-      const ceilingErr = yield* enforceLiveRuntimeCeiling({ readOnly: false });
+      const ceilingErr = checkRuntimeCeiling(false);
       if (ceilingErr !== null) {
         yield* emitPostToolHook(true);
         return jsonRpcSuccess(
@@ -586,7 +606,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     }
 
     if (toolName === McpGateway.HARNESS_CREATE_MODE_NAME) {
-      const ceilingErr = yield* enforceLiveRuntimeCeiling({ readOnly: false });
+      const ceilingErr = checkRuntimeCeiling(false);
       if (ceilingErr !== null) {
         yield* emitPostToolHook(true);
         return jsonRpcSuccess(
@@ -643,7 +663,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
       const includedRules = decodeList(toolArgs.includedRules, decodeRuleId);
       const includedSkills = decodeList(toolArgs.includedSkills, decodeSkillId);
       const saved = yield* libraryStore.value
-        .upsertUserMode({
+        .createUserMode({
           id: idOpt.value,
           ...(typeof toolArgs.name === "string" && toolArgs.name.trim()
             ? { name: TrimmedNonEmptyString.make(toolArgs.name.trim()) }
@@ -689,7 +709,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     }
 
     if (toolName === McpGateway.HARNESS_PLUGIN_PACK_NAME) {
-      const ceilingErr = yield* enforceLiveRuntimeCeiling({ readOnly: false });
+      const ceilingErr = checkRuntimeCeiling(false);
       if (ceilingErr !== null) {
         yield* emitPostToolHook(true);
         return jsonRpcSuccess(
@@ -1102,7 +1122,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     }
 
     if (toolName === McpGateway.HARNESS_MEMORY_WRITE_NAME) {
-      const ceilingErr = yield* enforceLiveRuntimeCeiling({ readOnly: false });
+      const ceilingErr = checkRuntimeCeiling(false);
       if (ceilingErr !== null) {
         yield* emitPostToolHook(true);
         return jsonRpcSuccess(
@@ -1173,7 +1193,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
         .listActiveSdkTools()
         .find((candidate) => candidate.exposedName === toolName);
       if (sdkTool) {
-        const ceilingErr = yield* enforceLiveRuntimeCeiling({ readOnly: sdkTool.readOnly });
+        const ceilingErr = checkRuntimeCeiling(sdkTool.readOnly);
         if (ceilingErr !== null) {
           yield* emitPostToolHook(true);
           return jsonRpcSuccess(

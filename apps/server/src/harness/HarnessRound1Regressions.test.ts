@@ -139,6 +139,8 @@ describe("Portable Harness Round 1 Regressions", () => {
         bytes: NonNegativeInt.make(Buffer.byteLength(bigBody, "utf8")),
       },
       projectAgentsMd: null,
+      workspaceRoot: null,
+      invalidEntries: [],
       skills: [],
       rules: [1, 2, 3, 4].map((n) => ({
         id: `rule-${n}` as never,

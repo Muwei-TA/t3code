@@ -7,6 +7,7 @@ import {
   ComposerContextId,
   EnvironmentAuthorizationError,
   EnvironmentId,
+  HarnessModeId,
   MessageId,
   OrchestrationDispatchCommandError,
   ProjectId,
@@ -329,6 +330,7 @@ describe("thread outbox", () => {
       },
       runtimeMode: "approval-required",
       interactionMode: "plan",
+      modeId: HarnessModeId.make("review"),
       dispatchMode: "queue",
       compactBeforeSend: true,
     } satisfies QueuedThreadMessage;
@@ -341,11 +343,13 @@ describe("thread outbox", () => {
         modelSelection: selectedMessage.modelSelection,
         runtimeMode: selectedMessage.runtimeMode,
         interactionMode: selectedMessage.interactionMode,
+        modeId: selectedMessage.modeId,
       }),
     ).toEqual({
       modelSelection: selectedMessage.modelSelection,
       runtimeMode: selectedMessage.runtimeMode,
       interactionMode: selectedMessage.interactionMode,
+      modeId: selectedMessage.modeId,
     });
   });
 

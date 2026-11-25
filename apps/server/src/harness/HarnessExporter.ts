@@ -31,10 +31,15 @@ import {
 } from "./HarnessLibraryStore.ts";
 import { configContainsSecretPlaceholder, redactHarnessServerConfig } from "./HarnessSecrets.ts";
 import * as HarnessStore from "./HarnessStore.ts";
-import { safeWriteFileAtomic } from "./safeFileOps.ts";
+import { safeReadFileUtf8, safeWriteFileAtomic } from "./safeFileOps.ts";
 
 const ALL_SECTIONS: ReadonlyArray<HarnessExportSection> = ["mcp", "skills", "rules", "commands"];
 const MAX_SNIPPET_CHARS = 800;
+
+const MANAGED_RULES_BEGIN = "<!-- T3-HARNESS-BEGIN -->";
+const MANAGED_RULES_END = "<!-- T3-HARNESS-END -->";
+const MANAGED_RULES_BLOCK =
+  /^<!-- T3-HARNESS-BEGIN -->\r?\n(?:(?!^<!-- T3-HARNESS-(?:BEGIN|END) -->\r?$)[\s\S])*?^<!-- T3-HARNESS-END -->(?=\r?$)/mu;
 
 interface PlannedExportFile {
   readonly targetPath: string;
@@ -215,11 +220,29 @@ const make = Effect.gen(function* () {
   const writeLock = yield* Semaphore.make(1);
   const hmacKey = NodeCrypto.randomBytes(32);
 
-  const readFileOpt = (filePath: string) =>
-    fs.readFileString(filePath).pipe(
-      Effect.asSome,
-      Effect.orElseSucceed(() => Option.none<string>()),
-    );
+  const readFileOpt = Effect.fn("HarnessExporter.readFileOpt")(function* (filePath: string) {
+    return yield* Effect.tryPromise({
+      try: () =>
+        safeReadFileUtf8(homeDir, filePath)
+          .then(Option.some)
+          .catch((error: unknown) => {
+            if (
+              typeof error === "object" &&
+              error !== null &&
+              "code" in error &&
+              error.code === "ENOENT"
+            ) {
+              return Option.none<string>();
+            }
+            throw error;
+          }),
+      catch: () =>
+        new HarnessError({
+          code: "io_error",
+          detail: `Could not safely read ${filePath}. Symlinked dotfile directories and files are blocked by export protection.`,
+        }),
+    });
+  });
 
   const writeFileAtomic = Effect.fn("HarnessExporter.writeFileAtomic")(function* (
     targetPath: string,
@@ -254,6 +277,16 @@ const make = Effect.gen(function* () {
     const sections = new Set<HarnessExportSection>(
       input.sections && input.sections.length > 0 ? input.sections : ALL_SECTIONS,
     );
+    if (input.target !== "claude" || [...sections].some((section) => section !== "mcp")) {
+      const dotDir = path.join(homeDir, `.${input.target}`);
+      const symlink = yield* fs.readLink(dotDir).pipe(Effect.option);
+      if (Option.isSome(symlink)) {
+        return yield* new HarnessError({
+          code: "invalid_config",
+          detail: `Cannot export to ${dotDir} because it is a symlinked dotfile directory. Export protection requires a real directory.`,
+        });
+      }
+    }
     const files: Array<PlannedExportFile> = [];
     const warnings: Array<string> = [];
 
@@ -400,14 +433,41 @@ const make = Effect.gen(function* () {
             );
           }
         }
-        if (ruleBlocks.length > 0) {
-          const targetPath =
-            input.target === "codex"
-              ? path.join(homeDir, ".codex", "AGENTS.md")
-              : path.join(homeDir, ".claude", "CLAUDE.md");
-          const existing = Option.getOrNull(yield* readFileOpt(targetPath));
-          const content = `${ruleBlocks.join("\n\n")}\n`;
-          addPlannedFile(targetPath, existing, "rules", "AGENTS.md", content, content, false);
+        const targetPath =
+          input.target === "codex"
+            ? path.join(homeDir, ".codex", "AGENTS.md")
+            : path.join(homeDir, ".claude", "CLAUDE.md");
+        const existing = Option.getOrNull(yield* readFileOpt(targetPath));
+        const managed = existing?.match(MANAGED_RULES_BLOCK) ?? undefined;
+        if (ruleBlocks.length > 0 || managed !== undefined) {
+          const eol = managed?.[0].includes("\r\n") ? "\r\n" : "\n";
+          const rules = ruleBlocks.join("\n\n");
+          if (/^<!-- T3-HARNESS-(?:BEGIN|END) -->\r?$/mu.test(rules)) {
+            return yield* new HarnessError({
+              code: "invalid_config",
+              detail: "Portable rules contain a reserved T3 Harness export marker.",
+            });
+          }
+          const block = [
+            MANAGED_RULES_BEGIN,
+            ...(rules ? [rules.replace(/\r?\n/gu, eol)] : []),
+            MANAGED_RULES_END,
+          ].join(eol);
+          let content: string;
+          if (existing !== null && managed?.index !== undefined) {
+            content =
+              existing.slice(0, managed.index) +
+              block +
+              existing.slice(managed.index + managed[0].length);
+          } else {
+            const separator = existing ? (existing.endsWith("\n") ? "\n" : "\n\n") : "";
+            content = `${existing ?? ""}${separator}${block}\n`;
+            if (existing)
+              warnings.push(
+                `${targetPath}: Appended T3 Harness rules and preserved existing unmanaged content.`,
+              );
+          }
+          addPlannedFile(targetPath, existing, "rules", "AGENTS.md", content, block, false);
         }
       }
     }

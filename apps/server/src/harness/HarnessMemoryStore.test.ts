@@ -83,6 +83,29 @@ describe("HarnessMemoryStore", () => {
           id: HarnessMemoryId.make("postgres-tuning"),
         });
         expect(afterRemove.entries.map((e) => e.id)).toEqual(["deploy-checklist"]);
+
+        for (const [id, body] of [
+          ["single-word", "cache"],
+          ["separate-words", "cache has a configurable eviction policy"],
+          ["exact-phrase", "Use cache eviction when capacity is reached"],
+          ["cjk-two-bigrams", "请先部署，再检查署前日志"],
+          ["cjk-one-bigram", "先部署服务"],
+          ["cjk-exact", "部署前请确认权限"],
+        ] as const) {
+          yield* memory.upsertMemory({
+            id: HarnessMemoryId.make(id),
+            title: TrimmedNonEmptyString.make(id),
+            body,
+          });
+        }
+        expect(
+          (yield* memory.searchMemory({ query: "cache eviction" })).map((entry) => entry.id),
+        ).toEqual(["exact-phrase", "separate-words", "single-word"]);
+        expect((yield* memory.searchMemory({ query: "部署前" })).map((entry) => entry.id)).toEqual([
+          "cjk-exact",
+          "cjk-two-bigrams",
+          "cjk-one-bigram",
+        ]);
       }).pipe(Effect.provide(makeTestLayer(baseDir, paths)));
     }).pipe(Effect.provide(NodeServices.layer)),
   );

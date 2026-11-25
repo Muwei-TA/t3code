@@ -22,6 +22,7 @@ import {
   NodeId,
   ThreadId,
 } from "@t3tools/contracts";
+import { runInteractionMode } from "../harness/HarnessTurnPreprocess.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -880,7 +881,10 @@ export const layer: Layer.Layer<
 
       const resolvedPolicy = yield* runtimePolicy
         .resolve({
-          thread: projection.thread,
+          thread: {
+            ...projection.thread,
+            interactionMode: runInteractionMode(projection.thread.interactionMode, run.harnessMode),
+          },
           modelSelection: run.modelSelection,
         })
         .pipe(Effect.result);

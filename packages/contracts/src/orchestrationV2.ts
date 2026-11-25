@@ -845,10 +845,17 @@ export const OrchestrationV2RunOutput = Schema.Struct({
 });
 export type OrchestrationV2RunOutput = typeof OrchestrationV2RunOutput.Type;
 
+const OrchestrationV2RunHarnessMode = Schema.Struct({
+  id: HarnessModeId,
+  interactionMode: ProviderInteractionMode,
+});
+export type OrchestrationV2RunHarnessMode = typeof OrchestrationV2RunHarnessMode.Type;
+
 export const OrchestrationV2Run = Schema.Struct({
   id: RunId,
   threadId: ThreadId,
   ordinal: PositiveInt,
+  harnessMode: Schema.optional(OrchestrationV2RunHarnessMode),
   providerInstanceId: ProviderInstanceId,
   modelSelection: ModelSelection,
   providerThreadId: Schema.NullOr(ProviderThreadId),

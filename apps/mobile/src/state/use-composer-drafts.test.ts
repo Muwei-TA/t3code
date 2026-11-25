@@ -20,6 +20,7 @@ import {
   CommandId,
   ComposerContextId,
   EnvironmentId,
+  HarnessModeId,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -1959,6 +1960,7 @@ describe("mobile composer drafts", () => {
             },
             runtimeMode: "approval-required",
             interactionMode: "plan",
+            modeId: "review",
             workspaceSelection: {
               mode: "worktree",
               branch: "main",
@@ -1982,6 +1984,7 @@ describe("mobile composer drafts", () => {
       },
       runtimeMode: "approval-required",
       interactionMode: "plan",
+      modeId: HarnessModeId.make("review"),
       workspaceSelection: {
         mode: "worktree",
         branch: "main",

@@ -1,5 +1,6 @@
-// @effect-diagnostics nodeBuiltinImport:off -- Pure synchronous SHA-256 digests and temp-file UUIDs for portable library entries and staging mounts.
+// @effect-diagnostics nodeBuiltinImport:off -- SHA-256 digests, metadata fingerprints, and symlink-safe skill removal for portable library files.
 import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
 import {
   type HarnessAgentsMdView,
   type HarnessCommandEntry,
@@ -37,7 +38,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import * as ServerConfig from "../config.ts";
 import * as HarnessStore from "./HarnessStore.ts";
-import { safeWriteFileAtomic } from "./safeFileOps.ts";
+import { assertContainedNoSymlinks, safeWriteFileAtomic } from "./safeFileOps.ts";
 import * as PluginHost from "./PluginHost.ts";
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
@@ -47,6 +48,7 @@ const MAX_COMPANION_FILES = 32;
 const decodeSkillId = Schema.decodeUnknownOption(HarnessSkillId);
 const decodeRuleId = Schema.decodeUnknownOption(HarnessRuleId);
 const decodeCommandId = Schema.decodeUnknownOption(HarnessCommandId);
+const encodeSnapshotFingerprint = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeModeId = Schema.decodeUnknownOption(HarnessModeId);
 const decodeMcpServerId = Schema.decodeUnknownOption(HarnessMcpServerId);
 const decodeRuleApplyMode = Schema.decodeUnknownOption(HarnessRuleApplyMode);
@@ -103,6 +105,8 @@ const BUILTIN_MODES: ReadonlyArray<BuiltinModeSpec> = [
     body: "You are in Creator mode. Help the user author concise, portable T3 Harness extensions under ~/.t3/harness/ (SKILL.md skills, always/glob/manual rules, slash commands, declarative modes, and workflows). Prefer minimal, deterministic instructions, validate identifiers and YAML frontmatter, and avoid leaking secrets.",
   },
 ];
+
+const RESERVED_MODE_IDS = new Set<string>(["default", ...BUILTIN_MODES.map((mode) => mode.id)]);
 
 function formatModeMarkdown(input: {
   readonly name?: string | undefined;
@@ -319,8 +323,8 @@ export interface HarnessSkillDetail {
 
 export interface HarnessRuleDetail {
   readonly id: string;
-  readonly scope: "user" | "project";
-  readonly sourcePath: string;
+  readonly scope: "user" | "project" | "builtin";
+  readonly sourcePath: string | null;
   readonly apply: HarnessRuleApplyMode;
   readonly description?: string | undefined;
   readonly body: string;
@@ -376,6 +380,9 @@ export class HarnessLibraryStore extends Context.Service<
     readonly upsertUserMode: (
       input: HarnessModeUpsertInput,
     ) => Effect.Effect<HarnessLibrarySnapshot, HarnessError>;
+    readonly createUserMode: (
+      input: Omit<HarnessModeUpsertInput, "overrideBuiltin">,
+    ) => Effect.Effect<HarnessLibrarySnapshot, HarnessError>;
     readonly removeUserMode: (input: {
       readonly id: HarnessModeId;
       readonly workspaceRoot?: string | undefined;
@@ -419,6 +426,65 @@ const make = Effect.gen(function* () {
   const harnessDir = store.harnessDir;
   const mountsRoot = path.join(serverConfig.stateDir, "harness-mounts");
   const writeLock = yield* Semaphore.make(1);
+
+  const snapshots = new Map<
+    string | null,
+    {
+      readonly fingerprint: string;
+      readonly plugins: ReadonlyArray<PluginHost.PluginActiveContribution>;
+      readonly snapshot: HarnessLibrarySnapshot;
+    }
+  >();
+  let snapshotGeneration = 0;
+  const invalidateSnapshots = Effect.sync(() => {
+    snapshotGeneration++;
+    snapshots.clear();
+  });
+  const withLibraryWrite = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    writeLock.withPermits(1)(effect.pipe(Effect.ensuring(invalidateSnapshots)));
+
+  const fileFingerprint = async (file: string): Promise<string> => {
+    const stat = await NodeFSP.stat(file).catch(() => null);
+    if (stat === null) return "";
+    return `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;
+  };
+
+  const directoryFingerprint = async (directory: string, skills = false) => {
+    const entries = await NodeFSP.readdir(directory).catch(() => []);
+    return [
+      await fileFingerprint(directory),
+      ...(await Promise.all(
+        entries.toSorted().map(async (name) => {
+          const item = path.join(directory, name);
+          if (skills) {
+            return [
+              name,
+              await fileFingerprint(item),
+              await fileFingerprint(path.join(item, "SKILL.md")),
+            ];
+          }
+          return name.endsWith(".md") ? [name, await fileFingerprint(item)] : [name];
+        }),
+      )),
+    ];
+  };
+
+  const libraryFingerprint = async (workspaceRoot: string | null) => {
+    const files = [
+      fileFingerprint(path.join(harnessDir, "AGENTS.md")),
+      directoryFingerprint(path.join(harnessDir, "skills"), true),
+      ...["rules", "commands", "modes"].map((dir) =>
+        directoryFingerprint(path.join(harnessDir, dir)),
+      ),
+    ];
+    if (workspaceRoot !== null) {
+      files.push(
+        fileFingerprint(path.join(workspaceRoot, "AGENTS.md")),
+        directoryFingerprint(path.join(workspaceRoot, ".agents", "skills"), true),
+      );
+    }
+    return await Promise.all(files);
+  };
 
   const isWithinRoot = (rootRealPath: string, candidateRealPath: string): boolean => {
     const rel = path.relative(rootRealPath, candidateRealPath);
@@ -724,13 +790,42 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const snapshotLock = Semaphore.makeUnsafe(1);
   const getSnapshot: HarnessLibraryStore["Service"]["getSnapshot"] = Effect.fn(
     "HarnessLibraryStore.getSnapshot",
   )(function* (workspaceRoot) {
+    const generation = snapshotGeneration;
     const [{ config: userConfig }, overrides] = yield* Effect.all([
       store.loadUserConfig,
       store.readProjectLibraryOverrides(workspaceRoot),
     ]);
+    const plugins =
+      Option.isSome(pluginHostOption) && overrides.managedPolicyAllowsHarness
+        ? pluginHostOption.value.getActiveContributions()
+        : [];
+    const fingerprint = yield* encodeSnapshotFingerprint([
+      yield* Effect.promise(() => libraryFingerprint(overrides.normalizedRepo)),
+      userConfig.disabledSkills,
+      userConfig.disabledRules,
+      userConfig.disabledCommands,
+      userConfig.disabledModes,
+      [...overrides.disabledSkills],
+      [...overrides.disabledRules],
+      [...overrides.disabledCommands],
+      [...overrides.disabledModes],
+      overrides.invalidEntries,
+      overrides.maxSystemContextBytes,
+      overrides.managedPolicyAllowsHarness,
+      overrides.managedPolicyOrganization,
+    ]).pipe(Effect.orDie);
+    const cached = snapshots.get(overrides.normalizedRepo);
+    if (
+      cached?.fingerprint === fingerprint &&
+      cached.plugins.length === plugins.length &&
+      plugins.every((plugin, index) => plugin === cached.plugins[index])
+    ) {
+      return cached.snapshot;
+    }
     const invalidEntries: Array<HarnessInvalidEntry> = [...overrides.invalidEntries];
     const userDisabledSkills = new Set<string>(userConfig.disabledSkills);
     const userDisabledRules = new Set<string>(userConfig.disabledRules);
@@ -869,12 +964,12 @@ const make = Effect.gen(function* () {
     }
 
     // Merge active (trusted + enabled) plugin contributions without overriding user/project ids.
-    if (Option.isSome(pluginHostOption) && overrides.managedPolicyAllowsHarness) {
+    if (plugins.length > 0) {
       const existingSkillIds = new Set(skills.map((s) => s.id));
       const existingRuleIds = new Set(rules.map((r) => r.id));
       const existingCommandIds = new Set(commands.map((c) => c.id));
       const existingModeIds = new Set(modes.map((m) => m.id));
-      for (const contrib of pluginHostOption.value.getActiveContributions()) {
+      for (const contrib of plugins) {
         for (const s of contrib.skills) {
           if (!existingSkillIds.has(s.id)) {
             existingSkillIds.add(s.id);
@@ -902,7 +997,7 @@ const make = Effect.gen(function* () {
       }
     }
 
-    return {
+    const snapshot: HarnessLibrarySnapshot = {
       harnessDir,
       workspaceRoot: overrides.normalizedRepo,
       userAgentsMd,
@@ -916,14 +1011,20 @@ const make = Effect.gen(function* () {
       managedPolicyAllowsHarness: overrides.managedPolicyAllowsHarness,
       managedPolicyOrganization: overrides.managedPolicyOrganization,
     };
-  });
+    if (generation === snapshotGeneration) {
+      snapshots.delete(overrides.normalizedRepo);
+      snapshots.set(overrides.normalizedRepo, { fingerprint, plugins, snapshot });
+      if (snapshots.size > 12) snapshots.delete(snapshots.keys().next().value ?? null);
+    }
+    return snapshot;
+  }, snapshotLock.withPermits(1));
 
   const saveUserAgentsMd: HarnessLibraryStore["Service"]["saveUserAgentsMd"] = Effect.fn(
     "HarnessLibraryStore.saveUserAgentsMd",
   )(function* ({ body, workspaceRoot }) {
     yield* assertPolicyAllows();
     const targetPath = path.join(harnessDir, "AGENTS.md");
-    yield* writeLock.withPermits(1)(
+    yield* withLibraryWrite(
       body.trim().length === 0
         ? fs.remove(targetPath, { force: true }).pipe(
             Effect.mapError(
@@ -953,7 +1054,7 @@ const make = Effect.gen(function* () {
       enabled: input.enabled,
       body: input.body,
     });
-    yield* writeLock.withPermits(1)(writeFileAtomic(skillPath, content));
+    yield* withLibraryWrite(writeFileAtomic(skillPath, content));
     if (input.enabled !== undefined) {
       yield* store.setLibraryItemDisabled({
         kind: "skill",
@@ -969,31 +1070,28 @@ const make = Effect.gen(function* () {
   )(function* ({ id, workspaceRoot }) {
     yield* assertPolicyAllows();
     const skillDir = path.join(harnessDir, "skills", id);
-    yield* writeLock.withPermits(1)(
-      Effect.gen(function* () {
-        const exists = yield* fs.exists(skillDir).pipe(Effect.orElseSucceed(() => false));
-        if (!exists) {
-          return yield* new HarnessError({
-            code: "not_found",
-            detail: `Portable skill "${id}" was not found.`,
-          });
-        }
-        const contained = yield* resolveContainedPath(harnessDir, skillDir);
-        if (contained === null) {
-          return yield* new HarnessError({
-            code: "invalid_config",
-            detail: `Skill path for "${id}" escapes the harness directory.`,
-          });
-        }
-        yield* fs.remove(contained, { recursive: true, force: true }).pipe(
-          Effect.mapError(
-            () =>
-              new HarnessError({
+    yield* withLibraryWrite(
+      Effect.tryPromise({
+        try: async () => {
+          const { resolvedTarget: parent } = await assertContainedNoSymlinks(
+            harnessDir,
+            path.dirname(skillDir),
+          );
+          const target = path.join(parent, id);
+          const stat = await NodeFSP.lstat(target);
+          if (stat.isSymbolicLink()) await NodeFSP.unlink(target);
+          else await NodeFSP.rm(target, { recursive: true, force: true });
+        },
+        catch: (error) =>
+          typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"
+            ? new HarnessError({
+                code: "not_found",
+                detail: `Portable skill "${id}" was not found.`,
+              })
+            : new HarnessError({
                 code: "io_error",
-                detail: `Failed to remove skill "${id}".`,
+                detail: `Failed to safely remove skill "${id}".`,
               }),
-          ),
-        );
       }),
     );
     yield* store.setLibraryItemDisabled({ kind: "skill", id, disabled: false }).pipe(Effect.ignore);
@@ -1020,7 +1118,7 @@ const make = Effect.gen(function* () {
       enabled: input.enabled,
       body: input.body,
     });
-    yield* writeLock.withPermits(1)(writeFileAtomic(rulePath, content));
+    yield* withLibraryWrite(writeFileAtomic(rulePath, content));
     if (input.enabled !== undefined) {
       yield* store.setLibraryItemDisabled({
         kind: "rule",
@@ -1036,7 +1134,7 @@ const make = Effect.gen(function* () {
   )(function* ({ id, workspaceRoot }) {
     yield* assertPolicyAllows();
     const rulePath = path.join(harnessDir, "rules", `${id}.md`);
-    yield* writeLock.withPermits(1)(
+    yield* withLibraryWrite(
       Effect.gen(function* () {
         const exists = yield* fs.exists(rulePath).pipe(Effect.orElseSucceed(() => false));
         if (!exists) {
@@ -1092,7 +1190,7 @@ const make = Effect.gen(function* () {
       enabled: input.enabled,
       body: input.body,
     });
-    yield* writeLock.withPermits(1)(writeFileAtomic(commandPath, content));
+    yield* withLibraryWrite(writeFileAtomic(commandPath, content));
     if (input.enabled !== undefined) {
       yield* store.setLibraryItemDisabled({
         kind: "command",
@@ -1108,7 +1206,7 @@ const make = Effect.gen(function* () {
   )(function* ({ id, workspaceRoot }) {
     yield* assertPolicyAllows();
     const commandPath = path.join(harnessDir, "commands", `${id}.md`);
-    yield* writeLock.withPermits(1)(
+    yield* withLibraryWrite(
       Effect.gen(function* () {
         const exists = yield* fs.exists(commandPath).pipe(Effect.orElseSucceed(() => false));
         if (!exists) {
@@ -1298,23 +1396,28 @@ const make = Effect.gen(function* () {
 
           for (const skill of sorted) {
             const targetSkillDir = path.join(stageDir, "skills", skill.id);
-            const raw = yield* fs
-              .readFileString(skill.sourcePath)
-              .pipe(Effect.orElseSucceed(() => ""));
-            if (raw.length === 0) continue;
+            const sourceSkillDir = path.dirname(skill.sourcePath);
+            const raw = yield* readBoundedContainedFile(sourceSkillDir, skill.sourcePath);
+            if (Option.isNone(raw) || raw.value.text.length === 0) continue;
             yield* fs.makeDirectory(targetSkillDir, { recursive: true }).pipe(Effect.ignore);
             yield* fs
-              .writeFileString(path.join(targetSkillDir, "SKILL.md"), raw)
+              .writeFileString(path.join(targetSkillDir, "SKILL.md"), raw.value.text)
               .pipe(Effect.ignore);
 
             // Copy bounded non-escaping companion files (e.g., references/, scripts/, checklists)
             // alongside SKILL.md so Claude plugin-dir skills have full relative asset access.
-            const sourceSkillDir = path.dirname(skill.sourcePath);
             const companions = yield* listCompanionFiles(sourceSkillDir);
             for (const relPath of companions) {
               const srcFile = path.join(sourceSkillDir, relPath);
               const contained = yield* resolveContainedPath(sourceSkillDir, srcFile);
               if (contained === null) continue;
+              const info = yield* fs.stat(contained).pipe(Effect.option);
+              if (
+                Option.isNone(info) ||
+                info.value.type !== "File" ||
+                Number(info.value.size) > MAX_READ_BYTES
+              )
+                continue;
               const destFile = path.join(targetSkillDir, relPath);
               const fileBytes = yield* fs.readFile(contained).pipe(
                 Effect.asSome,
@@ -1460,10 +1563,17 @@ const make = Effect.gen(function* () {
     return out;
   });
 
-  const upsertUserMode: HarnessLibraryStore["Service"]["upsertUserMode"] = Effect.fn(
-    "HarnessLibraryStore.upsertUserMode",
-  )(function* (input) {
+  const saveUserMode = Effect.fn("HarnessLibraryStore.saveUserMode")(function* (
+    input: HarnessModeUpsertInput,
+    createOnly: boolean,
+  ) {
     yield* assertPolicyAllows();
+    if (RESERVED_MODE_IDS.has(input.id) && (createOnly || input.overrideBuiltin !== true)) {
+      return yield* new HarnessError({
+        code: "invalid_config",
+        detail: `Mode "${input.id}" is built in. Customize it in Harness Settings.`,
+      });
+    }
     const modePath = path.join(harnessDir, "modes", `${input.id}.md`);
     const content = formatModeMarkdown({
       name: input.name ?? input.id,
@@ -1480,14 +1590,30 @@ const make = Effect.gen(function* () {
       enabled: input.enabled,
       body: input.body,
     });
-    yield* writeLock.withPermits(1)(writeFileAtomic(modePath, content));
-    if (input.enabled !== undefined) {
-      yield* store.setLibraryItemDisabled({
-        kind: "mode",
-        id: input.id,
-        disabled: !input.enabled,
-      });
-    }
+    yield* withLibraryWrite(
+      Effect.gen(function* () {
+        if (createOnly) {
+          const existsOnDisk = yield* fs.exists(modePath).pipe(Effect.orElseSucceed(() => false));
+          const existsInPlugin = Option.getOrUndefined(pluginHostOption)
+            ?.getActiveContributions()
+            .some((plugin) => plugin.modes.some((mode) => mode.id === input.id));
+          if (existsOnDisk || existsInPlugin) {
+            return yield* new HarnessError({
+              code: "invalid_config",
+              detail: `Mode "${input.id}" already exists. Edit it in Harness Settings.`,
+            });
+          }
+        }
+        yield* writeFileAtomic(modePath, content);
+        if (input.enabled !== undefined) {
+          yield* store.setLibraryItemDisabled({
+            kind: "mode",
+            id: input.id,
+            disabled: !input.enabled,
+          });
+        }
+      }),
+    );
     return yield* getSnapshot(input.workspaceRoot);
   });
 
@@ -1496,7 +1622,7 @@ const make = Effect.gen(function* () {
   )(function* ({ id, workspaceRoot }) {
     yield* assertPolicyAllows();
     const modePath = path.join(harnessDir, "modes", `${id}.md`);
-    yield* writeLock.withPermits(1)(
+    yield* withLibraryWrite(
       Effect.gen(function* () {
         const exists = yield* fs.exists(modePath).pipe(Effect.orElseSucceed(() => false));
         if (!exists) {
@@ -1561,7 +1687,12 @@ const make = Effect.gen(function* () {
     upsertUserCommand,
     removeUserCommand,
     setCommandEnabled,
-    upsertUserMode,
+    upsertUserMode: Effect.fn("HarnessLibraryStore.upsertUserMode")((input) =>
+      saveUserMode(input, false),
+    ),
+    createUserMode: Effect.fn("HarnessLibraryStore.createUserMode")((input) =>
+      saveUserMode(input, true),
+    ),
     removeUserMode,
     setModeEnabled,
     resolveMode,

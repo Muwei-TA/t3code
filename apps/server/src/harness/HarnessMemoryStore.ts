@@ -246,30 +246,55 @@ export const layer = Layer.effect(
         const query = (input.query ?? "").trim().toLowerCase();
         const tagFilter = (input.tag ?? "").trim().toLowerCase();
         const limit = Math.max(1, Math.min(50, input.limit ?? 15));
-        // Preserve Unicode letters/numbers (including CJK) so non-ASCII queries match accurately.
-        const terms = query.split(/[^\p{L}\p{N}_-]+/u).filter(Boolean);
+        const tokenize = (text: string) => text.split(/[^\p{L}\p{N}_-]+/u).filter(Boolean);
+        const terms = [...new Set(tokenize(query))];
+        const characters = [...query];
+        const bigrams =
+          /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+$/u.test(query)
+            ? [...new Set(characters.slice(1).map((char, index) => characters[index] + char))]
+            : [];
+        const phrase = query.replace(/\s+/gu, " ");
 
         const filtered = entries.filter((entry) =>
           tagFilter.length === 0 ? true : entry.tags.some((t) => t.toLowerCase() === tagFilter),
         );
-        if (terms.length === 0) {
-          return filtered.slice(0, limit);
-        }
+        if (terms.length === 0) return filtered.slice(0, limit);
+
         return filtered
           .map((entry) => {
-            const haystack =
-              `${entry.id} ${entry.title} ${entry.tags.join(" ")} ${entry.body}`.toLowerCase();
+            const id = entry.id.toLowerCase();
+            const title = entry.title.toLowerCase();
+            const tags = entry.tags.map((tag) => tag.toLowerCase());
+            const fields = [id, title, ...tags, entry.body.toLowerCase()];
+            const haystack = fields.join(" ");
+            const words = new Set(tokenize(haystack));
+            const phraseMatch = Number(
+              fields.some((field) => field.replace(/\s+/gu, " ").includes(phrase)),
+            );
+            const fullMatches = terms.filter(
+              (term) => words.has(term) || (bigrams.length > 0 && haystack.includes(term)),
+            ).length;
+            const partialMatches = terms.filter((term) => haystack.includes(term)).length;
+            const bigramMatches = bigrams.filter((bigram) => haystack.includes(bigram)).length;
             let score = entry.pinned ? 5 : 0;
             for (const term of terms) {
-              if (entry.id.toLowerCase() === term) score += 100;
-              else if (entry.title.toLowerCase().includes(term)) score += 20;
-              else if (entry.tags.some((t) => t.toLowerCase().includes(term))) score += 15;
+              if (id === term) score += 100;
+              else if (title.includes(term)) score += 20;
+              else if (tags.some((tag) => tag.includes(term))) score += 15;
               else if (haystack.includes(term)) score += 3;
             }
-            return { entry, score };
+            return { entry, fullMatches, partialMatches, phraseMatch, bigramMatches, score };
           })
-          .filter((item) => item.score > (item.entry.pinned ? 5 : 0))
-          .sort((a, b) => b.score - a.score)
+          .filter((item) => item.partialMatches > 0 || item.bigramMatches > 0)
+          .sort(
+            (a, b) =>
+              Number(b.fullMatches === terms.length) - Number(a.fullMatches === terms.length) ||
+              b.phraseMatch - a.phraseMatch ||
+              b.fullMatches - a.fullMatches ||
+              b.partialMatches - a.partialMatches ||
+              b.bigramMatches - a.bigramMatches ||
+              b.score - a.score,
+          )
           .slice(0, limit)
           .map((item) => item.entry);
       }),

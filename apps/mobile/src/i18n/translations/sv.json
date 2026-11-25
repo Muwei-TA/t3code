@@ -5984,5 +5984,15 @@
   "ad208e3e32c85029": "Dölj alla",
   "3328503592789bed": "Zen",
   "856812e7e1fc445e": "Verktygsanrop i chatten",
-  "8d545d54c0a9e950": "Dölj kommandon, redigeringar och sökningar som agenter kör. Dölj lyckade behåller misslyckanden. Zen visar bara slutliga svar. Godkännanden, frågor och fel visas alltid."
+  "8d545d54c0a9e950": "Dölj kommandon, redigeringar och sökningar som agenter kör. Dölj lyckade behåller misslyckanden. Zen visar bara slutliga svar. Godkännanden, frågor och fel visas alltid.",
+  "d30c3d64f997cdda": "Återställ inbyggt läge",
+  "671d792ab63f5317": "Vill du ta bort anpassningarna och återställa det inbyggda läget ”{id}”?",
+  "856e4a5a2ed893f9": "Anpassat inbyggt läge",
+  "f39bade00396a5b1": "Ändrad både lokalt och i fjärrarkivet",
+  "ee73e8e4c0ee7bd3": "Ändrad lokalt och borttagen i fjärrarkivet",
+  "7c853db0cc47553d": "Tillagd både lokalt och i fjärrarkivet",
+  "34735826d0694cc6": "Tvinga hämtning",
+  "02b3fbf612e5a864": "Konflikter vid hämtning",
+  "90285a3737126abb": "Tvingad hämtning ersätter lokala ändringar som står i konflikt med fjärrversionen, inklusive borttagningar.",
+  "0dce15f46a89dcbd": "Terminalåtkomst krävs för att aktivera kommandokrokar."
 }

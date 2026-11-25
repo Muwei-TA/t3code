@@ -247,7 +247,11 @@ describe("HarnessLibraryStore", () => {
 
       yield* Effect.gen(function* () {
         const lib = yield* HarnessLibraryStore.HarnessLibraryStore;
-        const initial = yield* lib.getSnapshot(repoRoot);
+        const [initial, concurrent] = yield* Effect.all(
+          [lib.getSnapshot(repoRoot), lib.getSnapshot(repoRoot)],
+          { concurrency: 2 },
+        );
+        expect(concurrent).toBe(initial);
         const ids = initial.modes.map((m) => m.id);
         expect(ids).toContain("build");
         expect(ids).toContain("plan");
@@ -269,6 +273,8 @@ describe("HarnessLibraryStore", () => {
           workspaceRoot: repoRoot,
         });
         const customMode = afterCreate.modes.find((m) => m.id === "security-audit");
+        expect(afterCreate).not.toBe(initial);
+        expect(yield* lib.getSnapshot(repoRoot)).toBe(afterCreate);
         expect(customMode).toBeDefined();
         expect(customMode?.scope).toBe("user");
         expect(customMode?.readonly).toBe(true);
@@ -286,6 +292,7 @@ describe("HarnessLibraryStore", () => {
         // Override built-in review mode, then remove override to restore built-in
         const afterOverride = yield* lib.upsertUserMode({
           id: HarnessModeId.make("review"),
+          overrideBuiltin: true,
           name: TrimmedNonEmptyString.make("Strict Review"),
           baseInteractionMode: "default",
           readonly: true,
@@ -311,6 +318,31 @@ describe("HarnessLibraryStore", () => {
         });
         expect(afterRemove.modes.find((m) => m.id === "review")?.scope).toBe("builtin");
       }).pipe(Effect.provide(makeTestLayer(baseDir, paths)));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("removes a skill symlink without deleting the skill it points to", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-skill-removal-" });
+      const paths = yield* ServerConfig.deriveServerPaths(root, undefined);
+      yield* Effect.gen(function* () {
+        const lib = yield* HarnessLibraryStore.HarnessLibraryStore;
+        const original = yield* lib.upsertUserSkill({
+          id: HarnessSkillId.make("example"),
+          body: "Original instructions",
+        });
+        const target = path.join(original.harnessDir, "skills", "example");
+        const link = path.join(original.harnessDir, "skills", "alias");
+        yield* fs.symlink(target, link);
+        const after = yield* lib.removeUserSkill({ id: HarnessSkillId.make("alias") });
+        expect(yield* fs.exists(link)).toBe(false);
+        expect(yield* fs.readFileString(path.join(target, "SKILL.md"))).toContain(
+          "Original instructions",
+        );
+        expect(after.skills.map((skill) => skill.id)).toEqual(["example"]);
+      }).pipe(Effect.provide(makeTestLayer(root, paths)));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

@@ -344,11 +344,23 @@ export function SettingsHarnessPluginsHooksPanel({
                   {hook.event} · {hook.target.type}
                   {hook.pluginId ? ` · ${hook.pluginId}` : ""}
                 </Text>
+                {hook.source === "user" &&
+                !canOperateTerminal &&
+                hook.target.type === "command" &&
+                !hook.enabled ? (
+                  <Text className="text-xs text-foreground-muted">
+                    <T>Enabling command hooks requires terminal access.</T>
+                  </Text>
+                ) : null}
               </View>
               {hook.source === "user" ? (
                 <Switch
                   value={hook.enabled}
-                  disabled={!canWriteSettings || busyId === hook.id}
+                  disabled={
+                    !canWriteSettings ||
+                    busyId === hook.id ||
+                    (!canOperateTerminal && hook.target.type === "command" && !hook.enabled)
+                  }
                   onValueChange={(enabled) => {
                     void (async () => {
                       setBusyId(hook.id);
@@ -493,7 +505,7 @@ export function SettingsHarnessPluginsHooksPanel({
             <Button
               label={gt("Save")}
               tone="primary"
-              disabled={busyId !== null}
+              disabled={busyId !== null || (hookTargetType === "command" && !canOperateTerminal)}
               onPress={() => {
                 const decoded = decodeHookId(hookId.trim());
                 if (decoded._tag === "None") {

@@ -130,6 +130,34 @@ export function checkHarnessRuntimeToolCeiling(input: {
   return null;
 }
 
+function checkUpstreamToolCeiling(
+  input: Parameters<typeof checkHarnessRuntimeToolCeiling>[0] & {
+    readonly serverPolicy: HarnessMcpServerConfig["approvalPolicy"];
+    readonly serverId: HarnessMcpServerId;
+  },
+): string | null {
+  if (input.serverPolicy === "always-ask") {
+    return `Blocked "${input.toolName}" because MCP server "${input.serverId}" is configured with "always-ask" policy. Interactive gateway approval is not yet enabled; update the server's policy in Harness settings to permit execution.`;
+  }
+  if (input.serverPolicy === "auto-read" && !input.readOnly) {
+    return `Blocked "${input.toolName}" because MCP server "${input.serverId}" policy is "auto-read" and this tool is not read-only. Switch the server policy to "auto-all" in Harness settings and use Full access mode to allow mutating tools.`;
+  }
+  return checkHarnessRuntimeToolCeiling(input);
+}
+
+function upstreamToolDenial(context: GatewaySessionContext, binding: CatalogToolBinding) {
+  return checkUpstreamToolCeiling({
+    toolName: binding.exposed.exposedName,
+    serverId: binding.server.id,
+    serverPolicy: binding.server.config.approvalPolicy,
+    readOnly: binding.exposed.readOnly,
+    explicitlyAllowlisted: binding.server.config.allowedTools?.includes(binding.tool.name),
+    interactionMode: context.interactionMode,
+    runtimeMode: context.runtimeMode,
+    activeMode: context.activeMode,
+  });
+}
+
 /** Rewrites MCP Apps `_meta.ui.resourceUri` and legacy `_meta["ui/resourceUri"]` to canonical gateway URIs. */
 export function rewriteMcpAppMeta(
   serverId: HarnessMcpServerId,
@@ -1364,7 +1392,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       );
     });
 
-    return buildGatewayExposedCatalog(stillActive).tools;
+    return [...buildGatewayExposedCatalog(stillActive).byExposedName.values()]
+      .filter((binding) => upstreamToolDenial(context, binding) === null)
+      .map(({ exposed }) => exposed);
   });
 
   const recordSessionLoadedTools = (
@@ -1621,72 +1651,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       (entry) => entry.server.id === server.id && entry.server.scope === server.scope,
     )!.pooled;
 
-    const isReadOnlyAnnotated = targetTool.annotations?.readOnlyHint === true;
-    const isExplicitlyAllowlisted =
-      server.config.allowedTools !== undefined &&
-      server.config.allowedTools.includes(upstreamToolName);
-    const policy = server.config.approvalPolicy;
-
-    // 1. Server policy `always-ask` always fails closed until interactive gateway prompts exist.
-    if (policy === "always-ask") {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: `Blocked "${toolName}" because MCP server "${serverId}" is configured with "always-ask" policy. Interactive gateway approval is not yet enabled; update the server's policy in Harness settings to permit execution.`,
-          },
-        ],
-      };
-    }
-
-    // 2. Plan mode and read-only declarative modes enforce read-only gating on gateway-hosted MCP tools.
-    if (
-      (context.interactionMode === "plan" || context.activeMode?.readonly === true) &&
-      !isReadOnlyAnnotated
-    ) {
-      const isCustomReadOnlyMode =
-        context.interactionMode !== "plan" && context.activeMode?.readonly === true;
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: isCustomReadOnlyMode
-              ? `Blocked "${toolName}" in read-only mode "${context.activeMode!.id}" because it is not marked read-only.`
-              : `Blocked "${toolName}" in Plan mode because it is not marked read-only. Switch back to Default mode to run mutating tools.`,
-          },
-        ],
-      };
-    }
-
-    // 3. Server policy `auto-read` never silently executes non-read-only tools.
-    if (policy === "auto-read" && !isReadOnlyAnnotated) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: `Blocked "${toolName}" because MCP server "${serverId}" policy is "auto-read" and this tool is not read-only. Switch the server policy to "auto-all" in Harness settings and use Full access mode to allow mutating tools.`,
-          },
-        ],
-      };
-    }
-
-    // 4. Supervised runtime modes enforce ceiling via shared helper:
-    const ceilingError = checkHarnessRuntimeToolCeiling({
-      toolName,
-      interactionMode: context.interactionMode,
-      runtimeMode: context.runtimeMode,
-      activeMode: context.activeMode,
-      readOnly: isReadOnlyAnnotated,
-      explicitlyAllowlisted: isExplicitlyAllowlisted,
-    });
+    const ceilingError = upstreamToolDenial(context, binding);
     if (ceilingError !== null) {
-      return {
-        isError: true,
-        content: [{ type: "text", text: ceilingError }],
-      };
+      return { isError: true, content: [{ type: "text", text: ceilingError }] };
     }
 
     // Re-verify live workspace trust, policy, config revision, and pool membership right before

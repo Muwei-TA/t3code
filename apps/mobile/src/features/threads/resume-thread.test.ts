@@ -1,4 +1,4 @@
-import { EnvironmentId, MessageId, RunId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, HarnessModeId, MessageId, RunId, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
@@ -79,6 +79,15 @@ describe("resumeThread", () => {
       "setInteractionMode",
       "startTurn",
     ]);
+  });
+
+  it("saves and forwards a changed portable mode without changing the base interaction mode", async () => {
+    const { calls, base } = setup();
+    const modeId = HarnessModeId.make("review");
+    await resumeThread({ ...base, modeId, resumableRunId: runId, queueHeld: false });
+    expect(calls.map((call) => call.command)).toEqual(["setInteractionMode", "startTurn"]);
+    expect(calls[0]?.input).toMatchObject({ interactionMode: "default", modeId });
+    expect(calls[1]?.input).toMatchObject({ interactionMode: "default", modeId });
   });
 
   it("resumes a held queue directly when no run needs continuing", async () => {

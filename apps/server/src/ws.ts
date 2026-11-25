@@ -1538,6 +1538,19 @@ export const layerWsRpc = (
         harnessServices?.harnessHooks !== undefined
           ? Option.some(harnessServices.harnessHooks)
           : yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
+      const dispatchIntakeContext = intakeContext.pipe(
+        Context.add(ProjectStore.ProjectStoreV2, projectStore),
+        (context) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => context,
+            onSome: (store) => Context.add(context, HarnessLibraryStore.HarnessLibraryStore, store),
+          }),
+        (context) =>
+          Option.match(harnessHooksOption, {
+            onNone: () => context,
+            onSome: (hooks) => Context.add(context, HarnessHooksService.HarnessHooksService, hooks),
+          }),
+      );
       const harnessMemoryOption =
         harnessServices?.harnessMemory !== undefined
           ? Option.some(harnessServices.harnessMemory)
@@ -2156,7 +2169,7 @@ export const layerWsRpc = (
                             currentSession.scopes.includes(AuthProvidersManageScope),
                         },
                       )
-                  ).pipe(Effect.provide(intakeContext)),
+                  ).pipe(Effect.provide(dispatchIntakeContext)),
                 )
                 .pipe(
                   Effect.tap((result) =>
@@ -4082,9 +4095,14 @@ export const layerWsRpc = (
                       sourcePath: input.sourcePath,
                       id: input.id,
                     });
-                    if (risk.requiresTerminalOperate) {
-                      return yield* authorizeEffect(AuthTerminalOperateScope, host.install(input));
-                    }
+                    const install = host.install({
+                      ...input,
+                      expectedManifestDigest: risk.manifestDigest,
+                      expectedContentDigest: risk.contentDigest,
+                    });
+                    return yield* risk.requiresTerminalOperate
+                      ? authorizeEffect(AuthTerminalOperateScope, install)
+                      : install;
                   }
                   return yield* host.install(input);
                 }),
@@ -4162,7 +4180,7 @@ export const layerWsRpc = (
           Option.match(harnessHooksOption, {
             onNone: () => harnessUnavailable("HarnessHooksService"),
             onSome: (hooks) =>
-              input.target.type === "command"
+              input.target.type === "command" && input.enabled !== false
                 ? authorizeEffect(
                     AuthSettingsWriteScope,
                     authorizeEffect(AuthTerminalOperateScope, hooks.upsertUserHook(input)),
@@ -4178,7 +4196,13 @@ export const layerWsRpc = (
           Option.match(harnessHooksOption, {
             onNone: () => harnessUnavailable("HarnessHooksService"),
             onSome: (hooks) =>
-              authorizeEffect(AuthSettingsWriteScope, hooks.setUserHookEnabled(input)),
+              authorizeEffect(
+                AuthSettingsWriteScope,
+                hooks.setUserHookEnabled(
+                  input,
+                  authorizeEffect(AuthTerminalOperateScope, Effect.void),
+                ),
+              ),
           }),
         [WS_METHODS.harnessHookTest]: (input) =>
           Option.match(harnessHooksOption, {
@@ -4239,13 +4263,13 @@ export const layerWsRpc = (
                 authorizeEffect(AuthSourceControlWriteScope, sync.push(input)),
               ),
           }),
-        [WS_METHODS.harnessSyncPull]: () =>
+        [WS_METHODS.harnessSyncPull]: (input) =>
           Option.match(harnessSyncOption, {
             onNone: () => harnessUnavailable("HarnessSyncService"),
             onSome: (sync) =>
               authorizeEffect(
                 AuthSettingsWriteScope,
-                authorizeEffect(AuthSourceControlWriteScope, sync.pull()),
+                authorizeEffect(AuthSourceControlWriteScope, sync.pull(input)),
               ),
           }),
       });

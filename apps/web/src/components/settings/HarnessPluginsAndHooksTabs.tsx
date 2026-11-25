@@ -532,9 +532,18 @@ export function HarnessHooksTab({ environmentId }: { readonly environmentId: Env
                   </Button>
                   {hook.source === "user" ? (
                     <>
+                      {!canRunTerminal && hook.target.type === "command" && !hook.enabled ? (
+                        <span className="text-xs text-muted-foreground">
+                          <T>Enabling command hooks requires terminal access.</T>
+                        </span>
+                      ) : null}
                       <Switch
                         checked={hook.enabled}
-                        disabled={!editable || busy}
+                        disabled={
+                          !editable ||
+                          busy ||
+                          (!canRunTerminal && hook.target.type === "command" && !hook.enabled)
+                        }
                         onCheckedChange={async (checked) => {
                           setBusy(true);
                           const res = await setHookEnabled({
@@ -613,6 +622,7 @@ function HookEditorDialog({
   readonly onSave: (payload: {
     readonly id: HarnessHookId;
     readonly event: HarnessHookEvent;
+    readonly enabled?: boolean;
     readonly matcher?: typeof TrimmedNonEmptyString.Type;
     readonly timeoutMs?: typeof PositiveInt.Type;
     readonly failClosed?: boolean;
@@ -788,6 +798,7 @@ function HookEditorBody({
         </Button>
         <Button
           size="sm"
+          disabled={targetType === "command" && !canRunTerminal && existing?.enabled !== false}
           onClick={() => {
             const decodedId = decodeHookId(existing ? existing.id : id);
             if (decodedId._tag === "None") {
@@ -819,6 +830,7 @@ function HookEditorBody({
             void onSave({
               id: decodedId.value,
               event,
+              ...(existing ? { enabled: existing.enabled } : {}),
               ...(matcher.trim() ? { matcher: TrimmedNonEmptyString.make(matcher.trim()) } : {}),
               ...(Number.isFinite(parsedTimeout) && parsedTimeout > 0
                 ? { timeoutMs: PositiveInt.make(parsedTimeout) }

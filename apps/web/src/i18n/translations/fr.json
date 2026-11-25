@@ -13411,5 +13411,18 @@
   "27d76249d09eb69f": "Guide de revue prêt",
   "faa3bb26abb39c93": "Échec du guide de revue",
   "b7df38b7d8792d78": "Ouvrir le guide",
-  "9e91e9a77b664e4e": "Impossible de démarrer un guide de revue"
+  "9e91e9a77b664e4e": "Impossible de démarrer un guide de revue",
+  "ceee7a38b04806df": "Mode intégré personnalisé",
+  "d30c3d64f997cdda": "Restaurer le mode intégré",
+  "d618ada08df611b3": "Supprimer le mode",
+  "65142da4a01af142": "Mode intégré restauré",
+  "1bc22218e603fe08": "Impossible de supprimer le mode",
+  "e87d09a5ba440036": "Restaurer le mode intégré",
+  "f39bade00396a5b1": "Modifié localement et dans le dépôt distant",
+  "ee73e8e4c0ee7bd3": "Modifié localement et supprimé dans le dépôt distant",
+  "7c853db0cc47553d": "Ajouté localement et dans le dépôt distant",
+  "02b3fbf612e5a864": "Conflits lors de la récupération",
+  "90285a3737126abb": "La récupération forcée remplace les modifications locales en conflit par la version distante, y applique aussi les suppressions.",
+  "15a0e7308e320bc1": "Forcer la récupération",
+  "0dce15f46a89dcbd": "L’activation des hooks de commande nécessite l’accès au terminal."
 }

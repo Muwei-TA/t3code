@@ -2,6 +2,7 @@
 // change while the server runs. A file that loads replaces what it defined before; one that does
 // not keeps its last good version running. With no definitions there is no engine, unless runs
 // from before are kept: then one with nothing registered serves their history.
+import * as PluginHost from "../harness/PluginHost.ts";
 import * as NodeAsyncHooks from "node:async_hooks";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the CommonJS cache is cleared in the same tick as the import.
 import * as NodeFS from "node:fs";
@@ -179,6 +180,22 @@ const evaluate = async (url: string, evaluation: Evaluation): Promise<ReadonlyAr
   return [...new Set([...evaluation.registered, ...listed])];
 };
 
+function loadDeclarativeDefinition(
+  module: string,
+  source: string,
+): Effect.Effect<ReadonlyArray<WorkflowDefinition>, WorkflowDefinitionsLoadError> {
+  const compiled = compileDeclarativeWorkflowToDefinition(source);
+  if (compiled.ok) return Effect.succeed([compiled.definition]);
+  return Effect.fail(
+    new WorkflowDefinitionsLoadError({
+      module,
+      cause:
+        compiled.validation.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ") ||
+        "Declarative YAML workflow validation failed.",
+    }),
+  );
+}
+
 /**
  * The workflows a file defines: every `T3.workflow(…)` it calls, and any list it exports.
  * `load` tells one loading of a file from the next: Node keeps a module by its address, so the
@@ -196,17 +213,7 @@ export const loadDefinitions = Effect.fn("WorkflowRuntime.loadDefinitions")(func
       try: () => NodeFS.promises.readFile(file, "utf8"),
       catch: (cause) => new WorkflowDefinitionsLoadError({ module, cause }),
     });
-    const compiled = compileDeclarativeWorkflowToDefinition(yamlText);
-    if (!compiled.ok) {
-      const detail = compiled.validation.issues
-        .map((issue) => `${issue.path}: ${issue.message}`)
-        .join("; ");
-      return yield* new WorkflowDefinitionsLoadError({
-        module,
-        cause: detail || "Declarative YAML workflow validation failed.",
-      });
-    }
-    return [compiled.definition];
+    return yield* loadDeclarativeDefinition(module, yamlText);
   }
   const url = NodeURL.pathToFileURL(file).href + (load === 0 ? "" : `?${load}`);
   const definitions = yield* Effect.tryPromise({
@@ -315,6 +322,7 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const pluginHost = yield* Effect.serviceOption(PluginHost.PluginHost);
   const target = path.resolve(where);
   const single = DEFINITION_FILE.test(path.basename(target));
   const directory = single ? path.dirname(target) : target;
@@ -429,8 +437,14 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
       ? Effect.succeed([])
       : Effect.flatMap(Deferred.await(ready), (service) => service.unfinished),
   );
+  type LoadedDefinition =
+    | { readonly definitions: ReadonlyArray<WorkflowDefinition>; readonly problem?: never }
+    | { readonly problem: WorkflowDefinitionProblem; readonly definitions?: never };
   /** The workflows the file at `from` defines, or what is wrong with it as the file `name`. */
-  const load = Effect.fn("WorkflowRuntime.load")(function* (from: string, name: string) {
+  const load = Effect.fn("WorkflowRuntime.load")(function* (
+    from: string,
+    name: string,
+  ): Effect.fn.Return<LoadedDefinition> {
     const definitions = yield* loadDefinitions(from, ++loads).pipe(
       Effect.provideContext(services),
       Effect.result,
@@ -448,7 +462,7 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
   // Set once `reload` exists, which it schedules again; the indirection keeps its type inferred.
   let retryLater: Effect.Effect<void> = Effect.void;
   /** Take in what changed in the folder, and run the result unless something is wrong with it. */
-  const reload = Effect.fn("WorkflowRuntime.reload")(function* () {
+  const reload = Effect.fn("WorkflowRuntime.reload")(function* (): Effect.fn.Return<boolean> {
     const listed = yield* Effect.option(entries);
     if (Option.isNone(listed)) {
       yield* Effect.logWarning(
@@ -457,7 +471,17 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
       yield* retryLater;
       return false;
     }
-    const present = definitionNames(listed.value);
+    const pluginSources = new Map<string, string>(
+      Option.getOrUndefined(pluginHost)
+        ?.getActiveContributions()
+        .flatMap((plugin) =>
+          plugin.workflows.map(
+            (workflow) =>
+              [`plugins/${plugin.pluginId}/${workflow.relativePath}`, workflow.source] as const,
+          ),
+        ) ?? [],
+    );
+    const present = [...definitionNames(listed.value), ...pluginSources.keys()];
     // A leading dot keeps a file out on purpose; any other code file left out is a surprise.
     const wasMisnamed = misnamed;
     misnamed = listed.value
@@ -477,11 +501,25 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
     }
     for (const name of present) {
       const file = path.join(directory, name);
-      const source = yield* fileSystem.readFileString(file).pipe(Effect.option);
+      const pluginSource = pluginSources.get(name);
+      const source =
+        pluginSource === undefined
+          ? yield* fileSystem.readFileString(file).pipe(Effect.option)
+          : Option.some(pluginSource);
       if (Option.isNone(source) || seen.get(name) === source.value) continue;
       seen.set(name, source.value);
       changed = true;
-      const loaded = yield* load(file, name);
+      const loaded =
+        pluginSource === undefined
+          ? yield* load(file, name)
+          : yield* loadDeclarativeDefinition(name, pluginSource).pipe(
+              Effect.match({
+                onSuccess: (definitions): LoadedDefinition => ({ definitions }),
+                onFailure: (error): LoadedDefinition => ({
+                  problem: loadProblem(error, name, name),
+                }),
+              }),
+            );
       if (loaded.definitions === undefined) {
         broken.set(name, loaded.problem);
         pending.delete(name);
@@ -593,6 +631,22 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
     ),
     Effect.forkIn(outer),
   );
+
+  if (Option.isSome(pluginHost)) {
+    yield* pluginHost.value.activeContributionChanges.pipe(
+      Stream.debounce(RELOAD_SETTLE),
+      Stream.runForEach(() =>
+        lock
+          .withPermits(1)(reload())
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Reloading plugin workflows failed", Cause.pretty(cause)),
+            ),
+          ),
+      ),
+      Effect.forkIn(outer),
+    );
+  }
 
   yield* Effect.sleep(HELD_RETRY).pipe(
     Effect.andThen(

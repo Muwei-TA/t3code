@@ -1465,6 +1465,10 @@ const make = Effect.gen(function* () {
               libraryStore: harnessLibraryStore,
             })
           : { interactionMode: input.interactionMode, modeDigest: input.modeDigest };
+        const interactionMode =
+          input.createdBy === "agent" && input.interactionMode === "plan"
+            ? "plan"
+            : normalizedMode.interactionMode;
 
         let effectiveInitialText = input.initialMessage?.text;
         if (input.initialMessage !== undefined && Option.isNone(launchReceipt)) {
@@ -1473,7 +1477,7 @@ const make = Effect.gen(function* () {
             threadId: candidateThreadId,
             workspaceRoot: project.workspaceRoot,
             modeId: input.modeId,
-            interactionMode: normalizedMode.interactionMode,
+            interactionMode,
             libraryStore: harnessLibraryStore,
             hooksService: harnessHooksService,
           });
@@ -1527,7 +1531,7 @@ const make = Effect.gen(function* () {
                 ...(input.titleRenamed === true ? { titleRenamed: true } : {}),
                 modelSelection: input.modelSelection,
                 runtimeMode: input.runtimeMode,
-                interactionMode: normalizedMode.interactionMode,
+                interactionMode,
                 ...(input.modeId === undefined ? {} : { modeId: input.modeId }),
                 ...(normalizedMode.modeDigest === undefined
                   ? {}

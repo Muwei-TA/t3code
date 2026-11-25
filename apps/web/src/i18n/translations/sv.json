@@ -13418,5 +13418,18 @@
   "27d76249d09eb69f": "Granskningsguiden är klar",
   "faa3bb26abb39c93": "Granskningsguiden misslyckades",
   "b7df38b7d8792d78": "Öppna guiden",
-  "9e91e9a77b664e4e": "Kunde inte starta en granskningsguide"
+  "9e91e9a77b664e4e": "Kunde inte starta en granskningsguide",
+  "ceee7a38b04806df": "Anpassat inbyggt läge",
+  "d30c3d64f997cdda": "Återställ inbyggt läge",
+  "d618ada08df611b3": "Ta bort läge",
+  "65142da4a01af142": "Inbyggt läge återställt",
+  "1bc22218e603fe08": "Det gick inte att ta bort läget",
+  "e87d09a5ba440036": "Återställ inbyggt läge",
+  "f39bade00396a5b1": "Ändrad både lokalt och i fjärrarkivet",
+  "ee73e8e4c0ee7bd3": "Ändrad lokalt och borttagen i fjärrarkivet",
+  "7c853db0cc47553d": "Tillagd både lokalt och i fjärrarkivet",
+  "02b3fbf612e5a864": "Konflikter vid hämtning",
+  "90285a3737126abb": "Tvingad hämtning ersätter lokala ändringar som står i konflikt med fjärrversionen, inklusive borttagningar.",
+  "15a0e7308e320bc1": "Tvinga hämtning",
+  "0dce15f46a89dcbd": "Terminalåtkomst krävs för att aktivera kommandokrokar."
 }

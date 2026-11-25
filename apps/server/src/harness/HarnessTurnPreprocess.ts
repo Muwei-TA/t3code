@@ -1,4 +1,9 @@
-import type { HarnessModeId, ProviderInteractionMode, ThreadId } from "@t3tools/contracts";
+import type {
+  HarnessModeId,
+  OrchestrationV2RunHarnessMode,
+  ProviderInteractionMode,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -112,6 +117,54 @@ export const normalizeModeSelection = Effect.fn("HarnessTurnPreprocess.normalize
     return {
       interactionMode: resolved.baseInteractionMode,
       modeDigest: resolved.contentDigest,
+    };
+  },
+);
+
+export function runInteractionMode(
+  threadMode: ProviderInteractionMode,
+  runMode: OrchestrationV2RunHarnessMode | undefined,
+): ProviderInteractionMode {
+  return threadMode === "plan" || runMode?.interactionMode === "plan" ? "plan" : "default";
+}
+
+export const resolveRunHarnessMode = Effect.fn("HarnessTurnPreprocess.resolveRunHarnessMode")(
+  function* (
+    library: HarnessLibraryStore.HarnessLibraryStore["Service"],
+    input: {
+      readonly modeId?: HarnessModeId | undefined;
+      readonly interactionMode: ProviderInteractionMode;
+      readonly workspaceRoot?: string | undefined;
+      readonly override?: OrchestrationV2RunHarnessMode | undefined;
+    },
+  ) {
+    const threadMode = yield* library.resolveMode(input);
+    if (input.override === undefined || input.override.id === input.modeId) return threadMode;
+    const runMode = yield* library.resolveMode({
+      modeId: input.override.id,
+      interactionMode: input.override.interactionMode,
+      workspaceRoot: input.workspaceRoot,
+    });
+    if (runMode === null || threadMode === null) return runMode ?? threadMode;
+
+    const allowedMcpServers =
+      threadMode.allowedMcpServers === undefined
+        ? runMode.allowedMcpServers
+        : runMode.allowedMcpServers === undefined
+          ? threadMode.allowedMcpServers
+          : runMode.allowedMcpServers.filter((server) =>
+              threadMode.allowedMcpServers!.includes(server),
+            );
+    return {
+      ...runMode,
+      readonly: runMode.readonly || threadMode.readonly,
+      ...(allowedMcpServers === undefined ? {} : { allowedMcpServers }),
+      disabledMcpServers: [
+        ...new Set([
+          ...(runMode.disabledMcpServers ?? []),
+          ...(threadMode.disabledMcpServers ?? []),
+        ]),
+      ],
     };
   },
 );

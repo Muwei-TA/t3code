@@ -13420,5 +13420,18 @@
   "27d76249d09eb69f": "Review guide ready",
   "faa3bb26abb39c93": "Review guide failed",
   "b7df38b7d8792d78": "Open guide",
-  "9e91e9a77b664e4e": "Could not start a review guide"
+  "9e91e9a77b664e4e": "Could not start a review guide",
+  "ceee7a38b04806df": "Overridden built-in",
+  "d30c3d64f997cdda": "Restore built-in",
+  "d618ada08df611b3": "Remove mode",
+  "65142da4a01af142": "Built-in mode restored",
+  "1bc22218e603fe08": "Could not remove mode",
+  "e87d09a5ba440036": "Restore built-in",
+  "f39bade00396a5b1": "Changed locally and upstream",
+  "ee73e8e4c0ee7bd3": "Changed locally and deleted upstream",
+  "7c853db0cc47553d": "Added locally and upstream",
+  "02b3fbf612e5a864": "Pull conflicts",
+  "90285a3737126abb": "Force Pull replaces conflicting local changes with the remote version, including deletions.",
+  "15a0e7308e320bc1": "Force Pull",
+  "0dce15f46a89dcbd": "Enabling command hooks requires terminal access."
 }
