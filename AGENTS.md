@@ -155,3 +155,12 @@ Read the matching doc before changing code in that area; code review enforces th
 - No continuously repainting animations; they peg the GPU on high-refresh displays.
 - Security matters, but do not over-index on dev-mode or maintainer-only features. Read [SECURITY.md](SECURITY.md) before auditing or triaging reports.
 - If a rule here fights the task in front of you, say so loudly and get a human sign-off before breaking it.
+
+## Multi-model collaboration (project workflow)
+
+This fork uses a fixed three-model collaboration workflow documented in [.agents/MULTI_AGENT_WORKFLOW.md](.agents/MULTI_AGENT_WORKFLOW.md). Follow it alongside the repository rules above:
+
+- **Lead & sole implementer — Gemini 4 Neon (`gemini-4-neon`)**: Owns requirement breakdown, independent Plan A, cross-plan synthesis (互补择优), all code/test implementation, local verification, and user reporting.
+- **Technical advisor — Claude Opus 5.5 (`claude-opus-5-5`)**: Produces independent Plan B for comparison before implementation. Does **not** do routine implementation—consult only for hard technical blockers or after two stuck attempts. Strictly read-only.
+- **Code review, testing & QA acceptance — GPT-6.2-sol (`gpt-6.2-sol`)**: Independent reviewer and acceptance gate after implementation (read-only P0/P1/P2 findings, test coverage review, and round-by-round re-verification).
+- **Mandatory planning gate**: For each user requirement, Gemini 4 Neon and Claude Opus 5.5 draft independent plans (without modifying files), then the lead compares them dimension-by-dimension to synthesize a best-of-both proposal for user confirmation before editing code.
