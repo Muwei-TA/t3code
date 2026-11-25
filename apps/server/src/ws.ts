@@ -36,6 +36,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
+  AuthSourceControlWriteScope,
   AuthTerminalOperateScope,
   type AuthEnvironmentScope,
   HarnessError,
@@ -140,6 +141,8 @@ import { configContainsSecretPlaceholder } from "./harness/HarnessSecrets.ts";
 import * as McpGateway from "./harness/McpGateway.ts";
 import * as HarnessApprovalAuditStore from "./harness/HarnessApprovalAuditStore.ts";
 import * as HarnessHooksService from "./harness/HarnessHooksService.ts";
+import * as HarnessMemoryStore from "./harness/HarnessMemoryStore.ts";
+import * as HarnessSyncService from "./harness/HarnessSyncService.ts";
 import * as PluginHost from "./harness/PluginHost.ts";
 import { compileAndValidateDeclarativeWorkflow } from "./harness/DeclarativeWorkflowCompiler.ts";
 import * as HarnessContextService from "./harness/HarnessContextService.ts";
@@ -1476,6 +1479,8 @@ export const layerWsRpc = (
       | HarnessApprovalAuditStore.HarnessApprovalAuditStore["Service"]
       | undefined;
     readonly harnessHooks?: HarnessHooksService.HarnessHooksService["Service"] | undefined;
+    readonly harnessMemory?: HarnessMemoryStore.HarnessMemoryStore["Service"] | undefined;
+    readonly harnessSync?: HarnessSyncService.HarnessSyncService["Service"] | undefined;
     readonly pluginHost?: PluginHost.PluginHost["Service"] | undefined;
     readonly mcpGateway?: McpGateway.McpGateway["Service"] | undefined;
     readonly harnessContext?: HarnessContextService.HarnessContextService["Service"] | undefined;
@@ -1533,6 +1538,14 @@ export const layerWsRpc = (
         harnessServices?.harnessHooks !== undefined
           ? Option.some(harnessServices.harnessHooks)
           : yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
+      const harnessMemoryOption =
+        harnessServices?.harnessMemory !== undefined
+          ? Option.some(harnessServices.harnessMemory)
+          : yield* Effect.serviceOption(HarnessMemoryStore.HarnessMemoryStore);
+      const harnessSyncOption =
+        harnessServices?.harnessSync !== undefined
+          ? Option.some(harnessServices.harnessSync)
+          : yield* Effect.serviceOption(HarnessSyncService.HarnessSyncService);
       const pluginHostOption =
         harnessServices?.pluginHost !== undefined
           ? Option.some(harnessServices.pluginHost)
@@ -4128,6 +4141,54 @@ export const layerWsRpc = (
             return compileAndValidateDeclarativeWorkflow(input.yaml, knownModes);
           },
         ),
+        [WS_METHODS.harnessMemoryList]: () =>
+          Option.match(harnessMemoryOption, {
+            onNone: () => harnessUnavailable("HarnessMemoryStore"),
+            onSome: (memory) => memory.getSnapshot(),
+          }),
+        [WS_METHODS.harnessMemoryUpsert]: (input) =>
+          Option.match(harnessMemoryOption, {
+            onNone: () => harnessUnavailable("HarnessMemoryStore"),
+            onSome: (memory) => authorizeEffect(AuthSettingsWriteScope, memory.upsertMemory(input)),
+          }),
+        [WS_METHODS.harnessMemoryRemove]: (input) =>
+          Option.match(harnessMemoryOption, {
+            onNone: () => harnessUnavailable("HarnessMemoryStore"),
+            onSome: (memory) => authorizeEffect(AuthSettingsWriteScope, memory.removeMemory(input)),
+          }),
+        [WS_METHODS.harnessSyncStatus]: () =>
+          Option.match(harnessSyncOption, {
+            onNone: () => harnessUnavailable("HarnessSyncService"),
+            onSome: (sync) => sync.getStatus(),
+          }),
+        [WS_METHODS.harnessSyncConfigure]: (input) =>
+          Option.match(harnessSyncOption, {
+            onNone: () => harnessUnavailable("HarnessSyncService"),
+            onSome: (sync) => authorizeEffect(AuthSettingsWriteScope, sync.configureRemote(input)),
+          }),
+        [WS_METHODS.harnessSyncPreviewPush]: () =>
+          Option.match(harnessSyncOption, {
+            onNone: () => harnessUnavailable("HarnessSyncService"),
+            onSome: (sync) => sync.previewPush(),
+          }),
+        [WS_METHODS.harnessSyncPush]: (input) =>
+          Option.match(harnessSyncOption, {
+            onNone: () => harnessUnavailable("HarnessSyncService"),
+            onSome: (sync) =>
+              authorizeEffect(
+                AuthSettingsWriteScope,
+                authorizeEffect(AuthSourceControlWriteScope, sync.push(input)),
+              ),
+          }),
+        [WS_METHODS.harnessSyncPull]: () =>
+          Option.match(harnessSyncOption, {
+            onNone: () => harnessUnavailable("HarnessSyncService"),
+            onSome: (sync) =>
+              authorizeEffect(
+                AuthSettingsWriteScope,
+                authorizeEffect(AuthSourceControlWriteScope, sync.pull()),
+              ),
+          }),
       });
       const splitHandlers: Pick<typeof handlers, SplitWsRpc["_tag"]> = handlers;
       const otherHandlers: Pick<typeof handlers, Exclude<ServerWsRpc, SplitWsRpc>["_tag"]> =
@@ -4173,6 +4234,8 @@ export const layer = Layer.unwrap(
       HarnessApprovalAuditStore.HarnessApprovalAuditStore,
     );
     const harnessHooks = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
+    const harnessMemory = yield* Effect.serviceOption(HarnessMemoryStore.HarnessMemoryStore);
+    const harnessSync = yield* Effect.serviceOption(HarnessSyncService.HarnessSyncService);
     const pluginHost = yield* Effect.serviceOption(PluginHost.PluginHost);
     const mcpGateway = yield* Effect.serviceOption(McpGateway.McpGateway);
     const harnessContext = yield* Effect.serviceOption(HarnessContextService.HarnessContextService);
@@ -4184,6 +4247,8 @@ export const layer = Layer.unwrap(
       harnessExporter: Option.getOrUndefined(harnessExporter),
       harnessApprovalAudit: Option.getOrUndefined(harnessApprovalAudit),
       harnessHooks: Option.getOrUndefined(harnessHooks),
+      harnessMemory: Option.getOrUndefined(harnessMemory),
+      harnessSync: Option.getOrUndefined(harnessSync),
       pluginHost: Option.getOrUndefined(pluginHost),
       mcpGateway: Option.getOrUndefined(mcpGateway),
       harnessContext: Option.getOrUndefined(harnessContext),

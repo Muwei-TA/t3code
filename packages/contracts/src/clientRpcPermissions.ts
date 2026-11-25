@@ -141,6 +141,11 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.harnessHookRemove]: AuthSettingsWriteScope,
   [WS_METHODS.harnessHookSetEnabled]: AuthSettingsWriteScope,
   [WS_METHODS.harnessHookTest]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessMemoryUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessMemoryRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSyncConfigure]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSyncPush]: AuthSourceControlWriteScope,
+  [WS_METHODS.harnessSyncPull]: AuthSourceControlWriteScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 
@@ -204,6 +209,9 @@ export function clientRpcRequiredScopes(
   }
   if (method === WS_METHODS.harnessHookTest) {
     return [AuthSettingsWriteScope, AuthTerminalOperateScope];
+  }
+  if (method === WS_METHODS.harnessSyncPush || method === WS_METHODS.harnessSyncPull) {
+    return [AuthSettingsWriteScope, AuthSourceControlWriteScope];
   }
   return Object.hasOwn(CLIENT_GUARDED_RPC_SCOPES, method)
     ? [CLIENT_GUARDED_RPC_SCOPES[method as ClientGuardedRpcTag]]

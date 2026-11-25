@@ -3588,6 +3588,55 @@
   "eb6d5b35a58215b0": "Read-only mode",
   "1b7e3c1619e3b01a": "Emit proposed plan cards",
   "770091050c4d0f29": "Instructions (Markdown)",
+  "95729c9264ff9e8a": "Add Note",
+  "7fbca41fa5f2b8f1": "Delete memory note",
+  "7be16d42359e7cfd": "Delete “{title}” from {host}?",
+  "c3ea24ac809a5ed5": "Title",
+  "fe709e52e2c94334": "Tags (comma separated)",
+  "77eade0ede062ae4": "Markdown content",
+  "49a3c36c1ea45a4c": "Enter a valid note ID, title, and body.",
+  "dbc1787e96efac17": "Could not save note",
+  "ac73edb75a030490": "Save Remote",
+  "1cb9eb666518578b": "Configure sync failed",
+  "d09333b80a715c5f": "Preview Push",
+  "dd420bd9b4c8f356": "Preview failed",
+  "4350ab8128b18105": "Pull",
+  "36ef05f1138343d4": "Pulled harness updates",
+  "421c7b74b8abedfb": "Pull failed",
+  "a3e67eb0e49f5d82": "Commit & Push",
+  "e1d315bf88a53e30": "Harness pushed",
+  "7f525fe4af6616b3": "Push failed",
+  "e08184c9d7a5a7c2": [
+    "Cross-provider markdown notes on ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    "."
+  ],
+  "4d4769a3901aa8a5": "No portable memory notes yet.",
+  "bc1bd8b902fba9f2": "New Memory Note",
+  "02796ab51893bbc7": "Pin note",
+  "7b5140066c990f9d": [
+    "Sync portable harness files on ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " via Git. Raw secrets are blocked before push."
+  ],
+  "0ab2fafd95873f6d": [
+    "Push blocked: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " raw secret pattern(s) detected."
+  ],
+  "01120353636b14f4": "Outbound Diff Preview",
   "6ad6f96b1d4f2de1": "Review plugin digest (1/2)",
   "b91a502207e9e5b8": "Plugin: {name} v{version}\nHost: {host}\nDigest: sha256:{digest}\nFormat: {format}\n\nContinue to trust confirmation?",
   "9b64afb9844a7e09": "Trust and activate plugin? (2/2)",
@@ -3669,6 +3718,8 @@
   "0e83c3bf28f8958e": "명령",
   "c1b7649ac731ed07": "Plugins",
   "4e5f1c0e990db46f": "Hooks",
+  "2f890e1e55af5ae5": "Memory",
+  "0713ed506fbebac6": "Git Sync",
   "4aa91c06e3cc23d3": "Permissions",
   "adf55447ec216381": "Import / Export",
   "2f130a0cfd0a6c69": "Add server",
@@ -4310,6 +4361,8 @@
   "21dca2a3ea66ea70": "modes",
   "1ec567bb6d7f14bd": "plugins",
   "60e64d24d06538fe": "hooks",
+  "92df2bec4cb8bcc8": "memory",
+  "2819d374bd2eab7c": "git sync",
   "233cc012b38001d0": "permissions",
   "0da45180ae6618a1": "approval rules",
   "861b79f1f3a8d700": "import",

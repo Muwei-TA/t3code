@@ -945,6 +945,8 @@ export const HarnessPluginView = Schema.Struct({
   hookIds: Schema.Array(Schema.String),
   mcpServerIds: Schema.Array(Schema.String),
   workflowFiles: Schema.Array(Schema.String),
+  entrypoint: Schema.optionalKey(Schema.String),
+  toolNames: Schema.optionalKey(Schema.Array(Schema.String)),
   lastError: Schema.NullOr(Schema.String),
 });
 export type HarnessPluginView = typeof HarnessPluginView.Type;
@@ -1129,6 +1131,113 @@ export const HarnessWorkflowValidateResult = Schema.Struct({
   compiledPreview: Schema.optionalKey(Schema.String),
 });
 export type HarnessWorkflowValidateResult = typeof HarnessWorkflowValidateResult.Type;
+
+export const HarnessMemoryId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[a-z0-9][a-z0-9._-]*$/),
+).pipe(Schema.brand("HarnessMemoryId"));
+export type HarnessMemoryId = typeof HarnessMemoryId.Type;
+
+export const HarnessMemoryEntry = Schema.Struct({
+  id: HarnessMemoryId,
+  title: TrimmedNonEmptyString,
+  tags: Schema.Array(TrimmedNonEmptyString),
+  pinned: Schema.Boolean,
+  body: Schema.String,
+  bytes: NonNegativeInt,
+  sourcePath: Schema.String,
+  updatedAt: IsoDateTime,
+});
+export type HarnessMemoryEntry = typeof HarnessMemoryEntry.Type;
+
+export const HarnessMemorySnapshot = Schema.Struct({
+  memoryDir: Schema.String,
+  entries: Schema.Array(HarnessMemoryEntry),
+  managedPolicyAllowsHarness: Schema.Boolean,
+});
+export type HarnessMemorySnapshot = typeof HarnessMemorySnapshot.Type;
+
+export const HarnessMemoryUpsertInput = Schema.Struct({
+  id: HarnessMemoryId,
+  title: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  tags: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(48)))),
+  pinned: Schema.optionalKey(Schema.Boolean),
+  body: Schema.String.check(Schema.isMaxLength(262_144)),
+});
+export type HarnessMemoryUpsertInput = typeof HarnessMemoryUpsertInput.Type;
+
+export const HarnessMemoryRemoveInput = Schema.Struct({
+  id: HarnessMemoryId,
+});
+export type HarnessMemoryRemoveInput = typeof HarnessMemoryRemoveInput.Type;
+
+export const HarnessSyncSecretFinding = Schema.Struct({
+  path: Schema.String,
+  line: PositiveInt,
+  rule: Schema.String,
+  preview: Schema.String,
+});
+export type HarnessSyncSecretFinding = typeof HarnessSyncSecretFinding.Type;
+
+export const HarnessSyncDiffFile = Schema.Struct({
+  path: Schema.String,
+  status: Schema.Literals(["added", "modified", "deleted", "untracked"]),
+  additions: NonNegativeInt,
+  deletions: NonNegativeInt,
+});
+export type HarnessSyncDiffFile = typeof HarnessSyncDiffFile.Type;
+
+export const HarnessSyncStatus = Schema.Struct({
+  harnessDir: Schema.String,
+  initialized: Schema.Boolean,
+  branch: Schema.NullOr(Schema.String),
+  remoteUrl: Schema.NullOr(Schema.String),
+  dirtyCount: NonNegativeInt,
+  ahead: NonNegativeInt,
+  behind: NonNegativeInt,
+  secretFindings: Schema.Array(HarnessSyncSecretFinding),
+  canPush: Schema.Boolean,
+  managedPolicyAllowsHarness: Schema.Boolean,
+  lastError: Schema.NullOr(Schema.String),
+});
+export type HarnessSyncStatus = typeof HarnessSyncStatus.Type;
+
+export const HarnessSyncConfigureInput = Schema.Struct({
+  remoteUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  branch: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+});
+export type HarnessSyncConfigureInput = typeof HarnessSyncConfigureInput.Type;
+
+export const HarnessSyncPreviewPushResult = Schema.Struct({
+  branch: Schema.NullOr(Schema.String),
+  remoteUrl: Schema.NullOr(Schema.String),
+  files: Schema.Array(HarnessSyncDiffFile),
+  secretFindings: Schema.Array(HarnessSyncSecretFinding),
+  canPush: Schema.Boolean,
+  diffSummary: Schema.String,
+});
+export type HarnessSyncPreviewPushResult = typeof HarnessSyncPreviewPushResult.Type;
+
+export const HarnessSyncPushInput = Schema.Struct({
+  commitMessage: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+});
+export type HarnessSyncPushInput = typeof HarnessSyncPushInput.Type;
+
+export const HarnessSyncPushResult = Schema.Struct({
+  committed: Schema.Boolean,
+  pushed: Schema.Boolean,
+  commitSha: Schema.optionalKey(Schema.String),
+  filesCommitted: NonNegativeInt,
+  summary: Schema.String,
+});
+export type HarnessSyncPushResult = typeof HarnessSyncPushResult.Type;
+
+export const HarnessSyncPullResult = Schema.Struct({
+  pulled: Schema.Boolean,
+  updatedFiles: Schema.Array(Schema.String),
+  summary: Schema.String,
+});
+export type HarnessSyncPullResult = typeof HarnessSyncPullResult.Type;
 
 export const HarnessErrorCode = Schema.Literals([
   "policy_denied",

@@ -74,6 +74,7 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
 import { useSettingsScope } from "./SettingsScopeContext";
 import { useSearchableSetting } from "./settingsSearch";
 import { HarnessLibraryPanels, type HarnessPanelTab } from "./HarnessLibraryTabs";
+import { HarnessMemoryTab, HarnessSyncTab } from "./HarnessMemoryAndSyncTabs";
 import { HarnessHooksTab, HarnessPluginsTab } from "./HarnessPluginsAndHooksTabs";
 
 const decodeServerId = Schema.decodeUnknownOption(HarnessMcpServerId);
@@ -153,6 +154,8 @@ export function HarnessSettingsPanel() {
     { id: "commands", label: gt("Commands") },
     { id: "plugins", label: gt("Plugins") },
     { id: "hooks", label: gt("Hooks") },
+    { id: "memory", label: gt("Memory") },
+    { id: "sync", label: gt("Git Sync") },
     { id: "approvals", label: gt("Approvals") },
     { id: "transfer", label: gt("Import / Export") },
   ];
@@ -187,6 +190,16 @@ export function HarnessSettingsPanel() {
           ) : activeTab === "hooks" ? (
             <HarnessHooksTab
               key={`${environment.environmentId}:hooks`}
+              environmentId={environment.environmentId}
+            />
+          ) : activeTab === "memory" ? (
+            <HarnessMemoryTab
+              key={`${environment.environmentId}:memory`}
+              environmentId={environment.environmentId}
+            />
+          ) : activeTab === "sync" ? (
+            <HarnessSyncTab
+              key={`${environment.environmentId}:sync`}
               environmentId={environment.environmentId}
             />
           ) : (

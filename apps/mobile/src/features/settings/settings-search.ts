@@ -147,6 +147,8 @@ const SETTINGS_SEARCH_TERMS = {
     msg("modes", { $context: "settings search keyword" }),
     msg("plugins", { $context: "settings search keyword" }),
     msg("hooks", { $context: "settings search keyword" }),
+    msg("memory", { $context: "settings search keyword" }),
+    msg("git sync", { $context: "settings search keyword" }),
     msg("permissions", { $context: "settings search keyword" }),
     msg("approval rules", { $context: "settings search keyword" }),
     msg("import", { $context: "settings search keyword" }),

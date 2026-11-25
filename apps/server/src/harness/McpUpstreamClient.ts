@@ -48,12 +48,28 @@ export interface UpstreamMcpCallResult {
   readonly isError?: boolean | undefined;
 }
 
+export interface UpstreamMcpResource {
+  readonly uri: string;
+  readonly name: string;
+  readonly description?: string | undefined;
+  readonly mimeType?: string | undefined;
+  readonly _meta?: Record<string, unknown> | undefined;
+}
+
+export interface UpstreamMcpResourceReadResult {
+  readonly contents: ReadonlyArray<Record<string, unknown>>;
+}
+
 export interface McpUpstreamConnection {
   readonly listTools: () => Effect.Effect<ReadonlyArray<UpstreamMcpTool>, HarnessError>;
   readonly callTool: (
     name: string,
     args: Readonly<Record<string, unknown>>,
   ) => Effect.Effect<UpstreamMcpCallResult, HarnessError>;
+  readonly listResources?: () => Effect.Effect<ReadonlyArray<UpstreamMcpResource>, HarnessError>;
+  readonly readResource?: (
+    uri: string,
+  ) => Effect.Effect<UpstreamMcpResourceReadResult, HarnessError>;
   readonly close: () => Effect.Effect<void>;
   readonly isClosed: () => boolean;
 }
@@ -147,6 +163,46 @@ function parseCallResult(result: unknown): UpstreamMcpCallResult {
     content: content.length > 0 ? content : [{ type: "text", text: "" }],
     ...(rec.structuredContent !== undefined ? { structuredContent: rec.structuredContent } : {}),
     ...(rec.isError === true ? { isError: true } : {}),
+  };
+}
+
+function parseResourcesFromResult(result: unknown): ReadonlyArray<UpstreamMcpResource> {
+  if (result === null || typeof result !== "object") return [];
+  const rawResources = Reflect.get(result, "resources");
+  if (!Array.isArray(rawResources)) return [];
+  const resources: Array<UpstreamMcpResource> = [];
+  for (const raw of rawResources) {
+    if (raw === null || typeof raw !== "object") continue;
+    const rec = raw as Record<string, unknown>;
+    if (typeof rec.uri !== "string" || rec.uri.trim().length === 0) continue;
+    const name =
+      typeof rec.name === "string" && rec.name.trim().length > 0 ? rec.name.trim() : rec.uri;
+    const meta =
+      rec._meta !== null && typeof rec._meta === "object" && !Array.isArray(rec._meta)
+        ? (rec._meta as Record<string, unknown>)
+        : undefined;
+    resources.push({
+      uri: rec.uri,
+      name,
+      ...(typeof rec.description === "string" ? { description: rec.description } : {}),
+      ...(typeof rec.mimeType === "string" ? { mimeType: rec.mimeType } : {}),
+      ...(meta ? { _meta: meta } : {}),
+    });
+  }
+  return resources;
+}
+
+function parseResourceReadResult(result: unknown): UpstreamMcpResourceReadResult {
+  if (result === null || typeof result !== "object") {
+    return { contents: [] };
+  }
+  const rawContents = Reflect.get(result, "contents");
+  if (!Array.isArray(rawContents)) return { contents: [] };
+  return {
+    contents: rawContents.filter(
+      (item): item is Record<string, unknown> =>
+        item !== null && typeof item === "object" && !Array.isArray(item),
+    ),
   };
 }
 
@@ -463,6 +519,31 @@ const connectStdioUpstream = Effect.fn("McpUpstreamClient.connectStdio")(functio
                 }),
               )
             : Effect.succeed(parseCallResult(msg.result)),
+        ),
+      ),
+    listResources: () =>
+      sendRequest("resources/list", {}, DEFAULT_INIT_TIMEOUT_MS).pipe(
+        Effect.flatMap((msg) =>
+          msg.error !== undefined
+            ? Effect.succeed([] as ReadonlyArray<UpstreamMcpResource>)
+            : Effect.succeed(parseResourcesFromResult(msg.result)),
+        ),
+      ),
+    readResource: (uri) =>
+      sendRequest("resources/read", { uri }, DEFAULT_TOOL_CALL_TIMEOUT_MS).pipe(
+        Effect.flatMap((msg) =>
+          msg.error !== undefined
+            ? Effect.fail(
+                new HarnessError({
+                  code: "upstream_error",
+                  serverId: input.serverId,
+                  detail: scrubHarnessLogText(
+                    `resources/read(${uri}) failed: ${String(msg.error.message ?? "unknown error")}`,
+                    input.sensitiveValues,
+                  ),
+                }),
+              )
+            : Effect.succeed(parseResourceReadResult(msg.result)),
         ),
       ),
     close: () =>
@@ -868,6 +949,15 @@ const connectHttpUpstream = Effect.fn("McpUpstreamClient.connectHttp")(function*
       sendRequest("tools/call", { name, arguments: args }, DEFAULT_TOOL_CALL_TIMEOUT_MS).pipe(
         Effect.map((msg) => parseCallResult(msg.result)),
       ),
+    listResources: () =>
+      sendRequest("resources/list", {}, DEFAULT_INIT_TIMEOUT_MS).pipe(
+        Effect.map((msg) => parseResourcesFromResult(msg.result)),
+        Effect.orElseSucceed(() => [] as ReadonlyArray<UpstreamMcpResource>),
+      ),
+    readResource: (uri) =>
+      sendRequest("resources/read", { uri }, DEFAULT_TOOL_CALL_TIMEOUT_MS).pipe(
+        Effect.map((msg) => parseResourceReadResult(msg.result)),
+      ),
     close: closeSession,
     isClosed: () => closed,
   };
@@ -1234,6 +1324,15 @@ const connectLegacySseUpstream = Effect.fn("McpUpstreamClient.connectLegacySse")
     callTool: (name, args) =>
       sendSseRequest("tools/call", { name, arguments: args }, DEFAULT_TOOL_CALL_TIMEOUT_MS).pipe(
         Effect.map((msg) => parseCallResult(msg.result)),
+      ),
+    listResources: () =>
+      sendSseRequest("resources/list", {}, DEFAULT_INIT_TIMEOUT_MS).pipe(
+        Effect.map((msg) => parseResourcesFromResult(msg.result)),
+        Effect.orElseSucceed(() => [] as ReadonlyArray<UpstreamMcpResource>),
+      ),
+    readResource: (uri) =>
+      sendSseRequest("resources/read", { uri }, DEFAULT_TOOL_CALL_TIMEOUT_MS).pipe(
+        Effect.map((msg) => parseResourceReadResult(msg.result)),
       ),
     close: () => Effect.sync(stopSseStream),
     isClosed: () => closed,

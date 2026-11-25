@@ -313,6 +313,14 @@ const RPC_AGGREGATES = {
   [WS_METHODS.harnessHookSetEnabled]: "harness",
   [WS_METHODS.harnessHookTest]: "harness",
   [WS_METHODS.harnessWorkflowValidate]: "harness",
+  [WS_METHODS.harnessMemoryList]: "harness",
+  [WS_METHODS.harnessMemoryUpsert]: "harness",
+  [WS_METHODS.harnessMemoryRemove]: "harness",
+  [WS_METHODS.harnessSyncStatus]: "harness",
+  [WS_METHODS.harnessSyncConfigure]: "harness",
+  [WS_METHODS.harnessSyncPreviewPush]: "harness",
+  [WS_METHODS.harnessSyncPush]: "harness",
+  [WS_METHODS.harnessSyncPull]: "harness",
 } as const satisfies Readonly<Record<WsRpcMethod, string>>;
 
 const RPC_SPAN_PREFIX = "ws.rpc";

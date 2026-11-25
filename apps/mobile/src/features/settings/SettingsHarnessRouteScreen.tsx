@@ -39,6 +39,7 @@ import { SettingsSection } from "./components/SettingsSection";
 import { formatMobileTargetHost, formatMobileTransportBreakdown } from "./harness-confirmation";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
 import { type MobileHarnessTab, SettingsHarnessLibraryPanel } from "./SettingsHarnessLibraryPanel";
+import { SettingsHarnessMemorySyncPanel } from "./SettingsHarnessMemorySyncPanel";
 import { SettingsHarnessPluginsHooksPanel } from "./SettingsHarnessPluginsHooksPanel";
 
 const decodeServerId = Schema.decodeUnknownSync(HarnessMcpServerId);
@@ -734,6 +735,8 @@ function EnvironmentHarnessSection({
                   ["commands", gt("Commands")],
                   ["plugins", gt("Plugins")],
                   ["hooks", gt("Hooks")],
+                  ["memory", gt("Memory")],
+                  ["sync", gt("Git Sync")],
                   ["permissions", gt("Permissions")],
                   ["transfer", gt("Import / Export")],
                 ] as const
@@ -754,6 +757,13 @@ function EnvironmentHarnessSection({
                 targetHost={targetHost}
                 canWriteSettings={canWriteSettings}
                 canOperateTerminal={canOperateTerminal}
+              />
+            ) : activeTab === "memory" || activeTab === "sync" ? (
+              <SettingsHarnessMemorySyncPanel
+                activeTab={activeTab}
+                environmentId={environmentId}
+                targetHost={targetHost}
+                canWriteSettings={canWriteSettings}
               />
             ) : activeTab !== "mcp" ? (
               <SettingsHarnessLibraryPanel

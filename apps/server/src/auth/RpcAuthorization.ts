@@ -12,6 +12,7 @@ import {
   requiredScopesForProjectMutation,
   ProjectMutation,
   AuthSettingsWriteScope,
+  AuthSourceControlWriteScope,
   AuthProvidersManageScope,
   AuthEnvironmentMaintainScope,
   AuthFilesystemReadScope,
@@ -268,6 +269,14 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.harnessHookSetEnabled]: AuthSettingsWriteScope,
   [WS_METHODS.harnessHookTest]: AuthSettingsWriteScope,
   [WS_METHODS.harnessWorkflowValidate]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessMemoryList]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessMemoryUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessMemoryRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSyncStatus]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessSyncConfigure]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSyncPreviewPush]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessSyncPush]: AuthSourceControlWriteScope,
+  [WS_METHODS.harnessSyncPull]: AuthSourceControlWriteScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {

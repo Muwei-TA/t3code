@@ -214,5 +214,49 @@ export function createHarnessEnvironmentAtoms<R, E>(
       label: "environment-command:harness:workflow:validate",
       tag: WS_METHODS.harnessWorkflowValidate,
     }),
+    memoryQuery: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:harness:memory:list",
+      tag: WS_METHODS.harnessMemoryList,
+      staleTimeMs: 5_000,
+      idleTtlMs: 60_000,
+    }),
+    listMemory: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:memory:list",
+      tag: WS_METHODS.harnessMemoryList,
+    }),
+    upsertMemory: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:memory:upsert",
+      tag: WS_METHODS.harnessMemoryUpsert,
+    }),
+    removeMemory: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:memory:remove",
+      tag: WS_METHODS.harnessMemoryRemove,
+    }),
+    syncStatusQuery: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:harness:sync:status",
+      tag: WS_METHODS.harnessSyncStatus,
+      staleTimeMs: 5_000,
+      idleTtlMs: 60_000,
+    }),
+    getSyncStatus: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:sync:status",
+      tag: WS_METHODS.harnessSyncStatus,
+    }),
+    configureSync: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:sync:configure",
+      tag: WS_METHODS.harnessSyncConfigure,
+    }),
+    previewSyncPush: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:sync:preview-push",
+      tag: WS_METHODS.harnessSyncPreviewPush,
+    }),
+    pushSync: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:sync:push",
+      tag: WS_METHODS.harnessSyncPush,
+    }),
+    pullSync: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:sync:pull",
+      tag: WS_METHODS.harnessSyncPull,
+    }),
   };
 }

@@ -37,6 +37,8 @@ import {
   type McpUpstreamConnection,
   RingLogBuffer,
   type UpstreamMcpCallResult,
+  type UpstreamMcpResource,
+  type UpstreamMcpResourceReadResult,
   type UpstreamMcpTool,
 } from "./McpUpstreamClient.ts";
 
@@ -49,6 +51,9 @@ export const HARNESS_WRITE_SKILL_NAME = "harness_write_skill";
 export const HARNESS_CREATE_MODE_NAME = "harness_create_mode";
 export const HARNESS_WORKFLOW_VALIDATE_NAME = "workflow_validate";
 export const HARNESS_PLUGIN_PACK_NAME = "plugin_pack";
+export const HARNESS_MEMORY_SEARCH_NAME = "harness_memory_search";
+export const HARNESS_MEMORY_READ_NAME = "harness_memory_read";
+export const HARNESS_MEMORY_WRITE_NAME = "harness_memory_write";
 
 const DEFAULT_IDLE_TTL_MS = 10 * 60 * 1_000;
 const DEFERRED_THRESHOLD_TOOLS = 24;
@@ -64,6 +69,16 @@ export interface GatewayExposedTool {
   readonly readOnly: boolean;
 }
 
+export interface GatewayExposedResource {
+  readonly uri: string;
+  readonly serverId: HarnessMcpServerId;
+  readonly upstreamUri: string;
+  readonly name: string;
+  readonly description?: string | undefined;
+  readonly mimeType?: string | undefined;
+  readonly _meta?: Record<string, unknown> | undefined;
+}
+
 export interface GatewaySessionContext {
   readonly providerSessionId: string;
   readonly workspaceRoot?: string | undefined;
@@ -72,6 +87,7 @@ export interface GatewaySessionContext {
   readonly includeProposePlan: boolean;
   readonly includeLibraryTools?: boolean | undefined;
   readonly includeCreatorTools?: boolean | undefined;
+  readonly includeMemoryTools?: boolean | undefined;
   readonly deferredExposure: boolean;
   readonly harnessCapabilities?: OrchestrationV2HarnessCapabilities | undefined;
 }
@@ -178,6 +194,50 @@ export function decodeCanonicalExposedToolName(
     serverId: body.slice(0, serverLen),
     upstreamToolName: body.slice(serverLen + 2),
   };
+}
+
+/**
+ * Injective gateway resource URI mapping: preserves `ui://` scheme for MCP Apps
+ * (`ui://<encodedServerId>/<rest>`) and wraps non-`ui://` schemes under `t3-harness://<encodedServerId>/<encodedUri>`.
+ */
+function canonicalExposedResourceUri(serverId: HarnessMcpServerId, upstreamUri: string): string {
+  const encodedServer = encodeURIComponent(serverId);
+  if (upstreamUri.startsWith("ui://")) {
+    return `ui://${encodedServer}/${upstreamUri.slice("ui://".length)}`;
+  }
+  return `t3-harness://${encodedServer}/${encodeURIComponent(upstreamUri)}`;
+}
+
+function decodeCanonicalExposedResourceUri(
+  exposedUri: string,
+): { readonly serverId: string; readonly upstreamUri: string } | null {
+  if (exposedUri.startsWith("ui://")) {
+    const rest = exposedUri.slice("ui://".length);
+    const slash = rest.indexOf("/");
+    if (slash <= 0) return null;
+    try {
+      const serverId = decodeURIComponent(rest.slice(0, slash));
+      const upstreamRest = rest.slice(slash + 1);
+      if (!serverId || !upstreamRest) return null;
+      return { serverId, upstreamUri: `ui://${upstreamRest}` };
+    } catch {
+      return null;
+    }
+  }
+  if (exposedUri.startsWith("t3-harness://")) {
+    const rest = exposedUri.slice("t3-harness://".length);
+    const slash = rest.indexOf("/");
+    if (slash <= 0) return null;
+    try {
+      const serverId = decodeURIComponent(rest.slice(0, slash));
+      const upstreamUri = decodeURIComponent(rest.slice(slash + 1));
+      if (!serverId || !upstreamUri) return null;
+      return { serverId, upstreamUri };
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function filterAllowedTools(
@@ -487,6 +547,61 @@ const HARNESS_PLUGIN_PACK_DEF: GatewayExposedTool = {
   readOnly: false,
 };
 
+const HARNESS_MEMORY_SEARCH_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_MEMORY_SEARCH_NAME,
+  serverId: null,
+  upstreamName: HARNESS_MEMORY_SEARCH_NAME,
+  description:
+    "Search portable cross-provider memory notes stored in ~/.t3/harness/memory/*.md by keyword or tag.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Optional search keywords." },
+      tag: { type: "string", description: "Optional exact tag filter." },
+      limit: { type: "integer", description: "Maximum notes to return (default 15, max 50)." },
+    },
+    additionalProperties: false,
+  },
+  readOnly: true,
+};
+
+const HARNESS_MEMORY_READ_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_MEMORY_READ_NAME,
+  serverId: null,
+  upstreamName: HARNESS_MEMORY_READ_NAME,
+  description: "Read the full markdown body of a portable memory note by id or title.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: { type: "string", description: "Memory note id or title." },
+    },
+    required: ["id"],
+    additionalProperties: false,
+  },
+  readOnly: true,
+};
+
+const HARNESS_MEMORY_WRITE_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_MEMORY_WRITE_NAME,
+  serverId: null,
+  upstreamName: HARNESS_MEMORY_WRITE_NAME,
+  description:
+    "Create or update a portable markdown memory note under ~/.t3/harness/memory/<id>.md (disabled in Plan mode).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: { type: "string", description: "Kebab-case note id (e.g. deploy-notes)." },
+      title: { type: "string", description: "Short human-readable title." },
+      tags: { type: "array", items: { type: "string" } },
+      pinned: { type: "boolean" },
+      body: { type: "string", description: "Markdown body to persist." },
+    },
+    required: ["id", "title", "body"],
+    additionalProperties: false,
+  },
+  readOnly: false,
+};
+
 export class McpGateway extends Context.Service<
   McpGateway,
   {
@@ -517,6 +632,13 @@ export class McpGateway extends Context.Service<
       readonly toolName: string;
       readonly arguments: Readonly<Record<string, unknown>>;
     }) => Effect.Effect<UpstreamMcpCallResult, HarnessError>;
+    readonly listResourcesForSession: (
+      context: GatewaySessionContext,
+    ) => Effect.Effect<ReadonlyArray<GatewayExposedResource>>;
+    readonly readResourceForSession: (input: {
+      readonly context: GatewaySessionContext;
+      readonly uri: string;
+    }) => Effect.Effect<UpstreamMcpResourceReadResult, HarnessError>;
     readonly evictIdle: Effect.Effect<void>;
   }
 >()("t3/harness/McpGateway") {}
@@ -1204,6 +1326,12 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         HARNESS_PLUGIN_PACK_DEF,
       );
     }
+    if (context.includeMemoryTools) {
+      listed.push(HARNESS_MEMORY_SEARCH_DEF, HARNESS_MEMORY_READ_DEF);
+      if (context.interactionMode !== "plan") {
+        listed.push(HARNESS_MEMORY_WRITE_DEF);
+      }
+    }
     if (!shouldDefer) {
       listed.push(...upstreamTools);
       return listed;
@@ -1505,6 +1633,117 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       );
   });
 
+  const listResourcesForSession: McpGateway["Service"]["listResourcesForSession"] = Effect.fn(
+    "McpGateway.listResourcesForSession",
+  )(function* (context) {
+    const workspace = yield* store.resolveWorkspace(context.workspaceRoot);
+    if (!workspace.managedPolicyAllowsHarness) {
+      return [];
+    }
+    const activeGatewayServers = workspace.servers.filter(
+      (server) =>
+        server.effectiveEnabled &&
+        server.trusted &&
+        !server.needsTrustConfirmation &&
+        server.blockedByPolicyReason === null &&
+        resolveServerChannel(server.config, context.harnessCapabilities) === "gateway",
+    );
+
+    const perServer = yield* Effect.forEach(
+      activeGatewayServers,
+      (server) =>
+        ensureConnectedFresh({
+          serverId: server.id,
+          scope: server.scope,
+          workspaceRoot: context.workspaceRoot,
+          harnessCapabilities: context.harnessCapabilities,
+        }).pipe(
+          Effect.flatMap(({ server: freshServer, pooled }) => {
+            const listRes = pooled.connection.listResources;
+            if (!listRes) {
+              return Effect.succeed([] as ReadonlyArray<GatewayExposedResource>);
+            }
+            return listRes().pipe(
+              Effect.map((resources: ReadonlyArray<UpstreamMcpResource>) =>
+                resources.map((resource): GatewayExposedResource => ({
+                  uri: canonicalExposedResourceUri(freshServer.id, resource.uri),
+                  serverId: freshServer.id,
+                  upstreamUri: resource.uri,
+                  name: resource.name,
+                  ...(resource.description ? { description: resource.description } : {}),
+                  ...(resource.mimeType ? { mimeType: resource.mimeType } : {}),
+                  ...(resource._meta ? { _meta: resource._meta } : {}),
+                })),
+              ),
+              Effect.orElseSucceed(() => [] as ReadonlyArray<GatewayExposedResource>),
+            );
+          }),
+          Effect.orElseSucceed(() => [] as ReadonlyArray<GatewayExposedResource>),
+        ),
+      { concurrency: 4 },
+    );
+
+    return perServer.flat();
+  });
+
+  const readResourceForSession: McpGateway["Service"]["readResourceForSession"] = Effect.fn(
+    "McpGateway.readResourceForSession",
+  )(function* ({ context, uri }) {
+    const workspace = yield* store.resolveWorkspace(context.workspaceRoot);
+    if (!workspace.managedPolicyAllowsHarness) {
+      return yield* new HarnessError({
+        code: "policy_denied",
+        detail: "Organization policy does not allow portable harness extensions.",
+      });
+    }
+    const decoded = decodeCanonicalExposedResourceUri(uri);
+    if (decoded === null) {
+      return yield* new HarnessError({
+        code: "not_found",
+        detail: `Unknown gateway resource URI "${uri}".`,
+      });
+    }
+    const server = workspace.servers.find(
+      (candidate) =>
+        candidate.id === decoded.serverId &&
+        candidate.effectiveEnabled &&
+        candidate.trusted &&
+        !candidate.needsTrustConfirmation &&
+        candidate.blockedByPolicyReason === null &&
+        resolveServerChannel(candidate.config, context.harnessCapabilities) === "gateway",
+    );
+    if (server === undefined) {
+      return yield* new HarnessError({
+        code: "not_found",
+        serverId: decoded.serverId,
+        detail: `MCP server "${decoded.serverId}" is not active on the T3 Harness gateway.`,
+      });
+    }
+    const { pooled } = yield* ensureConnectedFresh({
+      serverId: server.id,
+      scope: server.scope,
+      workspaceRoot: context.workspaceRoot,
+      harnessCapabilities: context.harnessCapabilities,
+    });
+    const readRes = pooled.connection.readResource;
+    if (!readRes) {
+      return yield* new HarnessError({
+        code: "upstream_error",
+        serverId: server.id,
+        detail: `MCP server "${server.id}" does not support resources/read.`,
+      });
+    }
+    pooled.lastUsedMs = yield* Clock.currentTimeMillis;
+    const raw = yield* readRes(decoded.upstreamUri);
+    // Rewrite returned content URIs back to the canonical gateway URI so MCP App frames resolve cleanly.
+    return {
+      contents: raw.contents.map((item) => ({
+        ...item,
+        uri,
+      })),
+    };
+  });
+
   return McpGateway.of({
     getSnapshot,
     getLogs,
@@ -1513,6 +1752,8 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     resolveSessionInjection,
     listToolsForSession,
     callToolForSession,
+    listResourcesForSession,
+    readResourceForSession,
     evictIdle,
   });
 });

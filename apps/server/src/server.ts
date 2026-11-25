@@ -97,6 +97,8 @@ import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as HarnessStore from "./harness/HarnessStore.ts";
 import * as HarnessApprovalAuditStore from "./harness/HarnessApprovalAuditStore.ts";
 import * as HarnessHooksService from "./harness/HarnessHooksService.ts";
+import * as HarnessMemoryStore from "./harness/HarnessMemoryStore.ts";
+import * as HarnessSyncService from "./harness/HarnessSyncService.ts";
 import * as PluginHost from "./harness/PluginHost.ts";
 import * as HarnessLibraryStore from "./harness/HarnessLibraryStore.ts";
 import * as HarnessImporter from "./harness/HarnessImporter.ts";
@@ -866,6 +868,8 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
         Layer.mergeAll(
           HarnessApprovalAuditStore.layer,
           HarnessHooksService.layer,
+          HarnessMemoryStore.layer,
+          HarnessSyncService.layer,
           HarnessImporter.layer,
           McpGateway.layer.pipe(
             Layer.provide(SecretResolver.layer.pipe(Layer.provide(layerServerSettings))),

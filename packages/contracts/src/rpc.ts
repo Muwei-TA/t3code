@@ -528,6 +528,9 @@ import {
   HarnessModeRemoveInput,
   HarnessModeSetEnabledInput,
   HarnessModeUpsertInput,
+  HarnessMemoryRemoveInput,
+  HarnessMemorySnapshot,
+  HarnessMemoryUpsertInput,
   HarnessPluginInstallInput,
   HarnessPluginReloadInput,
   HarnessPluginRemoveInput,
@@ -537,6 +540,12 @@ import {
   HarnessSkillRemoveInput,
   HarnessSkillSetEnabledInput,
   HarnessSkillUpsertInput,
+  HarnessSyncConfigureInput,
+  HarnessSyncPreviewPushResult,
+  HarnessSyncPullResult,
+  HarnessSyncPushInput,
+  HarnessSyncPushResult,
+  HarnessSyncStatus,
   HarnessThreadContextManifestInput,
   HarnessWorkflowValidateInput,
   HarnessWorkflowValidateResult,
@@ -842,6 +851,14 @@ export const WS_METHODS = {
   harnessHookSetEnabled: "harness.hooks.setEnabled",
   harnessHookTest: "harness.hooks.test",
   harnessWorkflowValidate: "harness.workflow.validate",
+  harnessMemoryList: "harness.memory.list",
+  harnessMemoryUpsert: "harness.memory.upsert",
+  harnessMemoryRemove: "harness.memory.remove",
+  harnessSyncStatus: "harness.sync.status",
+  harnessSyncConfigure: "harness.sync.configure",
+  harnessSyncPreviewPush: "harness.sync.previewPush",
+  harnessSyncPush: "harness.sync.push",
+  harnessSyncPull: "harness.sync.pull",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -2822,6 +2839,54 @@ const WsHarnessWorkflowValidateRpc = Rpc.make(WS_METHODS.harnessWorkflowValidate
   error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
 });
 
+const WsHarnessMemoryListRpc = Rpc.make(WS_METHODS.harnessMemoryList, {
+  payload: Schema.Struct({}),
+  success: HarnessMemorySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMemoryUpsertRpc = Rpc.make(WS_METHODS.harnessMemoryUpsert, {
+  payload: HarnessMemoryUpsertInput,
+  success: HarnessMemorySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMemoryRemoveRpc = Rpc.make(WS_METHODS.harnessMemoryRemove, {
+  payload: HarnessMemoryRemoveInput,
+  success: HarnessMemorySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncStatusRpc = Rpc.make(WS_METHODS.harnessSyncStatus, {
+  payload: Schema.Struct({}),
+  success: HarnessSyncStatus,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncConfigureRpc = Rpc.make(WS_METHODS.harnessSyncConfigure, {
+  payload: HarnessSyncConfigureInput,
+  success: HarnessSyncStatus,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncPreviewPushRpc = Rpc.make(WS_METHODS.harnessSyncPreviewPush, {
+  payload: Schema.Struct({}),
+  success: HarnessSyncPreviewPushResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncPushRpc = Rpc.make(WS_METHODS.harnessSyncPush, {
+  payload: HarnessSyncPushInput,
+  success: HarnessSyncPushResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncPullRpc = Rpc.make(WS_METHODS.harnessSyncPull, {
+  payload: Schema.Struct({}),
+  success: HarnessSyncPullResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
 export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthorization>()(
   "t3/contracts/RpcScopeAuthorization",
   { error: EnvironmentAuthorizationError },
@@ -3129,4 +3194,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsHarnessHookSetEnabledRpc,
   WsHarnessHookTestRpc,
   WsHarnessWorkflowValidateRpc,
+  WsHarnessMemoryListRpc,
+  WsHarnessMemoryUpsertRpc,
+  WsHarnessMemoryRemoveRpc,
+  WsHarnessSyncStatusRpc,
+  WsHarnessSyncConfigureRpc,
+  WsHarnessSyncPreviewPushRpc,
+  WsHarnessSyncPushRpc,
+  WsHarnessSyncPullRpc,
 ).middleware(RpcScopeAuthorization);

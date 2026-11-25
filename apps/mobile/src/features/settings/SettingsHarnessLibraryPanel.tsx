@@ -53,6 +53,8 @@ export type MobileHarnessTab =
   | "commands"
   | "plugins"
   | "hooks"
+  | "memory"
+  | "sync"
   | "permissions"
   | "transfer";
 
@@ -96,7 +98,7 @@ export function SettingsHarnessLibraryPanel({
   canWriteSettings,
   canManageProviders,
 }: {
-  readonly activeTab: Exclude<MobileHarnessTab, "mcp" | "plugins" | "hooks">;
+  readonly activeTab: Exclude<MobileHarnessTab, "mcp" | "plugins" | "hooks" | "memory" | "sync">;
   readonly environmentId: EnvironmentId;
   readonly workspaceRoot: string | undefined;
   readonly targetHost: string;

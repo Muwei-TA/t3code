@@ -1,7 +1,9 @@
-// @effect-diagnostics nodeBuiltinImport:off -- Uses SHA-256 hashing and realpath containment for deterministic plugin integrity checks.
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off -- Uses SHA-256 hashing, realpath containment, and out-of-process JSON-RPC child execution for trusted SDK plugins.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import * as NodeReadline from "node:readline";
 import {
   type HarnessCommandEntry,
   HarnessCommandId,
@@ -31,6 +33,7 @@ import {
   PositiveInt,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -180,6 +183,280 @@ async function copyContainedDirectory(sourceDir: string, destDir: string): Promi
   }
 }
 
+export interface PluginSdkExposedTool {
+  readonly pluginId: HarnessPluginId;
+  readonly exposedName: string;
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: Record<string, unknown>;
+  readonly readOnly: boolean;
+}
+
+export interface PluginSdkToolCallResult {
+  readonly content: ReadonlyArray<Record<string, unknown>>;
+  readonly structuredContent?: unknown;
+  readonly isError?: boolean | undefined;
+}
+
+interface OutOfProcessSdkRuntime {
+  readonly tools: ReadonlyArray<PluginSdkExposedTool>;
+  readonly modes: ReadonlyArray<HarnessModeEntry>;
+  readonly callTool: (input: {
+    readonly name: string;
+    readonly arguments: Readonly<Record<string, unknown>>;
+    readonly workspaceRoot?: string | undefined;
+    readonly threadId?: string | undefined;
+  }) => Promise<PluginSdkToolCallResult>;
+  readonly close: () => void;
+}
+
+function canonicalPluginToolName(pluginId: HarnessPluginId, toolName: string): string {
+  return `plugin__${pluginId}__${toolName}`;
+}
+
+async function spawnOutOfProcessSdkPlugin(
+  pluginId: HarnessPluginId,
+  pluginDir: string,
+  entrypointRel: string,
+  platform: NodeJS.Platform,
+): Promise<OutOfProcessSdkRuntime> {
+  const entrypointAbs = NodePath.resolve(pluginDir, entrypointRel);
+  const child = NodeChildProcess.spawn(process.execPath, [entrypointAbs], {
+    cwd: pluginDir,
+    stdio: ["pipe", "pipe", "pipe"],
+    detached: platform !== "win32",
+  });
+
+  let closed = false;
+  let nextId = 1;
+  const pending = new Map<
+    number,
+    {
+      readonly resolve: (val: Record<string, unknown>) => void;
+      readonly reject: (err: Error) => void;
+    }
+  >();
+
+  const rl = child.stdout ? NodeReadline.createInterface({ input: child.stdout }) : null;
+  rl?.on("line", (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return;
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return;
+    const msg = parsed as Record<string, unknown>;
+    if (typeof msg.id === "number") {
+      const waiter = pending.get(msg.id);
+      if (waiter) {
+        pending.delete(msg.id);
+        waiter.resolve(msg);
+      }
+    }
+  });
+
+  const killChild = () => {
+    if (closed) return;
+    closed = true;
+    rl?.close();
+    for (const [id, waiter] of pending) {
+      waiter.reject(new Error(`Plugin "${pluginId}" process closed.`));
+      pending.delete(id);
+    }
+    try {
+      if (child.stdin && !child.stdin.destroyed) {
+        child.stdin.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id: nextId++, method: "shutdown", params: {} })}\n`,
+        );
+        child.stdin.end();
+      }
+    } catch {
+      // Ignore write error during teardown.
+    }
+    const pid = child.pid;
+    if (pid !== undefined) {
+      if (platform !== "win32") {
+        try {
+          process.kill(-pid, "SIGTERM");
+        } catch {
+          try {
+            child.kill("SIGTERM");
+          } catch {
+            // Already gone.
+          }
+        }
+        const timer = setTimeout(() => {
+          try {
+            process.kill(-pid, "SIGKILL");
+          } catch {
+            // Already exited.
+          }
+        }, 1_500);
+        timer.unref();
+      } else {
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // Already exited.
+        }
+      }
+    }
+  };
+
+  child.on("exit", () => {
+    closed = true;
+    for (const [id, waiter] of pending) {
+      waiter.reject(new Error(`Plugin "${pluginId}" exited unexpectedly.`));
+      pending.delete(id);
+    }
+  });
+
+  const request = (
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs: number,
+  ): Promise<Record<string, unknown>> =>
+    new Promise((resolve, reject) => {
+      if (closed || !child.stdin || child.stdin.destroyed) {
+        reject(new Error(`Plugin "${pluginId}" is not running.`));
+        return;
+      }
+      const id = nextId++;
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`Plugin "${pluginId}" timed out on ${method}.`));
+      }, timeoutMs);
+      timer.unref();
+      pending.set(id, {
+        resolve: (val) => {
+          clearTimeout(timer);
+          resolve(val);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      });
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    });
+
+  let initMsg: Record<string, unknown>;
+  try {
+    initMsg = await request("initialize", {}, 5_000);
+  } catch (error) {
+    killChild();
+    throw error;
+  }
+
+  const initResult =
+    initMsg.result !== null && typeof initMsg.result === "object"
+      ? (initMsg.result as Record<string, unknown>)
+      : {};
+  const descriptor =
+    initResult.plugin !== null && typeof initResult.plugin === "object"
+      ? (initResult.plugin as Record<string, unknown>)
+      : {};
+
+  const rawTools = Array.isArray(descriptor.tools) ? descriptor.tools : [];
+  const tools: Array<PluginSdkExposedTool> = [];
+  for (const raw of rawTools) {
+    if (raw === null || typeof raw !== "object") continue;
+    const rec = raw as Record<string, unknown>;
+    if (typeof rec.name !== "string" || !rec.name.trim()) continue;
+    const inputSchema =
+      rec.inputSchema !== null &&
+      typeof rec.inputSchema === "object" &&
+      !Array.isArray(rec.inputSchema)
+        ? (rec.inputSchema as Record<string, unknown>)
+        : { type: "object", properties: {} };
+    tools.push({
+      pluginId,
+      exposedName: canonicalPluginToolName(pluginId, rec.name.trim()),
+      name: rec.name.trim(),
+      description: typeof rec.description === "string" ? rec.description : "",
+      inputSchema,
+      readOnly: rec.readOnly === true,
+    });
+  }
+
+  const rawModes = Array.isArray(descriptor.modes) ? descriptor.modes : [];
+  const modes: Array<HarnessModeEntry> = [];
+  for (const raw of rawModes) {
+    if (raw === null || typeof raw !== "object") continue;
+    const rec = raw as Record<string, unknown>;
+    const decodedModeId = decodeModeId(typeof rec.id === "string" ? rec.id.trim() : "");
+    if (decodedModeId._tag === "None") continue;
+    const body = typeof rec.body === "string" ? rec.body : "";
+    modes.push({
+      id: decodedModeId.value,
+      name: TrimmedNonEmptyString.make(
+        typeof rec.name === "string" && rec.name.trim() ? rec.name.trim() : decodedModeId.value,
+      ),
+      ...(typeof rec.description === "string" && rec.description.trim()
+        ? { description: rec.description.trim() }
+        : {}),
+      scope: "user",
+      baseInteractionMode: rec.baseInteractionMode === "plan" ? "plan" : "default",
+      readonly: rec.readonly === true,
+      proposePlan: rec.proposePlan === true,
+      body,
+      sourcePath: `${entrypointAbs}#mode:${decodedModeId.value}`,
+      contentDigest: sha256Hex(body),
+      bytes: NonNegativeInt.make(Buffer.byteLength(body, "utf8")),
+      enabled: true,
+      effectiveEnabled: true,
+      overriddenByProject: false,
+    });
+  }
+
+  return {
+    tools,
+    modes,
+    callTool: async (callInput) => {
+      const msg = await request(
+        "tools/call",
+        {
+          name: callInput.name,
+          arguments: callInput.arguments,
+          ...(callInput.workspaceRoot ? { workspaceRoot: callInput.workspaceRoot } : {}),
+          ...(callInput.threadId ? { threadId: callInput.threadId } : {}),
+        },
+        30_000,
+      );
+      if (msg.error !== undefined && typeof msg.error === "object" && msg.error !== null) {
+        const errMessage = Reflect.get(msg.error, "message");
+        return {
+          isError: true,
+          content: [
+            { type: "text", text: typeof errMessage === "string" ? errMessage : "SDK tool error." },
+          ],
+        };
+      }
+      const res =
+        msg.result !== null && typeof msg.result === "object"
+          ? (msg.result as Record<string, unknown>)
+          : {};
+      const content = Array.isArray(res.content)
+        ? res.content.filter(
+            (item): item is Record<string, unknown> =>
+              item !== null && typeof item === "object" && !Array.isArray(item),
+          )
+        : [{ type: "text", text: "" }];
+      return {
+        content: content.length > 0 ? content : [{ type: "text", text: "" }],
+        ...(res.structuredContent !== undefined
+          ? { structuredContent: res.structuredContent }
+          : {}),
+        ...(res.isError === true ? { isError: true } : {}),
+      };
+    },
+    close: killChild,
+  };
+}
+
 export interface PluginActiveContribution {
   readonly pluginId: HarnessPluginId;
   readonly skills: ReadonlyArray<HarnessSkillEntry>;
@@ -198,6 +475,7 @@ interface ParsedPluginBundle {
   readonly format: HarnessPluginFormat;
   readonly sourcePath: string;
   readonly contentDigest: string;
+  readonly entrypoint?: string | undefined;
   readonly hasCommandHooks: boolean;
   readonly hasStdioMcp: boolean;
   readonly skills: ReadonlyArray<HarnessSkillEntry>;
@@ -262,6 +540,17 @@ async function parsePluginDirectory(
     typeof manifest.author === "string" && manifest.author.trim().length > 0
       ? manifest.author.trim()
       : undefined;
+
+  let entrypoint: string | undefined;
+  if (typeof manifest.entrypoint === "string" && manifest.entrypoint.trim().length > 0) {
+    const normalized = manifest.entrypoint.trim().replace(/^\.\//u, "").replace(/^\/+/u, "");
+    if (!fileByRel.has(normalized)) {
+      throw new Error(
+        `Plugin entrypoint "${manifest.entrypoint}" does not exist inside the plugin directory.`,
+      );
+    }
+    entrypoint = normalized;
+  }
 
   const skillsPrefix =
     typeof manifest.skillsDir === "string"
@@ -487,6 +776,7 @@ async function parsePluginDirectory(
     format,
     sourcePath: pluginDir,
     contentDigest,
+    ...(entrypoint ? { entrypoint } : {}),
     hasCommandHooks: hooks.some((hook) => hook.target.type === "command"),
     hasStdioMcp,
     skills,
@@ -535,6 +825,14 @@ export interface PluginHostShape {
   readonly packPlugin: (input: PluginPackInput) => Effect.Effect<PluginPackResult, HarnessError>;
   /** Returns merged contributions from all currently active (trusted + enabled) plugins. */
   readonly getActiveContributions: () => ReadonlyArray<PluginActiveContribution>;
+  /** Returns tools declared by active out-of-process `@t3tools/plugin-sdk` plugins. */
+  readonly listActiveSdkTools: () => ReadonlyArray<PluginSdkExposedTool>;
+  readonly callActiveSdkTool: (input: {
+    readonly exposedName: string;
+    readonly arguments: Readonly<Record<string, unknown>>;
+    readonly workspaceRoot?: string | undefined;
+    readonly threadId?: string | undefined;
+  }) => Effect.Effect<PluginSdkToolCallResult, HarnessError>;
 }
 
 export class PluginHost extends Context.Service<PluginHost, PluginHostShape>()(
@@ -546,11 +844,14 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const platform = yield* HostProcess.Platform;
     const store = yield* HarnessStore.HarnessStore;
     const hooksService = yield* HarnessHooksService.HarnessHooksService;
 
     const activeScopes = new Map<HarnessPluginId, Scope.Closeable>();
     const activeContributions = new Map<HarnessPluginId, PluginActiveContribution>();
+    const activeSdkRuntimes = new Map<HarnessPluginId, OutOfProcessSdkRuntime>();
+    const activationErrors = new Map<HarnessPluginId, string>();
 
     // Ensure every active plugin Scope is closed cleanly when the PluginHost layer shuts down.
     yield* Effect.addFinalizer(() =>
@@ -562,6 +863,7 @@ export const layer = Layer.effect(
               Effect.sync(() => {
                 activeScopes.delete(pluginId);
                 activeContributions.delete(pluginId);
+                activeSdkRuntimes.delete(pluginId);
               }),
             ),
           ),
@@ -637,6 +939,8 @@ export const layer = Layer.effect(
         yield* Scope.close(existingScope, Exit.void);
       }
       activeContributions.delete(pluginId);
+      activeSdkRuntimes.delete(pluginId);
+      activationErrors.delete(pluginId);
     });
 
     const activatePlugin = Effect.fn("PluginHost.activatePlugin")(function* (
@@ -644,15 +948,41 @@ export const layer = Layer.effect(
     ) {
       yield* deactivatePlugin(bundle.id);
       const pluginScope = yield* Scope.make();
-      const contribution: PluginActiveContribution = {
-        pluginId: bundle.id,
-        skills: bundle.skills,
-        rules: bundle.rules,
-        commands: bundle.commands,
-        modes: bundle.modes,
-        hooks: bundle.hooks,
-      };
-      yield* Effect.gen(function* () {
+      const activationResult = yield* Effect.gen(function* () {
+        let sdkModes: ReadonlyArray<HarnessModeEntry> = [];
+        if (bundle.entrypoint) {
+          const runtime = yield* Effect.acquireRelease(
+            Effect.tryPromise({
+              try: () =>
+                spawnOutOfProcessSdkPlugin(
+                  bundle.id,
+                  bundle.sourcePath,
+                  bundle.entrypoint!,
+                  platform,
+                ),
+              catch: (error) =>
+                new HarnessError({
+                  code: "upstream_error",
+                  detail: `Failed to start plugin "${bundle.id}" entrypoint "${bundle.entrypoint}": ${error instanceof Error ? error.message : String(error)}`,
+                }),
+            }),
+            (rt) =>
+              Effect.sync(() => {
+                activeSdkRuntimes.delete(bundle.id);
+                rt.close();
+              }),
+          );
+          activeSdkRuntimes.set(bundle.id, runtime);
+          sdkModes = runtime.modes;
+        }
+        const contribution: PluginActiveContribution = {
+          pluginId: bundle.id,
+          skills: bundle.skills,
+          rules: bundle.rules,
+          commands: bundle.commands,
+          modes: [...bundle.modes, ...sdkModes],
+          hooks: bundle.hooks,
+        };
         yield* hooksService.registerPluginHooks(bundle.id, bundle.hooks);
         yield* Effect.acquireRelease(
           Effect.sync(() => {
@@ -663,7 +993,14 @@ export const layer = Layer.effect(
               activeContributions.delete(bundle.id);
             }),
         );
-      }).pipe(Scope.provide(pluginScope));
+      }).pipe(Scope.provide(pluginScope), Effect.result);
+
+      if (Result.isFailure(activationResult)) {
+        yield* Scope.close(pluginScope, Exit.void);
+        activationErrors.set(bundle.id, activationResult.failure.detail);
+        return;
+      }
+      activationErrors.delete(bundle.id);
       activeScopes.set(bundle.id, pluginScope);
     });
 
@@ -756,7 +1093,8 @@ export const layer = Layer.effect(
           enabled &&
           trustStatus === "trusted" &&
           (!bundle.hasCommandHooks || policy.allowsStdio) &&
-          (!bundle.hasStdioMcp || policy.allowsStdio);
+          (!bundle.hasStdioMcp || policy.allowsStdio) &&
+          (!bundle.entrypoint || policy.allowsStdio);
 
         if (shouldBeActive) {
           const alreadyActive = activeScopes.has(pluginId);
@@ -766,6 +1104,14 @@ export const layer = Layer.effect(
         } else {
           yield* deactivatePlugin(pluginId);
         }
+
+        const sdkRuntime = activeSdkRuntimes.get(pluginId);
+        const activeModeIds = Array.from(
+          new Set([
+            ...bundle.modes.map((m) => m.id),
+            ...(sdkRuntime ? sdkRuntime.modes.map((m) => m.id) : []),
+          ]),
+        );
 
         views.push({
           id: bundle.id,
@@ -785,11 +1131,13 @@ export const layer = Layer.effect(
           skillIds: bundle.skills.map((s) => s.id),
           ruleIds: bundle.rules.map((r) => r.id),
           commandIds: bundle.commands.map((c) => c.id),
-          modeIds: bundle.modes.map((m) => m.id),
+          modeIds: activeModeIds,
           hookIds: bundle.hooks.map((h) => h.id),
           mcpServerIds: bundle.mcpServerIds,
           workflowFiles: bundle.workflowFiles,
-          lastError: null,
+          ...(bundle.entrypoint ? { entrypoint: bundle.entrypoint } : {}),
+          ...(sdkRuntime ? { toolNames: sdkRuntime.tools.map((t) => t.exposedName) } : {}),
+          lastError: activationErrors.get(pluginId) ?? null,
         });
       }
 
@@ -978,6 +1326,34 @@ export const layer = Layer.effect(
       }),
 
       getActiveContributions: () => Array.from(activeContributions.values()),
+      listActiveSdkTools: () =>
+        Array.from(activeSdkRuntimes.values()).flatMap((runtime) => runtime.tools),
+      callActiveSdkTool: Effect.fn("PluginHost.callActiveSdkTool")(function* (input) {
+        for (const runtime of activeSdkRuntimes.values()) {
+          const tool = runtime.tools.find(
+            (candidate) => candidate.exposedName === input.exposedName,
+          );
+          if (!tool) continue;
+          return yield* Effect.tryPromise({
+            try: () =>
+              runtime.callTool({
+                name: tool.name,
+                arguments: input.arguments,
+                workspaceRoot: input.workspaceRoot,
+                threadId: input.threadId,
+              }),
+            catch: (error) =>
+              new HarnessError({
+                code: "upstream_error",
+                detail: `Plugin tool "${input.exposedName}" failed: ${error instanceof Error ? error.message : String(error)}`,
+              }),
+          });
+        }
+        return yield* new HarnessError({
+          code: "not_found",
+          detail: `Plugin SDK tool "${input.exposedName}" is not active.`,
+        });
+      }),
     });
   }),
 );

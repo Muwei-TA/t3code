@@ -1,4 +1,6 @@
-// @effect-diagnostics globalFetchInEffect:off -- Integration test verifies raw HTTP Origin rejection, capability checks, and Authorization headers against live loopback server.
+// @effect-diagnostics globalFetchInEffect:off nodeBuiltinImport:off -- Integration test verifies raw HTTP Origin rejection, capability checks, Authorization headers, and out-of-process SDK plugin fixtures against live loopback server.
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -8,6 +10,7 @@ import {
   EnvironmentId,
   HarnessHookId,
   HarnessMcpServerId,
+  HarnessPluginId,
   HarnessRuleId,
   HarnessSkillId,
   type OrchestrationV2ServerCommand,
@@ -39,6 +42,7 @@ import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as HarnessHooksService from "./HarnessHooksService.ts";
 import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
+import * as HarnessMemoryStore from "./HarnessMemoryStore.ts";
 import * as HarnessMcpHttpServer from "./HarnessMcpHttpServer.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 import * as McpGateway from "./McpGateway.ts";
@@ -755,5 +759,336 @@ describe("HarnessMcpHttpServer", () => {
         expect(blockedByHook.result.content?.[0]?.text).toContain("Packaging frozen");
       }).pipe(Effect.provide(serverLayer));
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.live(
+    "supports MCP Apps ui:// resource passthrough, portable memory tools, and out-of-process SDK plugin tools over /mcp/harness",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const tempRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-harness-p4-" });
+        const baseDir = path.join(tempRoot, "t3home");
+        const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+
+        const threadId = ThreadId.make("thread-p4-http");
+        const projectId = ProjectId.make("project-p4-http");
+        const providerInstanceId = ProviderInstanceId.make("cursor");
+        const activeRunId = RunId.make("run:p4-1");
+
+        const mutableShell = {
+          id: threadId,
+          projectId,
+          providerInstanceId,
+          interactionMode: "plan" as "plan" | "default",
+          modeId: "plan" as string | undefined,
+          runtimeMode: "full-access" as const,
+          worktreePath: null,
+          deletedAt: null,
+          archivedAt: null,
+          activeRunId: activeRunId as RunId | null,
+          pendingBackgroundTasks: [],
+        };
+
+        const configLayer = Layer.succeed(ServerConfig.ServerConfig, {
+          ...paths,
+          mode: "web",
+          port: 0,
+          host: "127.0.0.1",
+          cwd: baseDir,
+          baseDir,
+        } as unknown as ServerConfig.ServerConfig["Service"]);
+        const policyLayer = Layer.succeed(ManagedPolicy.ManagedPolicy, {
+          document: undefined,
+          source: undefined,
+          error: undefined,
+        } as unknown as ManagedPolicy.ManagedPolicy["Service"]);
+        const secretStoreLayer = Layer.succeed(ServerSecretStore.ServerSecretStore, {
+          get: () => Effect.succeed(Option.none<Uint8Array>()),
+        } as unknown as ServerSecretStore.ServerSecretStore["Service"]);
+        const secretResolverLayer = Layer.succeed(SecretResolver.SecretResolver, {
+          read: () => Effect.succeed([]),
+        } as unknown as SecretResolver.SecretResolver["Service"]);
+
+        const storeLayer = HarnessStore.layer.pipe(
+          Layer.provideMerge(configLayer),
+          Layer.provideMerge(policyLayer),
+          Layer.provideMerge(T3ProjectFileLoader.layer),
+          Layer.provideMerge(NodeServices.layer),
+        );
+        const hooksLayer = HarnessHooksService.layer.pipe(Layer.provideMerge(storeLayer));
+        const memoryLayer = HarnessMemoryStore.layer.pipe(Layer.provideMerge(storeLayer));
+        const pluginHostLayer = PluginHost.layer.pipe(
+          Layer.provideMerge(hooksLayer),
+          Layer.provideMerge(storeLayer),
+        );
+        const libraryLayer = HarnessLibraryStore.layer.pipe(
+          Layer.provideMerge(pluginHostLayer),
+          Layer.provideMerge(storeLayer),
+        );
+        const gatewayLayer = Layer.effect(
+          McpGateway.McpGateway,
+          McpGateway.makeWithOptions({
+            connect: () =>
+              Effect.succeed({
+                listTools: () => Effect.succeed([]),
+                callTool: () => Effect.succeed({ content: [{ type: "text", text: "ok" }] }),
+                listResources: () =>
+                  Effect.succeed([
+                    {
+                      uri: "ui://widgets/kanban",
+                      name: "Kanban Board",
+                      mimeType: "text/html+mcp",
+                    },
+                  ]),
+                readResource: (uri) =>
+                  Effect.succeed({
+                    contents: [
+                      {
+                        uri,
+                        mimeType: "text/html+mcp",
+                        text: "<html><body>Kanban MCP App</body></html>",
+                      },
+                    ],
+                  }),
+                close: () => Effect.void,
+                isClosed: () => false,
+              }),
+          }),
+        ).pipe(
+          Layer.provideMerge(storeLayer),
+          Layer.provide(secretStoreLayer),
+          Layer.provide(secretResolverLayer),
+        );
+
+        const mockEnvLayer = Layer.succeed(ServerEnvironment.ServerEnvironment, {
+          getEnvironmentId: Effect.succeed(EnvironmentId.make("env-p4-test")),
+        } as unknown as ServerEnvironment.ServerEnvironment["Service"]);
+        const mockProjectionLayer = Layer.succeed(ProjectionStore.ProjectionStoreV2, {
+          getThreadShell: () => Effect.sync(() => ({ ...mutableShell })),
+          getThread: () => Effect.sync(() => ({ ...mutableShell })),
+        } as unknown as ProjectionStore.ProjectionStoreV2["Service"]);
+        const mockProjectLayer = Layer.succeed(ProjectStore.ProjectStoreV2, {
+          get: () => Effect.succeedNone,
+        } as unknown as ProjectStore.ProjectStoreV2["Service"]);
+        const mockAdapterRegistryLayer = Layer.succeed(
+          ProviderAdapterRegistry.ProviderAdapterRegistryV2,
+          {
+            get: () =>
+              Effect.succeed({
+                getCapabilities: () =>
+                  Effect.succeed({
+                    planning: { emitsProposedPlan: false },
+                    tools: { supportsMcpTools: true },
+                    harness: DEFAULT_HARNESS_CAPABILITIES,
+                  }),
+              }),
+          } as unknown as ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"],
+        );
+        const mockOrchestratorLayer = Layer.succeed(Orchestrator.OrchestratorV2, {
+          dispatch: () => Effect.succeed({ sequence: 1 }),
+        } as unknown as Orchestrator.OrchestratorV2["Service"]);
+
+        const serverLayer = HttpRouter.serve(HarnessMcpHttpServer.layer, {
+          disableLogger: true,
+        }).pipe(
+          Layer.provideMerge(McpSessionRegistry.layer),
+          Layer.provideMerge(gatewayLayer),
+          Layer.provideMerge(libraryLayer),
+          Layer.provideMerge(memoryLayer),
+          Layer.provideMerge(NodeHttpServer.layerTest),
+          Layer.provide(mockEnvLayer),
+          Layer.provide(mockProjectionLayer),
+          Layer.provide(mockProjectLayer),
+          Layer.provide(mockAdapterRegistryLayer),
+          Layer.provide(mockOrchestratorLayer),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provide(NodeServices.layer),
+        );
+
+        yield* Effect.gen(function* () {
+          const store = yield* HarnessStore.HarnessStore;
+          const pluginHost = yield* PluginHost.PluginHost;
+          const registry = yield* McpSessionRegistry.McpSessionRegistry;
+          const httpServer = yield* HttpServer.HttpServer;
+          const address = httpServer.address;
+          if (!NetAddress.isInetAddress(address)) {
+            throw new Error("Expected InetAddress in test server");
+          }
+          const harnessUrl = `http://127.0.0.1:${address.port}/mcp/harness`;
+
+          yield* store.upsertUserServer({
+            id: HarnessMcpServerId.make("boards"),
+            config: {
+              enabled: true,
+              transport: { type: "http", url: "https://boards.example.com/mcp" },
+              injectionMode: "gateway",
+              approvalPolicy: "auto-read",
+            },
+          });
+
+          // Prepare & install an out-of-process SDK plugin with a read-only tool.
+          const pluginSrc = path.join(tempRoot, "sdk-plugin-src");
+          yield* Effect.promise(async () => {
+            await NodeFSP.mkdir(pluginSrc, { recursive: true });
+            await NodeFSP.writeFile(
+              NodePath.join(pluginSrc, "t3-plugin.json"),
+              JSON.stringify({
+                id: "greeter",
+                name: "Greeter SDK Plugin",
+                version: "1.0.0",
+                entrypoint: "index.mjs",
+              }),
+              "utf8",
+            );
+            await NodeFSP.writeFile(
+              NodePath.join(pluginSrc, "index.mjs"),
+              `import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const req = JSON.parse(line);
+  if (req.method === "initialize") {
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: {
+        protocolVersion: "1",
+        plugin: {
+          id: "greeter",
+          name: "Greeter SDK Plugin",
+          version: "1.0.0",
+          tools: [{ name: "greet", description: "Greets a user", inputSchema: { type: "object", properties: { who: { type: "string" } } }, readOnly: true }],
+          hooks: [],
+          modes: []
+        }
+      }
+    }) + "\\n");
+  } else if (req.method === "tools/call") {
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: { content: [{ type: "text", text: "Hello " + (req.params?.arguments?.who ?? "world") }] }
+    }) + "\\n");
+  } else if (req.method === "shutdown") {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: { ok: true } }) + "\\n");
+    process.exit(0);
+  }
+});
+`,
+              "utf8",
+            );
+          });
+
+          const installed = yield* pluginHost.install({
+            sourcePath: TrimmedNonEmptyString.make(pluginSrc),
+          });
+          const greeterPlugin = installed.plugins.find((p) => p.id === "greeter");
+          expect(greeterPlugin).toBeDefined();
+          yield* pluginHost.trust({
+            id: HarnessPluginId.make("greeter"),
+            expectedDigest: TrimmedNonEmptyString.make(greeterPlugin!.contentDigest),
+          });
+          const enabledSnap = yield* pluginHost.setEnabled({
+            id: HarnessPluginId.make("greeter"),
+            enabled: true,
+          });
+          expect(enabledSnap.plugins.find((p) => p.id === "greeter")?.toolNames).toEqual([
+            "plugin__greeter__greet",
+          ]);
+
+          const issued = yield* registry.issue({
+            threadId,
+            providerInstanceId,
+            capabilities: new Set(["harness"]),
+          });
+          const authHeader = issued.config.authorizationHeader;
+
+          const callRpc = (id: number, method: string, params: unknown) =>
+            Effect.promise(() =>
+              fetch(harnessUrl, {
+                method: "POST",
+                headers: {
+                  authorization: authHeader,
+                  "content-type": "application/json",
+                },
+                body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+              }).then((r) => r.json() as Promise<{ result?: Record<string, unknown> }>),
+            );
+
+          // 1. initialize advertises resources capability for MCP Apps.
+          const initRes = yield* callRpc(1, "initialize", {});
+          expect(initRes.result?.capabilities).toMatchObject({
+            tools: { listChanged: false },
+            resources: { listChanged: false },
+          });
+
+          // 2. resources/list & resources/read proxy ui:// MCP Apps cleanly.
+          const resList = yield* callRpc(2, "resources/list", {});
+          const resources = resList.result?.resources as Array<{ uri: string; name: string }>;
+          expect(resources).toEqual([
+            {
+              uri: "ui://boards/widgets/kanban",
+              name: "Kanban Board",
+              mimeType: "text/html+mcp",
+            },
+          ]);
+          const resRead = yield* callRpc(3, "resources/read", {
+            uri: "ui://boards/widgets/kanban",
+          });
+          const contents = resRead.result?.contents as Array<{ uri: string; text: string }>;
+          expect(contents[0]?.uri).toBe("ui://boards/widgets/kanban");
+          expect(contents[0]?.text).toContain("Kanban MCP App");
+
+          // 3. Plan mode blocks harness_memory_write, Default mode allows write + search + read.
+          const blockedWrite = yield* callRpc(4, "tools/call", {
+            name: "harness_memory_write",
+            arguments: { id: "arch", title: "Architecture", body: "Event sourced." },
+          });
+          expect(blockedWrite.result?.isError).toBe(true);
+
+          mutableShell.interactionMode = "default";
+          const writeMem = yield* callRpc(5, "tools/call", {
+            name: "harness_memory_write",
+            arguments: {
+              id: "arch",
+              title: "Architecture",
+              tags: ["core"],
+              body: "Event sourced.",
+            },
+          });
+          expect(writeMem.result?.isError).not.toBe(true);
+
+          const searchMem = yield* callRpc(6, "tools/call", {
+            name: "harness_memory_search",
+            arguments: { query: "Event" },
+          });
+          expect(
+            (searchMem.result?.content as Array<{ text?: string }> | undefined)?.[0]?.text,
+          ).toContain("arch");
+
+          const readMem = yield* callRpc(7, "tools/call", {
+            name: "harness_memory_read",
+            arguments: { id: "arch" },
+          });
+          expect(
+            (readMem.result?.content as Array<{ text?: string }> | undefined)?.[0]?.text,
+          ).toContain("Event sourced.");
+
+          // 4. Out-of-process SDK plugin tool executes via /mcp/harness and disappears after disable.
+          const pluginCall = yield* callRpc(8, "tools/call", {
+            name: "plugin__greeter__greet",
+            arguments: { who: "T3" },
+          });
+          expect(
+            (pluginCall.result?.content as Array<{ text?: string }> | undefined)?.[0]?.text,
+          ).toBe("Hello T3");
+
+          yield* pluginHost.setEnabled({
+            id: HarnessPluginId.make("greeter"),
+            enabled: false,
+          });
+          expect(pluginHost.listActiveSdkTools()).toEqual([]);
+        }).pipe(Effect.provide(serverLayer));
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

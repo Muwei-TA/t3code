@@ -4,6 +4,7 @@ import {
   DEFAULT_HARNESS_CAPABILITIES,
   HarnessError,
   HarnessMcpServerId,
+  HarnessMemoryId,
   HarnessModeId,
   HarnessPluginId,
   HarnessRuleId,
@@ -31,6 +32,7 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import { compileAndValidateDeclarativeWorkflow } from "./DeclarativeWorkflowCompiler.ts";
 import * as HarnessHooksService from "./HarnessHooksService.ts";
 import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
+import * as HarnessMemoryStore from "./HarnessMemoryStore.ts";
 import * as McpGateway from "./McpGateway.ts";
 import * as PluginHost from "./PluginHost.ts";
 
@@ -39,6 +41,7 @@ const decodeRuleId = Schema.decodeUnknownOption(HarnessRuleId);
 const decodeMcpServerId = Schema.decodeUnknownOption(HarnessMcpServerId);
 const decodeModeId = Schema.decodeUnknownOption(HarnessModeId);
 const decodePluginId = Schema.decodeUnknownOption(HarnessPluginId);
+const decodeMemoryId = Schema.decodeUnknownOption(HarnessMemoryId);
 
 const SUPPORTED_PROTOCOL_VERSION = "2025-06-18";
 
@@ -95,6 +98,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
   readonly registry: McpSessionRegistry.McpSessionRegistry["Service"];
   readonly gateway: McpGateway.McpGateway["Service"];
   readonly libraryStore: Option.Option<HarnessLibraryStore.HarnessLibraryStore["Service"]>;
+  readonly memoryStore: Option.Option<HarnessMemoryStore.HarnessMemoryStore["Service"]>;
   readonly hooksService: Option.Option<HarnessHooksService.HarnessHooksService["Service"]>;
   readonly pluginHost: Option.Option<PluginHost.PluginHost["Service"]>;
   readonly projections: ProjectionStore.ProjectionStoreV2["Service"];
@@ -113,6 +117,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     registry,
     gateway,
     libraryStore,
+    memoryStore,
     hooksService,
     pluginHost,
     projections,
@@ -166,6 +171,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
         protocolVersion: requestedVersion,
         capabilities: {
           tools: { listChanged: false },
+          resources: { listChanged: false },
         },
         serverInfo: {
           name: "t3-harness",
@@ -241,6 +247,8 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
         supportsMcpTools,
       includeLibraryTools,
       includeCreatorTools,
+      includeMemoryTools:
+        snapshot.managedPolicyAllowsHarness && supportsMcpTools && Option.isSome(memoryStore),
       deferredExposure,
       harnessCapabilities,
     };
@@ -258,18 +266,78 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
       return forbiddenResponse("The calling provider no longer owns this thread.");
     }
     const tools = yield* gateway.listToolsForSession(state.context);
+    const pluginTools =
+      state.managedPolicyAllowsHarness && Option.isSome(pluginHost)
+        ? pluginHost.value.listActiveSdkTools()
+        : [];
     return jsonRpcSuccess(
       rpc.id,
       {
-        tools: tools.map((tool) => ({
-          name: tool.exposedName,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-          ...(tool.readOnly ? { annotations: { readOnlyHint: true } } : {}),
+        tools: [
+          ...tools.map((tool) => ({
+            name: tool.exposedName,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+            ...(tool.readOnly ? { annotations: { readOnlyHint: true } } : {}),
+          })),
+          ...pluginTools.map((tool) => ({
+            name: tool.exposedName,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+            ...(tool.readOnly ? { annotations: { readOnlyHint: true } } : {}),
+          })),
+        ],
+      },
+      sessionId,
+    );
+  }
+
+  if (method === "resources/list") {
+    const state = yield* resolveThreadState;
+    if (state === null) {
+      return forbiddenResponse("The calling provider no longer owns this thread.");
+    }
+    const resources = yield* gateway.listResourcesForSession(state.context);
+    return jsonRpcSuccess(
+      rpc.id,
+      {
+        resources: resources.map((resource) => ({
+          uri: resource.uri,
+          name: resource.name,
+          ...(resource.description ? { description: resource.description } : {}),
+          ...(resource.mimeType ? { mimeType: resource.mimeType } : {}),
+          ...(resource._meta ? { _meta: resource._meta } : {}),
         })),
       },
       sessionId,
     );
+  }
+
+  if (method === "resources/read") {
+    const state = yield* resolveThreadState;
+    if (state === null || !isLiveCallerShell(state.shell, scope.thread.providerInstanceId)) {
+      return jsonRpcError(
+        rpc.id,
+        -32001,
+        "The calling provider no longer owns an active thread run.",
+        sessionId,
+      );
+    }
+    const params =
+      rpc.params !== null && typeof rpc.params === "object" && !Array.isArray(rpc.params)
+        ? (rpc.params as Record<string, unknown>)
+        : {};
+    const uri = typeof params.uri === "string" ? params.uri.trim() : "";
+    if (!uri) {
+      return jsonRpcError(rpc.id, -32602, "resources/read requires a non-empty uri.", sessionId);
+    }
+    const readRes = yield* gateway
+      .readResourceForSession({ context: state.context, uri })
+      .pipe(Effect.result);
+    if (Result.isFailure(readRes)) {
+      return jsonRpcError(rpc.id, -32002, readRes.failure.detail, sessionId);
+    }
+    return jsonRpcSuccess(rpc.id, readRes.success, sessionId);
   }
 
   if (method === "tools/call") {
@@ -857,6 +925,211 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
       );
     }
 
+    if (toolName === McpGateway.HARNESS_MEMORY_SEARCH_NAME) {
+      if (Option.isNone(memoryStore)) {
+        yield* emitPostToolHook(false);
+        return jsonRpcSuccess(
+          rpc.id,
+          { content: [{ type: "text", text: "Portable memory is not configured." }] },
+          sessionId,
+        );
+      }
+      const query = typeof toolArgs.query === "string" ? toolArgs.query : undefined;
+      const tag = typeof toolArgs.tag === "string" ? toolArgs.tag : undefined;
+      const limit = typeof toolArgs.limit === "number" ? toolArgs.limit : undefined;
+      const matches = yield* memoryStore.value
+        .searchMemory({ query, tag, limit })
+        .pipe(Effect.orElseSucceed(() => []));
+      yield* emitPostToolHook(false);
+      return jsonRpcSuccess(
+        rpc.id,
+        {
+          content: [
+            {
+              type: "text",
+              text:
+                matches.length === 0
+                  ? "No portable memory notes matched."
+                  : matches
+                      .map(
+                        (entry) =>
+                          `- ${entry.id}: ${entry.title}${entry.tags.length > 0 ? ` [${entry.tags.join(", ")}]` : ""}${entry.pinned ? " (pinned)" : ""}`,
+                      )
+                      .join("\n"),
+            },
+          ],
+          structuredContent: {
+            entries: matches.map((entry) => ({
+              id: entry.id,
+              title: entry.title,
+              tags: entry.tags,
+              pinned: entry.pinned,
+              updatedAt: entry.updatedAt,
+            })),
+          },
+        },
+        sessionId,
+      );
+    }
+
+    if (toolName === McpGateway.HARNESS_MEMORY_READ_NAME) {
+      const id = typeof toolArgs.id === "string" ? toolArgs.id.trim() : "";
+      if (!id || Option.isNone(memoryStore)) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [{ type: "text", text: "harness_memory_read requires a non-empty id." }],
+          },
+          sessionId,
+        );
+      }
+      const entryOpt = yield* memoryStore.value
+        .readMemory(id)
+        .pipe(Effect.orElseSucceed(() => Option.none()));
+      if (Option.isNone(entryOpt)) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [{ type: "text", text: `Portable memory note "${id}" was not found.` }],
+          },
+          sessionId,
+        );
+      }
+      const entry = entryOpt.value;
+      yield* emitPostToolHook(false);
+      return jsonRpcSuccess(
+        rpc.id,
+        {
+          content: [
+            {
+              type: "text",
+              text: `# Memory: ${entry.title} (${entry.id})\nTags: ${entry.tags.join(", ") || "none"}\nUpdated: ${entry.updatedAt}\n\n${entry.body}`,
+            },
+          ],
+        },
+        sessionId,
+      );
+    }
+
+    if (toolName === McpGateway.HARNESS_MEMORY_WRITE_NAME) {
+      if (state.context.interactionMode === "plan") {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "Blocked harness_memory_write in Plan mode because it writes to disk.",
+              },
+            ],
+          },
+          sessionId,
+        );
+      }
+      const rawId = typeof toolArgs.id === "string" ? toolArgs.id.trim() : "";
+      const title = typeof toolArgs.title === "string" ? toolArgs.title.trim() : "";
+      const body = typeof toolArgs.body === "string" ? toolArgs.body : "";
+      const idOpt = decodeMemoryId(rawId);
+      if (Option.isNone(idOpt) || !title || !body.trim() || Option.isNone(memoryStore)) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "harness_memory_write requires valid id, title, and non-empty markdown body.",
+              },
+            ],
+          },
+          sessionId,
+        );
+      }
+      const tags = Array.isArray(toolArgs.tags)
+        ? toolArgs.tags
+            .filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+            .map((t) => TrimmedNonEmptyString.make(t.trim()))
+        : undefined;
+      const saved = yield* memoryStore.value
+        .upsertMemory({
+          id: idOpt.value,
+          title: TrimmedNonEmptyString.make(title),
+          ...(tags ? { tags } : {}),
+          ...(typeof toolArgs.pinned === "boolean" ? { pinned: toolArgs.pinned } : {}),
+          body,
+        })
+        .pipe(Effect.result);
+      if (Result.isFailure(saved)) {
+        yield* emitPostToolHook(true);
+        return jsonRpcSuccess(
+          rpc.id,
+          { isError: true, content: [{ type: "text", text: saved.failure.detail }] },
+          sessionId,
+        );
+      }
+      yield* emitPostToolHook(false);
+      return jsonRpcSuccess(
+        rpc.id,
+        {
+          content: [
+            {
+              type: "text",
+              text: `Saved portable memory note "${idOpt.value}" under ~/.t3/harness/memory/${idOpt.value}.md.`,
+            },
+          ],
+        },
+        sessionId,
+      );
+    }
+
+    if (toolName.startsWith("plugin__") && Option.isSome(pluginHost)) {
+      const sdkTool = pluginHost.value
+        .listActiveSdkTools()
+        .find((candidate) => candidate.exposedName === toolName);
+      if (sdkTool) {
+        if (state.context.interactionMode === "plan" && !sdkTool.readOnly) {
+          yield* emitPostToolHook(true);
+          return jsonRpcSuccess(
+            rpc.id,
+            {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: `Blocked "${toolName}" in Plan mode because this plugin tool is not marked read-only.`,
+                },
+              ],
+            },
+            sessionId,
+          );
+        }
+        const pluginRes = yield* pluginHost.value
+          .callActiveSdkTool({
+            exposedName: toolName,
+            arguments: toolArgs,
+            workspaceRoot: state.context.workspaceRoot,
+            threadId: scope.thread.threadId,
+          })
+          .pipe(
+            Effect.catch((error: HarnessError) =>
+              Effect.succeed({
+                isError: true as const,
+                content: [{ type: "text", text: error.detail }],
+              }),
+            ),
+          );
+        yield* emitPostToolHook(pluginRes.isError === true);
+        return jsonRpcSuccess(rpc.id, pluginRes, sessionId);
+      }
+    }
+
     const result = yield* gateway
       .callToolForSession({ context: state.context, toolName, arguments: toolArgs })
       .pipe(
@@ -904,6 +1177,7 @@ export const layer = Layer.unwrap(
     const registry = yield* McpSessionRegistry.McpSessionRegistry;
     const gateway = yield* McpGateway.McpGateway;
     const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+    const memoryStore = yield* Effect.serviceOption(HarnessMemoryStore.HarnessMemoryStore);
     const hooksService = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
     const pluginHost = yield* Effect.serviceOption(PluginHost.PluginHost);
     const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -915,6 +1189,7 @@ export const layer = Layer.unwrap(
       registry,
       gateway,
       libraryStore,
+      memoryStore,
       hooksService,
       pluginHost,
       projections,
