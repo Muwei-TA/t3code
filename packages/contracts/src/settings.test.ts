@@ -332,6 +332,13 @@ describe("ClientSettings notifications", () => {
   });
 });
 
+describe("ClientSettings language", () => {
+  it("starts a client without a saved preference in Chinese", () => {
+    expect(decodeClientSettings({}).language).toBe("zh");
+    expect(decodeClientSettings({ language: "en" }).language).toBe("en");
+  });
+});
+
 describe("ClientSettings quit confirmation", () => {
   it.each([
     [true, "hold"],
