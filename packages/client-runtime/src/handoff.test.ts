@@ -1,5 +1,7 @@
 import {
   ContextHandoffId,
+  HarnessModeId,
+  MessageId,
   ProviderInstanceId,
   RunId,
   type OrchestrationV2ThreadProjection,
@@ -10,6 +12,7 @@ import {
   resolveHandoffEndpoints,
   resolveModelSwitchChange,
   resolvePendingHandoff,
+  resolveTimelineRunInteractionMode,
   type HandoffTimelineRun,
 } from "./handoff.ts";
 
@@ -30,6 +33,21 @@ const run = (
   ordinal,
   providerInstanceId: instanceId,
   modelSelection: { instanceId, model },
+});
+
+describe("historical run interaction mode", () => {
+  it("uses only recorded run mode and does not invent a mode for legacy runs", () => {
+    const messageId = MessageId.make("message");
+    const planned = {
+      ...run("planned", 1, from, "source"),
+      userMessageId: messageId,
+      harnessMode: { id: HarnessModeId.make("plan"), interactionMode: "plan" as const },
+    };
+    const later = run("later", 2, from, "source");
+    expect(resolveTimelineRunInteractionMode({ runId: planned.id, messageId }, [planned, later])).toBe("plan");
+    expect(resolveTimelineRunInteractionMode({ runId: null, messageId }, [planned, later])).toBe("plan");
+    expect(resolveTimelineRunInteractionMode({ runId: later.id, messageId }, [planned, later])).toBeUndefined();
+  });
 });
 
 describe("handoff endpoints shared by web and mobile", () => {

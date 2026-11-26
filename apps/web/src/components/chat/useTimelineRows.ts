@@ -31,6 +31,8 @@ export function useStableHandoffRuns(
           ordinal: run.ordinal,
           providerInstanceId: run.providerInstanceId,
           modelSelection: run.modelSelection,
+          ...(run.harnessMode === undefined ? {} : { harnessMode: run.harnessMode }),
+          ...(run.userMessageId === undefined ? {} : { userMessageId: run.userMessageId }),
         }));
   setState({ source: runs, signature, value });
   return value;

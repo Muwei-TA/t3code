@@ -18,8 +18,19 @@ import { REASONING_EFFORT_OPTION_IDS } from "./state/threadExecution.ts";
 
 export type HandoffTimelineRun = Pick<
   OrchestrationV2Run,
-  "id" | "ordinal" | "providerInstanceId" | "modelSelection"
->;
+  "id" | "ordinal" | "providerInstanceId" | "modelSelection" | "harnessMode"
+> & Partial<Pick<OrchestrationV2Run, "userMessageId">>;
+
+/** Historical mode comes only from the run, never from the current thread toggle. */
+export function resolveTimelineRunInteractionMode(
+  item: Pick<Extract<OrchestrationV2TurnItem, { type: "user_message" }>, "runId" | "messageId">,
+  runs: ReadonlyArray<HandoffTimelineRun>,
+) {
+  const run = item.runId !== null
+    ? runs.find((candidate) => candidate.id === item.runId)
+    : runs.find((candidate) => candidate.userMessageId === item.messageId);
+  return run?.harnessMode?.interactionMode;
+}
 
 export type HandoffEndpoints = ReturnType<typeof resolveHandoffEndpoints>;
 

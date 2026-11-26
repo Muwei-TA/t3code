@@ -44,6 +44,8 @@ import {
 } from "lucide-react";
 import { Button, InlineButton } from "../ui/button";
 import { FreshSessionRow, ModelSwitchRow } from "./V2LifecycleRow";
+import { resolveTimelineRunInteractionMode } from "@t3tools/client-runtime/handoff";
+import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { useAssetUrlRefresh, useAssetUrls, useAssetUrlState } from "../../assets/assetUrls";
 import { AttachmentImage } from "../media/AttachmentImage";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
@@ -268,9 +270,14 @@ export function UserMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mes
   const ctx = use(TimelineRowCtx);
   const item = row.projectedItem?.item;
   const modelSwitch = item?.type === "user_message" ? item.modelSwitch : undefined;
+  const gt = useGT();
+  const mode = item?.type === "user_message"
+    ? resolveTimelineRunInteractionMode(item, ctx.runs)
+    : undefined;
   return (
     <>
       {item?.type === "user_message" && item.freshContext ? <FreshSessionRow /> : null}
+      {mode === "plan" ? <TimelineSystemDivider label={gt("Plan mode")} /> : null}
       {modelSwitch ? (
         <ModelSwitchRow environmentId={ctx.activeThreadEnvironmentId} modelSwitch={modelSwitch} />
       ) : null}
