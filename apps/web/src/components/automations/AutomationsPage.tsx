@@ -21,6 +21,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { harnessEnvironment } from "../../state/harness";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ScheduledTasksSettings } from "../settings/ScheduledTasksSettings";
+import { SettingsScopeProvider } from "../settings/SettingsScopeContext";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
@@ -176,7 +177,9 @@ export function AutomationsPage() {
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-gutter-both">
           {activeTab === "scheduled-tasks" ? (
             <div className="mx-auto max-w-4xl px-6 py-6">
-              <ScheduledTasksSettings />
+              <SettingsScopeProvider search={{}} onChange={() => {}}>
+                <ScheduledTasksSettings />
+              </SettingsScopeProvider>
             </div>
           ) : (
             <div className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-8">
