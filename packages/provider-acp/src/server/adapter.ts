@@ -9217,7 +9217,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const compactionMarker = (yield* Ref.get(compactionMarkers)).get(sessionId);
           const deliveredContext = (yield* Ref.get(deliveredAppContext)).get(sessionId);
           const appContextEntries = unsentAcpAppContext(
-            turnInput.appContext,
+            [...(turnInput.harnessContext ?? []), ...(turnInput.appContext ?? [])],
             deliveredContext,
             isNativeSlashCommand,
           );

@@ -11,6 +11,7 @@ import {
 } from "./htmlRender.ts";
 import {
   claudeMcpToolName,
+  HARNESS_MCP_APP_SERVER,
   MCP_APP_OUTPUT_KEY,
   readMcpAppReference,
   type McpAppReference,
@@ -257,13 +258,65 @@ export function previewRecordingIdFromToolItem(item: {
 export function mcpAppFromToolItem(item: {
   readonly toolName: string | null | undefined;
   readonly output?: unknown;
+  readonly nativeItemRef?: unknown;
 }): McpAppReference | undefined {
+  const gatewayTool = /^(?:mcp__|mcp::)?t3[-_]harness(?:[.\-_:\/]|$)/i.test(item.toolName ?? "");
+  if (gatewayTool) {
+    const app =
+      Predicate.isObject(item.output) && Object.hasOwn(item.output, MCP_APP_OUTPUT_KEY)
+        ? readMcpAppReference(item.output[MCP_APP_OUTPUT_KEY])
+        : undefined;
+    return app?.server === HARNESS_MCP_APP_SERVER &&
+      item.nativeItemRef === null &&
+      item.toolName === `${app.server}.${app.tool}`
+      ? app
+      : undefined;
+  }
   const app = compactDynamicToolOutput(item.output)?.[MCP_APP_OUTPUT_KEY];
   return app !== undefined &&
+    app.server !== HARNESS_MCP_APP_SERVER &&
     (item.toolName === `${app.server}.${app.tool}` ||
       item.toolName === claudeMcpToolName(app.server, app.tool))
     ? app
     : undefined;
+}
+
+/** Remove reserved app markers from the standard MCP result wrappers before relaying a tool response. */
+export function stripMcpAppToolOutput(value: unknown, depth = 0): unknown {
+  if (depth > MAX_ENVELOPE_DEPTH * 2 + 2) return value;
+  if (typeof value === "string") {
+    if (value.length > MAX_PARSED_BYTES || !/^\s*[{["]/u.test(value)) return value;
+    try {
+      const parsed: unknown = JSON.parse(value);
+      const stripped = stripMcpAppToolOutput(parsed, depth + 1);
+      return stripped === parsed ? value : JSON.stringify(stripped);
+    } catch {
+      return value;
+    }
+  }
+  if (Array.isArray(value)) {
+    const stripped = value.map((item) => stripMcpAppToolOutput(item, depth + 1));
+    return stripped.some((item, index) => item !== value[index]) ? stripped : value;
+  }
+  if (!Predicate.isObject(value)) return value;
+  let stripped: Record<PropertyKey, unknown> | undefined;
+  if (Object.hasOwn(value, MCP_APP_OUTPUT_KEY)) {
+    stripped = { ...value };
+    delete stripped[MCP_APP_OUTPUT_KEY];
+  }
+  for (const key of ["structuredContent", "content", "text"] as const) {
+    const child = stripMcpAppToolOutput(value[key], depth + 1);
+    if (child !== value[key]) (stripped ??= { ...value })[key] = child;
+  }
+  const terminal = typeof value.output === "string" ? value.output : "";
+  const marker = terminal.indexOf(TERMINAL_OUTPUT_MARKER);
+  if (marker !== -1) {
+    const start = marker + TERMINAL_OUTPUT_MARKER.length;
+    const body = terminal.slice(start);
+    const child = stripMcpAppToolOutput(body, depth + 1);
+    if (child !== body) (stripped ??= { ...value }).output = terminal.slice(0, start) + child;
+  }
+  return stripped ?? value;
 }
 
 // A superset of every needle below, so most outputs are rejected by this single scan.

@@ -5,7 +5,7 @@ import { ScheduledTasksSettings } from "../components/settings/ScheduledTasksSet
 
 function SettingsScheduledTasksRoute() {
   const target = Route.useSearch();
-  return <ScheduledTasksSettings {...target} />;
+  return <ScheduledTasksSettings {...target} showWorkflowsSetting />;
 }
 
 export const Route = createFileRoute("/_chat/settings/scheduled-tasks")({

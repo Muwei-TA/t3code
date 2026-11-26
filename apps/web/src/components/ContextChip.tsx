@@ -16,6 +16,7 @@ const contextChipVariants = cva(
         video: "[--context-chip-accent:var(--context-chip-video)]",
         file: "[--context-chip-accent:var(--context-chip-file)]",
         mention: "[--context-chip-accent:var(--context-chip-mention)]",
+        "mcp-resource": "[--context-chip-accent:var(--context-chip-mention)]",
         terminal: "[--context-chip-accent:var(--context-chip-terminal)]",
         element: "[--context-chip-accent:var(--context-chip-element)]",
         "preview-annotation": "[--context-chip-accent:var(--context-chip-preview-annotation)]",

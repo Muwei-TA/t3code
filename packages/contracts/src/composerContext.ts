@@ -10,11 +10,13 @@ import {
   GuestShareId,
   NonNegativeInt,
   PositiveInt,
+  ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnItemId,
 } from "./baseSchemas.ts";
 import { GUEST_MESSAGE_MAX_LENGTH, GUEST_NAME_MAX_LENGTH } from "./guestShare.ts";
+import { HarnessMcpResourceUri } from "./harness.ts";
 
 /** Image and file records reference `ChatAttachment` ids, never bytes. */
 
@@ -26,6 +28,7 @@ export const COMPOSER_CONTEXT_KINDS = [
   "preview-annotation",
   "review-comment",
   "mention",
+  "mcp-resource",
   "skill",
   "thread",
   "environment",
@@ -202,6 +205,15 @@ export const MentionContextRecord = Schema.Struct({
 });
 export type MentionContextRecord = typeof MentionContextRecord.Type;
 
+export const McpResourceContextRecord = Schema.Struct({
+  ...recordBase,
+  kind: Schema.Literal("mcp-resource"),
+  uri: HarnessMcpResourceUri,
+  environmentId: EnvironmentId,
+  projectId: ProjectId,
+});
+export type McpResourceContextRecord = typeof McpResourceContextRecord.Type;
+
 export const SkillContextRecord = Schema.Struct({
   ...recordBase,
   kind: Schema.Literal("skill"),
@@ -282,6 +294,7 @@ export const KnownComposerContextRecord = Schema.Union([
   PreviewAnnotationContextRecord,
   ReviewCommentContextRecord,
   MentionContextRecord,
+  McpResourceContextRecord,
   SkillContextRecord,
   ThreadContextRecord,
   EnvironmentContextRecord,

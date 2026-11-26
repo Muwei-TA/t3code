@@ -7,13 +7,14 @@ import { msg, T, useGT, useLocale, useMessages } from "gt-react-native";
 import * as Dialog from "../../components/ui/Dialog";
 import { createV5StackNavigator as createNativeStackNavigator } from "../../native/createV5StackNavigator";
 import { useSheetStackOptions } from "../layout/nested-stacks";
-import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, HarnessModeId, ProviderInstanceId } from "@t3tools/contracts";
 import {
   modelPreferencesMigrationPatch,
   resolveModelPreferences,
 } from "@t3tools/shared/serverSettings";
 import type {
   EnvironmentId,
+  HarnessModeEntry,
   ModelSelection,
   ProjectId,
   ProviderInteractionMode,
@@ -28,6 +29,13 @@ import { harnessEnvironment } from "../../state/harness";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { LegendListRenderItemProps } from "@legendapp/list/react-native";
+import type { WorkflowSummary } from "@t3tools/contracts";
+import {
+  useChatWorkflows,
+  useChatWorkflowMode,
+  setChatWorkflowMode,
+} from "../../state/chat-workflows";
+import { useSelectWorkspaceTab } from "../layout/workspace/useSelectWorkspaceTab";
 import { RegistryContext, useAtomMount, useAtomValue } from "@effect/atom-react";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import {
@@ -289,9 +297,50 @@ function SwitchRow(props: {
 
 type ThreadSettingsSubmenuPage =
   | { readonly kind: "descriptor"; readonly id: string }
-  | { readonly kind: "runtime" };
+  | { readonly kind: "runtime" }
+  | { readonly kind: "mode" };
+
+interface MobileModeChoice {
+  readonly id: HarnessModeId;
+  readonly name: string;
+  readonly description?: string | undefined;
+  readonly baseInteractionMode: ProviderInteractionMode;
+  readonly readonly: boolean;
+}
+
+const FALLBACK_MOBILE_MODES = [
+  {
+    id: HarnessModeId.make("build"),
+    name: "Build",
+    description: msg("Default implementation mode with full coding capabilities."),
+    baseInteractionMode: "default",
+    readonly: false,
+  },
+  {
+    id: HarnessModeId.make("plan"),
+    name: "Plan",
+    description: msg("Read-only planning mode with decision-complete proposed plans."),
+    baseInteractionMode: "plan",
+    readonly: true,
+  },
+  {
+    id: HarnessModeId.make("review"),
+    name: "Review",
+    description: msg("Read-only code review focused on correctness, edge cases, and regressions."),
+    baseInteractionMode: "default",
+    readonly: true,
+  },
+  {
+    id: HarnessModeId.make("creator"),
+    name: "Creator",
+    description: msg("Author portable skills, declarative modes, workflows, and plugins."),
+    baseInteractionMode: "default",
+    readonly: false,
+  },
+] as const;
 
 type ThreadSettingsSessionProps = {
+  readonly workflowDraftKey?: string | null | undefined;
   readonly environmentId: EnvironmentId | null;
   readonly projectId: ProjectId | null;
   readonly cwd: string | null;
@@ -310,6 +359,10 @@ type ThreadSettingsSessionProps = {
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
   readonly interactionMode?: ProviderInteractionMode | undefined;
   readonly onUpdateInteractionMode?: ((mode: ProviderInteractionMode) => void) | undefined;
+  readonly modeId?: HarnessModeId | undefined;
+  readonly onUpdateMode?:
+    | ((modeId: HarnessModeId, interactionMode: ProviderInteractionMode) => void)
+    | undefined;
   readonly threadId?: ThreadId | null | undefined;
 };
 
@@ -336,6 +389,14 @@ type ThreadSettingsSessionValue = {
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
   readonly interactionMode: ProviderInteractionMode;
   readonly onUpdateInteractionMode?: ((mode: ProviderInteractionMode) => void) | undefined;
+  readonly modeId: HarnessModeId;
+  readonly availableModes: ReadonlyArray<MobileModeChoice>;
+  readonly workflowModes: ReadonlyArray<WorkflowSummary> | null;
+  readonly selectedWorkflow: WorkflowSummary | null;
+  readonly selectWorkflow: (workflow: WorkflowSummary | null) => void;
+  readonly onUpdateMode?:
+    | ((modeId: HarnessModeId, interactionMode: ProviderInteractionMode) => void)
+    | undefined;
   readonly threadId: ThreadId | null;
   readonly displayedDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly promptTraits: ReturnType<typeof getPromptControlledTraits>;
@@ -641,7 +702,49 @@ function ThreadSettingsSessionProvider(
     );
   };
 
+  const m = useMessages();
   const environmentId = props.environmentId;
+  const workflowTarget = props.workflowDraftKey ?? null;
+  const { enabled: workflowChatEnabled, snapshot: workflowSnapshot } = useChatWorkflows(
+    workflowTarget === null ? null : environmentId,
+    props.threadId ?? undefined,
+  );
+  const selectedWorkflow = useChatWorkflowMode(workflowTarget, environmentId);
+  const workflowModes = workflowChatEnabled
+    ? (workflowSnapshot?.workflows.filter((item) => item.chatModeCompatible === true) ?? [])
+    : null;
+  const selectWorkflow = (workflow: WorkflowSummary | null) => {
+    if (workflowTarget !== null && environmentId !== null)
+      setChatWorkflowMode(workflowTarget, environmentId, workflow);
+  };
+  const harnessLibraryQuery = useEnvironmentQuery(
+    environmentId !== null
+      ? harnessEnvironment.libraryQuery({
+          environmentId,
+          input: props.cwd ? { workspaceRoot: props.cwd } : {},
+        })
+      : null,
+  );
+  const availableModes: ReadonlyArray<MobileModeChoice> = (() => {
+    const serverModes: ReadonlyArray<HarnessModeEntry> =
+      harnessLibraryQuery.data?.modes.filter((mode) => mode.effectiveEnabled) ?? [];
+    if (serverModes.length === 0) {
+      return FALLBACK_MOBILE_MODES.map((mode) => ({
+        ...mode,
+        description: m(mode.description),
+      }));
+    }
+    return serverModes.map((mode) => ({
+      id: mode.id,
+      name: mode.name,
+      description: mode.description ?? undefined,
+      baseInteractionMode: mode.baseInteractionMode,
+      readonly: mode.readonly,
+    }));
+  })();
+  const effectiveInteractionMode = props.interactionMode ?? "default";
+  const effectiveModeId =
+    props.modeId ?? HarnessModeId.make(effectiveInteractionMode === "plan" ? "plan" : "build");
   // Like the web picker's open tab: scanning every provider would spawn a probe per provider.
   const scannedInstanceId =
     providerFilter !== null ? ProviderInstanceId.make(providerFilter) : props.providerInstanceId;
@@ -659,8 +762,20 @@ function ThreadSettingsSessionProvider(
     runtimeMode: compatibleRuntimeMode,
     runtimeModeChoices,
     onUpdateRuntimeMode: props.onUpdateRuntimeMode,
-    interactionMode: props.interactionMode ?? "default",
+    interactionMode: effectiveInteractionMode,
     onUpdateInteractionMode: props.onUpdateInteractionMode,
+    modeId: effectiveModeId,
+    availableModes,
+    workflowModes,
+    selectedWorkflow,
+    selectWorkflow,
+    onUpdateMode:
+      props.onUpdateMode === undefined
+        ? undefined
+        : (id: HarnessModeId, mode: ProviderInteractionMode) => {
+            selectWorkflow(null);
+            props.onUpdateMode?.(id, mode);
+          },
     threadId: props.threadId ?? null,
     displayedDescriptors,
     promptTraits,
@@ -1002,6 +1117,7 @@ const HARNESS_SERVER_STATE_LABELS = {
   idle: msg("Idle", { $context: "MCP server status" }),
   starting: msg("Starting", { $context: "MCP server status" }),
   error: msg("Error", { $context: "MCP server status" }),
+  auth_required: msg("Sign-in required"),
   untrusted: msg("Needs trust", { $context: "MCP server status" }),
   blocked_by_policy: msg("Blocked by policy", { $context: "MCP server status" }),
   disabled: msg("Disabled", { $context: "MCP server status" }),
@@ -1046,11 +1162,22 @@ function ThreadSettingsOptionsItem(props: {
       const manifest: ThreadContextManifest = result.value;
       const toolCount = (count: number) =>
         gt("{count, plural, one {{count} tool} other {{count} tools}}", { count });
+      const mode = manifest.modeName ?? m(HARNESS_MODE_LABELS[manifest.interactionMode]);
       const lines = [
         gt("Mode: {mode} ({enforcement})", {
-          mode: m(HARNESS_MODE_LABELS[manifest.interactionMode]),
+          mode: manifest.modeReadOnly ? `${mode} (${gt("read-only")})` : mode,
           enforcement: m(HARNESS_ENFORCEMENT_LABELS[manifest.planModeReadOnlyEnforcement]),
         }),
+        ...(manifest.tokenUsage
+          ? [
+              manifest.tokenUsage.maxTokens !== null
+                ? `${gt("Tokens")}: ${manifest.tokenUsage.usedTokens.toLocaleString()} / ${manifest.tokenUsage.maxTokens.toLocaleString()}`
+                : `${gt("Tokens")}: ${manifest.tokenUsage.usedTokens.toLocaleString()}`,
+            ]
+          : []),
+        ...(manifest.approvalRulesCount > 0
+          ? [`${gt("Approval grants")}: ${manifest.approvalRulesCount}`]
+          : []),
         manifest.harnessGatewayActive ? gt("Harness MCP is active") : gt("Harness MCP is inactive"),
         gt("MCP servers: {servers} ({tools})", {
           servers: manifest.mcpServers.length,
@@ -1070,6 +1197,26 @@ function ThreadSettingsOptionsItem(props: {
             ? `${summary}\n  ${threadContextReasonLabel(server.reason, m)}`
             : summary;
         }),
+        ...(manifest.skills.length > 0
+          ? [
+              `${gt("Portable skills")}: ${manifest.skills.length}`,
+              ...manifest.skills.map(
+                (skill) => `• ${skill.name} (${skill.scope}/${skill.channel})`,
+              ),
+            ]
+          : []),
+        ...(manifest.rules.length > 0
+          ? [
+              `${gt("Portable rules")}: ${manifest.rules.length} (${manifest.contextUsedBytes}/${manifest.contextBudgetBytes} B)`,
+              ...manifest.rules.map(
+                (rule) =>
+                  `• ${rule.id} (${rule.apply}/${rule.status})${rule.lockedByPolicy ? ` · ${gt("Locked by organization")}` : ""}`,
+              ),
+            ]
+          : []),
+        ...(manifest.commandsCount > 0
+          ? [`${gt("Portable commands")}: ${manifest.commandsCount}`]
+          : []),
         ...(manifest.degradedItems.length > 0
           ? [
               "",
@@ -1099,6 +1246,19 @@ function ThreadSettingsOptionsItem(props: {
         className="mx-4 overflow-hidden rounded-2xl bg-grouped-card"
         layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}
       >
+        {session.onUpdateMode ? (
+          <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
+            <DisclosureRow
+              label={gt("Mode")}
+              value={
+                session.selectedWorkflow?.name ??
+                session.availableModes.find((choice) => choice.id === session.modeId)?.name ??
+                session.modeId
+              }
+              onPress={() => props.onOpenSubmenu({ kind: "mode" })}
+            />
+          </Animated.View>
+        ) : null}
         {showPlanModeToggle ? (
           <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
             <SwitchRow
@@ -1108,9 +1268,16 @@ function ThreadSettingsOptionsItem(props: {
                   : gt("Plan mode")
               }
               value={session.interactionMode === "plan"}
-              onValueChange={(enabled) =>
-                session.onUpdateInteractionMode?.(enabled ? "plan" : "default")
-              }
+              onValueChange={(enabled) => {
+                if (session.onUpdateMode) {
+                  session.onUpdateMode(
+                    HarnessModeId.make(enabled ? "plan" : "build"),
+                    enabled ? "plan" : "default",
+                  );
+                } else {
+                  session.onUpdateInteractionMode?.(enabled ? "plan" : "default");
+                }
+              }}
             />
           </Animated.View>
         ) : null}
@@ -1365,59 +1532,89 @@ function ThreadSettingsChoiceContent(props: {
         )
       : undefined;
 
+  const selectWorkspaceTab = useSelectWorkspaceTab();
+  const workflowRows =
+    props.submenu.kind !== "mode" || session.workflowModes === null
+      ? null
+      : session.workflowModes.map((workflow) => ({
+          id: workflow.name,
+          label: workflow.name,
+          description: workflow.description,
+          selected: session.selectedWorkflow?.name === workflow.name,
+          onPress: () => {
+            session.selectWorkflow(workflow);
+            props.onSelected();
+          },
+        }));
+
   const submenuContent =
-    props.submenu.kind === "runtime"
+    props.submenu.kind === "mode"
       ? {
-          rows: session.runtimeModeChoices.map((choice) => ({
-            id: choice.mode,
-            label: m(choice.label),
-            description: choice.disabledReason ?? m(choice.description),
-            disabled: choice.disabledReason !== undefined,
-            selected: choice.mode === session.runtimeMode,
+          rows: session.availableModes.map((choice) => ({
+            id: choice.id,
+            label: choice.readonly ? `${choice.name} (${gt("read-only")})` : choice.name,
+            description: choice.description,
+            disabled: false,
+            selected: session.selectedWorkflow === null && choice.id === session.modeId,
             onPress: () => {
               void Haptics.selectionAsync();
-              session.onUpdateRuntimeMode(choice.mode);
+              session.onUpdateMode?.(choice.id, choice.baseInteractionMode);
               props.onSelected();
             },
           })),
         }
-      : activeDescriptor?.type === "select"
+      : props.submenu.kind === "runtime"
         ? {
-            rows: selectableChoices(activeDescriptor).map((choice) => ({
-              id: choice.id,
-              label: choice.label,
-              description: choice.description,
-              disabled: false,
-              selected:
-                choice.id ===
-                (session.promptTraits.ultrathinkPromptControlled &&
-                activeDescriptor.id === session.promptTraits.primarySelectDescriptor?.id
-                  ? "ultrathink"
-                  : getProviderOptionCurrentValue(
-                      activeDescriptor,
-                      session.displayedModelSelection,
-                      session.reportedModelSelection,
-                    )),
+            rows: session.runtimeModeChoices.map((choice) => ({
+              id: choice.mode,
+              label: m(choice.label),
+              description: choice.disabledReason ?? m(choice.description),
+              disabled: choice.disabledReason !== undefined,
+              selected: choice.mode === session.runtimeMode,
               onPress: () => {
                 void Haptics.selectionAsync();
-                if (
-                  session.promptTraits.ultrathinkInBodyText &&
-                  activeDescriptor.id === session.promptTraits.primarySelectDescriptor?.id
-                ) {
-                  Dialog.alert(
-                    gt("Reasoning controlled by prompt"),
-                    gt(
-                      'Your prompt contains "ultrathink" in the text. Remove it to change this option.',
-                    ),
-                  );
-                  return;
-                }
-                session.applyOptionChange(activeDescriptor.id, choice.id);
+                session.onUpdateRuntimeMode(choice.mode);
                 props.onSelected();
               },
             })),
           }
-        : null;
+        : activeDescriptor?.type === "select"
+          ? {
+              rows: selectableChoices(activeDescriptor).map((choice) => ({
+                id: choice.id,
+                label: choice.label,
+                description: choice.description,
+                disabled: false,
+                selected:
+                  choice.id ===
+                  (session.promptTraits.ultrathinkPromptControlled &&
+                  activeDescriptor.id === session.promptTraits.primarySelectDescriptor?.id
+                    ? "ultrathink"
+                    : getProviderOptionCurrentValue(
+                        activeDescriptor,
+                        session.displayedModelSelection,
+                        session.reportedModelSelection,
+                      )),
+                onPress: () => {
+                  void Haptics.selectionAsync();
+                  if (
+                    session.promptTraits.ultrathinkInBodyText &&
+                    activeDescriptor.id === session.promptTraits.primarySelectDescriptor?.id
+                  ) {
+                    Dialog.alert(
+                      gt("Reasoning controlled by prompt"),
+                      gt(
+                        'Your prompt contains "ultrathink" in the text. Remove it to change this option.',
+                      ),
+                    );
+                    return;
+                  }
+                  session.applyOptionChange(activeDescriptor.id, choice.id);
+                  props.onSelected();
+                },
+              })),
+            }
+          : null;
 
   if (!submenuContent) {
     return <View className="flex-1 bg-sheet" />;
@@ -1448,6 +1645,36 @@ function ThreadSettingsChoiceContent(props: {
           />
         ))}
       </View>
+      {workflowRows === null ? null : (
+        <>
+          <Text className="px-2 pb-2 pt-5 text-sm font-t3-medium text-foreground-muted">
+            {gt("Workflow Modes")}
+          </Text>
+          <View className="overflow-hidden rounded-2xl bg-grouped-card">
+            {workflowRows.map((row, index) => (
+              <ChoiceRow
+                key={row.id}
+                label={row.label}
+                description={row.description}
+                selected={row.selected}
+                isLast={index === workflowRows.length - 1}
+                onPress={row.onPress}
+              />
+            ))}
+            {workflowRows.length > 0 ? null : (
+              <ChoiceRow
+                label={gt("Set up a workflow")}
+                isLast
+                selected={false}
+                onPress={() => {
+                  props.onSelected();
+                  selectWorkspaceTab("workflows");
+                }}
+              />
+            )}
+          </View>
+        </>
+      )}
     </ScrollView>
   );
 }
@@ -1567,11 +1794,13 @@ function ThreadSettingsModelsScreen() {
           bottomInset={searchToolbarInset}
           onOpenSubmenu={(submenu) => {
             const title =
-              submenu.kind === "runtime"
-                ? gt("Runtime", { $context: "agent permission mode setting" })
-                : (session.displayedDescriptors.find(
-                    (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
-                  )?.label ?? gt("Option"));
+              submenu.kind === "mode"
+                ? gt("Mode")
+                : submenu.kind === "runtime"
+                  ? gt("Runtime", { $context: "agent permission mode setting" })
+                  : (session.displayedDescriptors.find(
+                      (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
+                    )?.label ?? gt("Option"));
             navigation.navigate("ThreadSettingsChoice", { ...submenu, title });
           }}
         />
@@ -1716,7 +1945,15 @@ export function ExistingThreadSettingsRouteScreen({
       onUpdateRuntimeMode={(runtimeMode) => updateComposerDraftSettings(threadKey, { runtimeMode })}
       interactionMode={draftSettings.interactionMode ?? selectedThread.interactionMode}
       onUpdateInteractionMode={(interactionMode) =>
-        updateComposerDraftSettings(threadKey, { interactionMode })
+        updateComposerDraftSettings(threadKey, {
+          interactionMode,
+          modeId: HarnessModeId.make(interactionMode === "plan" ? "plan" : "build"),
+        })
+      }
+      modeId={draftSettings.modeId ?? selectedThread.modeId}
+      workflowDraftKey={queuedRunEdit === null ? threadKey : null}
+      onUpdateMode={(modeId, interactionMode) =>
+        updateComposerDraftSettings(threadKey, { modeId, interactionMode })
       }
       threadId={selectedThread.id}
       onClose={() => navigation.goBack()}
@@ -1751,6 +1988,9 @@ export function NewTaskThreadSettingsRouteScreen() {
       onUpdateRuntimeMode={flow.setRuntimeMode}
       interactionMode={flow.interactionMode}
       onUpdateInteractionMode={flow.setInteractionMode}
+      modeId={flow.modeId}
+      workflowDraftKey={flow.draftKey}
+      onUpdateMode={(modeId, interactionMode) => flow.setMode(modeId, interactionMode)}
       onClose={() => navigation.goBack()}
     />
   );

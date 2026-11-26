@@ -14,6 +14,14 @@ const decodeContext = Schema.decodeUnknownSync(OrchestrationMessageContext);
 const base = { version: 1, contextId: "ctx_1" } as const;
 
 const knownRecords: Record<(typeof COMPOSER_CONTEXT_KINDS)[number], Record<string, unknown>> = {
+  "mcp-resource": {
+    ...base,
+    kind: "mcp-resource",
+    label: "Handbook",
+    uri: "t3-harness://manuals/memo%3A%2F%2Fhandbook",
+    environmentId: "env-1",
+    projectId: "project-1",
+  },
   image: {
     ...base,
     kind: "image",

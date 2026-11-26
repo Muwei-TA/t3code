@@ -65,6 +65,7 @@ import {
   ChartNoAxesColumnIcon,
   CheckIcon,
   ChevronRightIcon,
+  Clock3Icon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderGit2Icon,
@@ -435,6 +436,10 @@ function OpenCommandPaletteDialog(props: {
 }) {
   const gt = useGT();
   const messages = useMessages();
+  const composerHandleRef = useComposerHandleContext();
+  const openWorkflowMode = useStableCallback(async () => {
+    requestAnimationFrame(() => composerHandleRef?.current?.openControl("workflow"));
+  });
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { openChildSearch, setOpen } = props;
@@ -1752,7 +1757,36 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
+  actionItems.push({
+    kind: "action",
+    value: "action:automations",
+    searchTerms: [
+      "automations",
+      "scheduled tasks",
+      "schedule",
+      "cron",
+      "webhook",
+      "workflows",
+      "automation",
+    ],
+    title: gt("Open automations"),
+    icon: <Clock3Icon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/automations" });
+    },
+  });
+
   if (workflowsReachable) {
+    if (paletteRouteTarget !== null) {
+      actionItems.push({
+        kind: "action",
+        value: "action:quick-start-workflow",
+        title: gt("Quick start workflow"),
+        searchTerms: ["workflow", "mode", "start"],
+        icon: <WorkflowIcon className={ITEM_ICON_CLASS} />,
+        run: openWorkflowMode,
+      });
+    }
     actionItems.push({
       kind: "action",
       value: "action:workflows",

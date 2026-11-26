@@ -6,7 +6,7 @@ import { AsyncResult } from "effect/reactivity";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { T, useGT } from "gt-react-native";
 import { useEffect, useState } from "react";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
 import { collectComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 import {
@@ -53,6 +53,7 @@ export type ComposerEditorProps = NativeComposerEditorProps & {
   readonly draftKey?: string | null;
   readonly hidden?: boolean;
   readonly environmentId?: EnvironmentId;
+  readonly projectId?: ProjectId;
   readonly onOpenMention?: (path: string) => void;
   readonly onOpenAttachment?: (attachment: ComposerDocumentAttachment) => void;
   readonly chipsInert?: boolean;
@@ -63,6 +64,7 @@ export function ComposerEditor({
   draftKey,
   hidden,
   environmentId,
+  projectId,
   onOpenMention,
   onOpenAttachment,
   chipsInert,
@@ -118,8 +120,9 @@ export function ComposerEditor({
         retained.attachments.length,
         signal,
         retained.context?.records.length ?? 0,
-        environmentId,
+        environmentId ?? retained.project?.environmentId,
         linkedEnvironments,
+        projectId ?? retained.project?.projectId,
       );
       if (signal.aborted) return;
       if (!result) {

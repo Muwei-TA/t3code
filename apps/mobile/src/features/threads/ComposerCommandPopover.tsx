@@ -28,6 +28,13 @@ import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 export type ComposerCommandItem =
   | {
       readonly id: string;
+      readonly type: "mcp-resource";
+      readonly uri: string;
+      readonly label: string;
+      readonly description: string;
+    }
+  | {
+      readonly id: string;
       readonly type: "pull-request";
       readonly pullRequest: PullRequestContextMetadata;
       readonly label: string;
@@ -132,6 +139,8 @@ function itemIcon(item: ComposerCommandItem): AppSymbolName | null {
     case "path":
     case "model":
       return null;
+    case "mcp-resource":
+      return "cube";
     case "thread":
       return "text.bubble";
     case "environment":

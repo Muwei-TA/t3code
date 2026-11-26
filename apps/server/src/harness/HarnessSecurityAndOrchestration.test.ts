@@ -121,6 +121,34 @@ describe("Harness security, RPC authorization, native passthrough, and plan.prop
       },
     });
     expect(plainHttpScopes).toEqual([AuthSettingsWriteScope]);
+
+    const exportApplyScopes = clientRpcRequiredScopes(WS_METHODS.harnessExportApply, {
+      target: "codex",
+      planDigest: "abc",
+    });
+    expect(exportApplyScopes).toContain(AuthSettingsWriteScope);
+    expect(exportApplyScopes).toContain(AuthProvidersManageScope);
+  });
+
+  it("allowlists read-only harness library tools in Claude Plan sandbox", () => {
+    const built = claudeMcpQueryOverrides({
+      mcpSession: {
+        environmentId: "env-1" as never,
+        threadId: ThreadId.make("thread-1"),
+        providerSessionId: "sess-1",
+        providerInstanceId: fallbackInstanceId,
+        endpoint: "http://127.0.0.1:4000/mcp",
+        harnessEndpoint: "http://127.0.0.1:4000/mcp/harness",
+        authorizationHeader: "Bearer real-token",
+        browserToolsAvailable: false,
+        capabilities: new Set(["orchestration", "harness"]),
+        harnessSkillPluginDir: "/tmp/t3-claude-plugin-abc",
+      },
+      readOnlySandbox: true,
+    });
+    expect(built.allowedTools).toContain("mcp__t3-harness__harness_skill_search");
+    expect(built.allowedTools).toContain("mcp__t3-harness__harness_skill_load");
+    expect(built.allowedTools).toContain("mcp__t3-harness__harness_rule_read");
   });
 
   it("prevents native passthrough entries from shadowing built-in t3-code or t3-harness servers", () => {

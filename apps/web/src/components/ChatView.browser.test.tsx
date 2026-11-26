@@ -36,6 +36,7 @@ import { usePromptStashStore } from "~/promptStashStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { getRouter } from "~/router";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
 import { environmentThreadDetails } from "~/state/threads";
 import {
   ENVIRONMENT_ID,
@@ -892,6 +893,14 @@ it("a shortcut conditioned on rightPanelOpen sees the thread's open right panel"
     // AppRoot brings its own router.
     router: false,
   });
+  await act(() =>
+    appAtomRegistry.refresh(
+      serverEnvironment.configProjection({ environmentId: ENVIRONMENT_ID, input: {} }),
+    ),
+  );
+  await expect
+    .poll(() => appAtomRegistry.get(primaryServerKeybindingsAtom))
+    .toContainEqual(expect.objectContaining({ command: "rightPanel.new" }));
   const composer = page.getByTestId("composer-editor");
   const toggle = page.getByRole("button", { name: "Toggle right panel", exact: true });
   await expect.element(toggle).toHaveAttribute("aria-pressed", "false");

@@ -2237,6 +2237,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                       ...(turnInput.runtimePolicy.interactionMode === "plan"
                         ? [T3_CODE_HARNESS_PLAN_MODE_INSTRUCTIONS]
                         : []),
+                      ...(turnInput.harnessContext ?? []).map((entry) => entry.text),
                     ].join("\n\n"),
                   },
                   ...parts,

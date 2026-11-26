@@ -2,23 +2,33 @@
 import * as NodeCrypto from "node:crypto";
 import {
   HarnessError,
+  type HarnessGatewayApprovalTarget,
   type HarnessMcpLogsResult,
   type HarnessMcpServerConfig,
   type HarnessMcpServerId,
+  type HarnessMcpRestartInput,
   type HarnessMcpServerState,
   type HarnessMcpServerView,
   type HarnessMcpSnapshot,
   type HarnessMcpToolSummary,
+  type HarnessModeEntry,
   type OrchestrationV2HarnessCapabilities,
   type ProviderInteractionMode,
+  type ProviderApprovalDecision,
+  type ProviderInstanceId,
+  type ProviderSessionId,
   type RuntimeMode,
+  type ThreadId,
 } from "@t3tools/contracts";
 import type { HarnessNativeMcpServer } from "@t3tools/provider-core/server/mcpSession";
+import { mcpAppToolCallableByApp, mcpAppToolResourceUri } from "@t3tools/shared/mcpApp";
+import { stripMcpAppToolOutput } from "@t3tools/shared/toolOutput";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -31,17 +41,32 @@ import {
   resolveSecretRecord,
   scrubHarnessLogText,
 } from "./HarnessSecrets.ts";
+import { isMcpServerAllowedByMode } from "./HarnessProjector.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 import {
   connectUpstream,
   type McpUpstreamConnection,
   RingLogBuffer,
   type UpstreamMcpCallResult,
+  type UpstreamMcpResource,
+  type UpstreamMcpResourceReadResult,
   type UpstreamMcpTool,
 } from "./McpUpstreamClient.ts";
+import * as HarnessMcpOAuthService from "./HarnessMcpOAuthService.ts";
+import * as HarnessApprovalAuditStore from "./HarnessApprovalAuditStore.ts";
 
 const HARNESS_TOOL_SEARCH_NAME = "harness_tool_search";
 export const HARNESS_PROPOSE_PLAN_NAME = "propose_plan";
+export const HARNESS_SKILL_SEARCH_NAME = "harness_skill_search";
+export const HARNESS_SKILL_LOAD_NAME = "harness_skill_load";
+export const HARNESS_RULE_READ_NAME = "harness_rule_read";
+export const HARNESS_WRITE_SKILL_NAME = "harness_write_skill";
+export const HARNESS_CREATE_MODE_NAME = "harness_create_mode";
+export const HARNESS_WORKFLOW_VALIDATE_NAME = "workflow_validate";
+export const HARNESS_PLUGIN_PACK_NAME = "plugin_pack";
+export const HARNESS_MEMORY_SEARCH_NAME = "harness_memory_search";
+export const HARNESS_MEMORY_READ_NAME = "harness_memory_read";
+export const HARNESS_MEMORY_WRITE_NAME = "harness_memory_write";
 
 const DEFAULT_IDLE_TTL_MS = 10 * 60 * 1_000;
 const DEFERRED_THRESHOLD_TOOLS = 24;
@@ -55,6 +80,26 @@ export interface GatewayExposedTool {
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
   readonly readOnly: boolean;
+  readonly _meta?: Record<string, unknown> | undefined;
+}
+
+export interface GatewayExposedResource {
+  readonly uri: string;
+  readonly serverId: HarnessMcpServerId;
+  readonly upstreamUri: string;
+  readonly name: string;
+  readonly description?: string | undefined;
+  readonly mimeType?: string | undefined;
+  readonly _meta?: Record<string, unknown> | undefined;
+}
+
+interface GatewayToolResult extends UpstreamMcpCallResult {
+  readonly appSource?: { readonly uri: string; readonly configId: string };
+}
+
+interface GatewayAppOwner {
+  readonly serverId: HarnessMcpServerId;
+  readonly configId: string;
 }
 
 export interface GatewaySessionContext {
@@ -62,9 +107,122 @@ export interface GatewaySessionContext {
   readonly workspaceRoot?: string | undefined;
   readonly interactionMode: ProviderInteractionMode;
   readonly runtimeMode: RuntimeMode;
+  readonly activeMode?: HarnessModeEntry | null | undefined;
   readonly includeProposePlan: boolean;
+  readonly includeLibraryTools?: boolean | undefined;
+  readonly includeCreatorTools?: boolean | undefined;
+  readonly includeMemoryTools?: boolean | undefined;
   readonly deferredExposure: boolean;
   readonly harnessCapabilities?: OrchestrationV2HarnessCapabilities | undefined;
+  readonly approval?: GatewayApprovalContext | undefined;
+}
+
+export interface GatewayApprovalContext {
+  readonly threadId: ThreadId;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly providerSessionId?: ProviderSessionId | undefined;
+  readonly request?: (input: {
+    readonly target: HarnessGatewayApprovalTarget;
+    readonly readOnly: boolean;
+    readonly argumentCount: number;
+    readonly argumentNames: ReadonlyArray<string>;
+  }) => Effect.Effect<
+    { readonly decision: ProviderApprovalDecision; readonly feedback?: string | undefined },
+    HarnessError
+  >;
+  readonly validate?: (input: {
+    readonly serverId: HarnessMcpServerId;
+    readonly readOnly: boolean;
+  }) => Effect.Effect<void, HarnessError>;
+}
+
+/**
+ * Shared authorization ceiling enforced across all `/mcp/harness` tools (upstream MCP,
+ * Memory, Creator, and SDK plugin tools) in both `tools/list` and `tools/call`.
+ */
+export function checkHarnessRuntimeToolCeiling(input: {
+  readonly toolName: string;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly runtimeMode: RuntimeMode;
+  readonly activeMode?: Pick<HarnessModeEntry, "id" | "readonly"> | null | undefined;
+  readonly readOnly: boolean;
+  readonly isBuiltInReadOnly?: boolean | undefined;
+  readonly explicitlyAllowlisted?: boolean | undefined;
+}): string | null {
+  const effectiveReadOnly = input.interactionMode === "plan" || input.activeMode?.readonly === true;
+  if (!input.readOnly && effectiveReadOnly) {
+    const modeLabel =
+      input.interactionMode !== "plan" && input.activeMode?.readonly
+        ? `read-only mode "${input.activeMode.id}"`
+        : "Plan mode";
+    return `Blocked "${input.toolName}" in ${modeLabel} because it is not marked read-only.`;
+  }
+  if (!input.readOnly && input.runtimeMode !== "full-access") {
+    return `Blocked mutating tool "${input.toolName}" because this thread runs in "${input.runtimeMode}" mode. Switch the thread to Full access mode to allow mutating harness tools.`;
+  }
+  if (
+    input.runtimeMode === "approval-required" &&
+    input.isBuiltInReadOnly !== true &&
+    input.explicitlyAllowlisted !== true
+  ) {
+    return `Blocked "${input.toolName}" in Approval-required mode: readOnlyHint annotations alone do not bypass approval. Explicitly allowlist the tool or switch the thread out of Approval-required mode.`;
+  }
+  return null;
+}
+
+function checkUpstreamToolPolicy(
+  input: Parameters<typeof checkHarnessRuntimeToolCeiling>[0] & {
+    readonly serverPolicy: HarnessMcpServerConfig["approvalPolicy"];
+  },
+): "allow" | "ask" | { readonly deny: string } {
+  const denied = checkHarnessRuntimeToolCeiling({ ...input, runtimeMode: "full-access" });
+  if (denied !== null) return { deny: denied };
+  if (
+    (input.serverPolicy === "auto-all" && input.runtimeMode === "full-access") ||
+    (input.serverPolicy !== "always-ask" &&
+      input.readOnly &&
+      (input.runtimeMode !== "approval-required" || input.explicitlyAllowlisted === true))
+  )
+    return "allow";
+  return "ask";
+}
+
+function upstreamToolPolicy(context: GatewaySessionContext, binding: CatalogToolBinding) {
+  return checkUpstreamToolPolicy({
+    toolName: binding.exposed.exposedName,
+    serverPolicy: binding.server.config.approvalPolicy,
+    readOnly: binding.exposed.readOnly,
+    explicitlyAllowlisted: binding.server.config.allowedTools?.includes(binding.tool.name),
+    interactionMode: context.interactionMode,
+    runtimeMode: context.runtimeMode,
+    activeMode: context.activeMode,
+  });
+}
+
+/** Rewrites MCP Apps `_meta.ui.resourceUri` and legacy `_meta["ui/resourceUri"]` to canonical gateway URIs. */
+export function rewriteMcpAppMeta(
+  serverId: HarnessMcpServerId,
+  meta: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (meta === undefined) return undefined;
+  let mutated = false;
+  const next: Record<string, unknown> = { ...meta };
+  const rawUi = next.ui;
+  if (rawUi !== null && typeof rawUi === "object" && !Array.isArray(rawUi)) {
+    const uiRec = rawUi as Record<string, unknown>;
+    if (typeof uiRec.resourceUri === "string" && uiRec.resourceUri.trim().length > 0) {
+      next.ui = {
+        ...uiRec,
+        resourceUri: canonicalExposedResourceUri(serverId, uiRec.resourceUri.trim()),
+      };
+      mutated = true;
+    }
+  }
+  if (typeof next["ui/resourceUri"] === "string" && next["ui/resourceUri"].trim().length > 0) {
+    next["ui/resourceUri"] = canonicalExposedResourceUri(serverId, next["ui/resourceUri"].trim());
+    mutated = true;
+  }
+  return mutated ? next : meta;
 }
 
 export interface GatewaySessionInjection {
@@ -115,7 +273,7 @@ function discoveryKey(server: HarnessStore.ResolvedHarnessMcpServer) {
 }
 
 interface DigestRuntimeState {
-  state: "idle" | "starting" | "connected" | "error";
+  state: "idle" | "starting" | "connected" | "error" | "auth_required";
   lastError: string | null;
 }
 
@@ -177,6 +335,53 @@ export function decodeCanonicalExposedToolName(
     serverId: body.slice(0, serverLen),
     upstreamToolName: body.slice(serverLen + 2),
   };
+}
+
+/**
+ * Injective gateway resource URI mapping: preserves `ui://` scheme for MCP Apps
+ * (`ui://<encodedServerId>/<rest>`) and wraps non-`ui://` schemes under `t3-harness://<encodedServerId>/<encodedUri>`.
+ */
+export function canonicalExposedResourceUri(
+  serverId: HarnessMcpServerId,
+  upstreamUri: string,
+): string {
+  const encodedServer = encodeURIComponent(serverId);
+  if (upstreamUri.startsWith("ui://")) {
+    return `ui://${encodedServer}/${upstreamUri.slice("ui://".length)}`;
+  }
+  return `t3-harness://${encodedServer}/${encodeURIComponent(upstreamUri)}`;
+}
+
+export function decodeCanonicalExposedResourceUri(
+  exposedUri: string,
+): { readonly serverId: string; readonly upstreamUri: string } | null {
+  if (exposedUri.startsWith("ui://")) {
+    const rest = exposedUri.slice("ui://".length);
+    const slash = rest.indexOf("/");
+    if (slash <= 0) return null;
+    try {
+      const serverId = decodeURIComponent(rest.slice(0, slash));
+      const upstreamRest = rest.slice(slash + 1);
+      if (!serverId || !upstreamRest) return null;
+      return { serverId, upstreamUri: `ui://${upstreamRest}` };
+    } catch {
+      return null;
+    }
+  }
+  if (exposedUri.startsWith("t3-harness://")) {
+    const rest = exposedUri.slice("t3-harness://".length);
+    const slash = rest.indexOf("/");
+    if (slash <= 0) return null;
+    try {
+      const serverId = decodeURIComponent(rest.slice(0, slash));
+      const upstreamUri = decodeURIComponent(rest.slice(slash + 1));
+      if (!serverId || !upstreamUri) return null;
+      return { serverId, upstreamUri };
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function filterAllowedTools(
@@ -292,6 +497,7 @@ function buildGatewayExposedCatalog(
     );
     for (const tool of allowed) {
       const finalName = canonicalExposedToolName(server.id, tool.name);
+      const rewrittenMeta = rewriteMcpAppMeta(server.id, tool._meta);
       const exposed: GatewayExposedTool = {
         exposedName: finalName,
         serverId: server.id,
@@ -299,6 +505,7 @@ function buildGatewayExposedCatalog(
         description: tool.description ?? `${server.id}/${tool.name}`,
         inputSchema: tool.inputSchema,
         readOnly: tool.annotations?.readOnlyHint === true,
+        ...(rewrittenMeta ? { _meta: rewrittenMeta } : {}),
       };
       tools.push(exposed);
       byExposedName.set(finalName, { exposed, server, tool });
@@ -348,6 +555,210 @@ const HARNESS_PROPOSE_PLAN_DEF: GatewayExposedTool = {
   readOnly: true,
 };
 
+const HARNESS_SKILL_SEARCH_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_SKILL_SEARCH_NAME,
+  serverId: null,
+  upstreamName: HARNESS_SKILL_SEARCH_NAME,
+  description:
+    "Search portable user and repository skills by keyword. Returns skill names, scopes, and summaries so you can load relevant skills with harness_skill_load.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "Keywords describing the task or skill to find (empty lists all skills).",
+      },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
+  readOnly: true,
+};
+
+const HARNESS_SKILL_LOAD_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_SKILL_LOAD_NAME,
+  serverId: null,
+  upstreamName: HARNESS_SKILL_LOAD_NAME,
+  description:
+    "Load the full SKILL.md instructions and companion file listing for a portable skill by name or id.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        description:
+          "Skill id or name returned by harness_skill_search or listed in portable skills.",
+      },
+    },
+    required: ["name"],
+    additionalProperties: false,
+  },
+  readOnly: true,
+};
+
+const HARNESS_RULE_READ_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_RULE_READ_NAME,
+  serverId: null,
+  upstreamName: HARNESS_RULE_READ_NAME,
+  description:
+    "Read the full body of a portable harness rule or overflowing mode (use 'user:AGENTS.md', 'project:AGENTS.md', 'mode:<id>', or a rule id from rules/*.md) when it is manual or exceeded inline context budget.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: {
+        type: "string",
+        description:
+          "Rule or mode identifier (e.g. 'user:AGENTS.md', 'mode:review', or 'typescript-style').",
+      },
+    },
+    required: ["id"],
+    additionalProperties: false,
+  },
+  readOnly: true,
+};
+
+const HARNESS_WRITE_SKILL_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_WRITE_SKILL_NAME,
+  serverId: null,
+  upstreamName: HARNESS_WRITE_SKILL_NAME,
+  description:
+    "Create or update a portable SKILL.md under ~/.t3/harness/skills/<id>/SKILL.md (available in Creator Mode).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: { type: "string", description: "Skill id (letters, digits, hyphens, underscores)." },
+      name: { type: "string", description: "Optional human-readable display name." },
+      description: { type: "string", description: "When agents should activate this skill." },
+      body: { type: "string", description: "Markdown instructions body for SKILL.md." },
+    },
+    required: ["id", "body"],
+    additionalProperties: false,
+  },
+  readOnly: false,
+};
+
+const HARNESS_CREATE_MODE_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_CREATE_MODE_NAME,
+  serverId: null,
+  upstreamName: HARNESS_CREATE_MODE_NAME,
+  description:
+    "Create or update a declarative portable mode under ~/.t3/harness/modes/<id>.md (available in Creator Mode).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: { type: "string", description: "Mode id (lowercase letters, digits, hyphens)." },
+      name: { type: "string", description: "Display name for the mode." },
+      description: { type: "string", description: "Short summary shown in mode switcher." },
+      baseInteractionMode: { type: "string", enum: ["default", "plan"] },
+      readonly: { type: "boolean" },
+      proposePlan: { type: "boolean" },
+      allowedMcpServers: { type: "array", items: { type: "string" } },
+      includedRules: { type: "array", items: { type: "string" } },
+      includedSkills: { type: "array", items: { type: "string" } },
+      body: { type: "string", description: "System prompt markdown for this mode." },
+    },
+    required: ["id", "body"],
+    additionalProperties: false,
+  },
+  readOnly: false,
+};
+
+const HARNESS_WORKFLOW_VALIDATE_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_WORKFLOW_VALIDATE_NAME,
+  serverId: null,
+  upstreamName: HARNESS_WORKFLOW_VALIDATE_NAME,
+  description:
+    "Validate a declarative workflows/*.yaml document (step DAG, modeIds, in-thread/child steps) and preview its compiled T3 workflow.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      yaml: { type: "string", description: "Full YAML source of the workflow." },
+    },
+    required: ["yaml"],
+    additionalProperties: false,
+  },
+  readOnly: true,
+};
+
+const HARNESS_PLUGIN_PACK_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_PLUGIN_PACK_NAME,
+  serverId: null,
+  upstreamName: HARNESS_PLUGIN_PACK_NAME,
+  description:
+    "Create or refresh t3-plugin.json for a plugin under ~/.t3/harness/plugins/<id> and compute its SHA-256 content digest for owner trust review (available in Creator Mode).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: {
+        type: "string",
+        description: "Plugin id (letters, digits, dots, hyphens, underscores).",
+      },
+      name: { type: "string", description: "Plugin display name." },
+      version: { type: "string", description: "Semver version string (e.g. 1.0.0)." },
+      description: { type: "string" },
+      author: { type: "string" },
+    },
+    required: ["id", "name", "version"],
+    additionalProperties: false,
+  },
+  readOnly: false,
+};
+
+const HARNESS_MEMORY_SEARCH_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_MEMORY_SEARCH_NAME,
+  serverId: null,
+  upstreamName: HARNESS_MEMORY_SEARCH_NAME,
+  description:
+    "Search portable cross-provider memory notes stored in ~/.t3/harness/memory/*.md by keyword or tag.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Optional search keywords." },
+      tag: { type: "string", description: "Optional exact tag filter." },
+      limit: { type: "integer", description: "Maximum notes to return (default 15, max 50)." },
+    },
+    additionalProperties: false,
+  },
+  readOnly: true,
+};
+
+const HARNESS_MEMORY_READ_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_MEMORY_READ_NAME,
+  serverId: null,
+  upstreamName: HARNESS_MEMORY_READ_NAME,
+  description: "Read the full markdown body of a portable memory note by id or title.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: { type: "string", description: "Memory note id or title." },
+    },
+    required: ["id"],
+    additionalProperties: false,
+  },
+  readOnly: true,
+};
+
+const HARNESS_MEMORY_WRITE_DEF: GatewayExposedTool = {
+  exposedName: HARNESS_MEMORY_WRITE_NAME,
+  serverId: null,
+  upstreamName: HARNESS_MEMORY_WRITE_NAME,
+  description:
+    "Create or update a portable markdown memory note under ~/.t3/harness/memory/<id>.md (disabled in Plan mode).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: { type: "string", description: "Kebab-case note id (e.g. deploy-notes)." },
+      title: { type: "string", description: "Short human-readable title." },
+      tags: { type: "array", items: { type: "string" } },
+      pinned: { type: "boolean" },
+      body: { type: "string", description: "Markdown body to persist." },
+    },
+    required: ["id", "title", "body"],
+    additionalProperties: false,
+  },
+  readOnly: false,
+};
+
 export class McpGateway extends Context.Service<
   McpGateway,
   {
@@ -361,12 +772,36 @@ export class McpGateway extends Context.Service<
       readonly authorize?: (config: HarnessMcpServerConfig) => Effect.Effect<void, E>;
     }) => Effect.Effect<HarnessMcpSnapshot, HarnessError | E>;
     readonly invalidateServer: (serverId: HarnessMcpServerId) => Effect.Effect<void>;
+    readonly updateServer: <E>(
+      input: {
+        readonly serverId: HarnessMcpServerId;
+        readonly workspaceRoot?: string | undefined;
+        readonly scope: "user" | "project";
+      },
+      update: Effect.Effect<void, E>,
+    ) => Effect.Effect<HarnessMcpSnapshot, HarnessError | E>;
+    readonly startOAuth: (
+      input: HarnessMcpRestartInput,
+    ) => Effect.Effect<{ readonly authorizationUrl: string }, HarnessError>;
+    readonly completeOAuth: (
+      callbackUrl: string,
+      expected?: HarnessMcpRestartInput,
+    ) => Effect.Effect<HarnessMcpSnapshot, HarnessError>;
+    readonly disconnectOAuth: (
+      input: HarnessMcpRestartInput,
+    ) => Effect.Effect<HarnessMcpSnapshot, HarnessError>;
     readonly resolveSessionInjection: (input: {
       readonly workspaceRoot?: string | undefined;
       readonly interactionMode: ProviderInteractionMode;
+      readonly activeMode?: HarnessModeEntry | null | undefined;
       readonly emitsProposedPlan: boolean;
       readonly supportsMcpTools: boolean;
       readonly harnessCapabilities: OrchestrationV2HarnessCapabilities;
+      readonly hasLibraryGatewayTools?: boolean | undefined;
+      readonly hasCreatorTools?: boolean | undefined;
+      readonly hasMemoryTools?: boolean | undefined;
+      readonly sdkToolsDigest?: string | undefined;
+      readonly libraryDigest?: string | undefined;
     }) => Effect.Effect<GatewaySessionInjection>;
     readonly listToolsForSession: (
       context: GatewaySessionContext,
@@ -375,7 +810,22 @@ export class McpGateway extends Context.Service<
       readonly context: GatewaySessionContext;
       readonly toolName: string;
       readonly arguments: Readonly<Record<string, unknown>>;
-    }) => Effect.Effect<UpstreamMcpCallResult, HarnessError>;
+      readonly appOwner?: GatewayAppOwner;
+    }) => Effect.Effect<GatewayToolResult, HarnessError>;
+    readonly listAppTools: (
+      context: GatewaySessionContext,
+      owner: GatewayAppOwner,
+    ) => Effect.Effect<ReadonlyArray<GatewayExposedTool>>;
+    readonly listResourcesForSession: (
+      context: GatewaySessionContext,
+      options?: { readonly connectedOnly?: boolean },
+    ) => Effect.Effect<ReadonlyArray<GatewayExposedResource>>;
+    readonly readResourceForSession: (input: {
+      readonly context: GatewaySessionContext;
+      readonly uri: string;
+      readonly connectedOnly?: boolean;
+      readonly appOwner?: GatewayAppOwner;
+    }) => Effect.Effect<UpstreamMcpResourceReadResult, HarnessError>;
     readonly evictIdle: Effect.Effect<void>;
   }
 >()("t3/harness/McpGateway") {}
@@ -386,6 +836,31 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
   const store = yield* HarnessStore.HarnessStore;
   const secretResolver = yield* SecretResolver.SecretResolver;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
+  const oauth = Option.getOrUndefined(
+    yield* Effect.serviceOption(HarnessMcpOAuthService.HarnessMcpOAuthService),
+  );
+  const approvalAudit = Option.getOrUndefined(
+    yield* Effect.serviceOption(HarnessApprovalAuditStore.HarnessApprovalAuditStore),
+  );
+  let approvalDigestKey: Uint8Array | undefined;
+  const approvalConfigDigest = Effect.fn("McpGateway.approvalConfigDigest")(function* (
+    config: HarnessMcpServerConfig,
+  ) {
+    approvalDigestKey ??= yield* secretStore
+      .getOrCreateRandom("harness-approval-config-digest-key", 32)
+      .pipe(
+        Effect.mapError(
+          () =>
+            new HarnessError({
+              code: "io_error",
+              detail: "Could not load the key for MCP approval rules.",
+            }),
+        ),
+      );
+    return NodeCrypto.createHmac("sha256", approvalDigestKey)
+      .update(HarnessStore.computeCanonicalConfigFingerprint(config))
+      .digest("hex");
+  });
 
   const idleTtlMs = options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
   const connect = options.connect ?? connectUpstream;
@@ -458,13 +933,16 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     serverId: HarnessMcpServerId,
     key: string,
     expected: PooledUpstream,
+    error: HarnessError,
   ) {
     const record = getOrCreateRecord(serverId);
     yield* record.lock.withPermits(1)(
       Effect.gen(function* () {
         if (pool.get(key) !== expected) return;
         yield* closePooled(key);
-        if (record.stateByDigest.get(expected.scopeKey)?.state === "connected") {
+        if (error.code === "auth_required") {
+          setDigestState(record, expected.scopeKey, "auth_required", error.detail);
+        } else if (record.stateByDigest.get(expected.scopeKey)?.state === "connected") {
           setDigestState(record, expected.scopeKey, "idle", null);
         }
       }),
@@ -600,6 +1078,19 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         resolvedEnvOrHeaders: resolved,
         sensitiveValues,
         logs: record.logs,
+        ...(oauth?.supports(server)
+          ? {
+              oauth: {
+                bearer: oauth.bearer(server),
+                explicitlyEnabled:
+                  server.config.transport.type !== "stdio" &&
+                  server.config.transport.oauth?.enabled === true,
+                unauthorized: (header, rejectedBearer) =>
+                  oauth.unauthorized(server, header, rejectedBearer),
+                logs: record.logs,
+              },
+            }
+          : {}),
       }).pipe(
         Effect.mapError(
           (error) =>
@@ -611,7 +1102,12 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         ),
         Effect.tapError((error) =>
           Effect.sync(() => {
-            setDigestState(record, scopeKey, "error", error.detail);
+            setDigestState(
+              record,
+              scopeKey,
+              error.code === "auth_required" ? "auth_required" : "error",
+              error.detail,
+            );
           }),
         ),
       );
@@ -628,7 +1124,12 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         ),
         Effect.tapError((error) =>
           Effect.sync(() => {
-            setDigestState(record, scopeKey, "error", error.detail);
+            setDigestState(
+              record,
+              scopeKey,
+              error.code === "auth_required" ? "auth_required" : "error",
+              error.detail,
+            );
           }),
         ),
       );
@@ -749,8 +1250,8 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       state = "connected";
     } else if (digestState?.state === "starting") {
       state = "starting";
-    } else if (digestState?.state === "error") {
-      state = "error";
+    } else if (digestState?.state === "error" || digestState?.state === "auth_required") {
+      state = digestState.state;
     } else {
       state = "idle";
     }
@@ -793,11 +1294,22 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
   const getSnapshot: McpGateway["Service"]["getSnapshot"] = Effect.fn("McpGateway.getSnapshot")(
     function* (workspaceRoot) {
       const workspace = yield* store.resolveWorkspace(workspaceRoot);
+      const servers =
+        oauth === undefined
+          ? workspace.servers.map(deriveServerView)
+          : yield* Effect.forEach(
+              workspace.servers,
+              (server) =>
+                oauth
+                  .status(server)
+                  .pipe(Effect.map((status) => ({ ...deriveServerView(server), ...status }))),
+              { concurrency: 4 },
+            );
       return {
         harnessDir: workspace.harnessDir,
         configPath: workspace.configPath,
         workspaceRoot: workspace.workspaceRoot,
-        servers: workspace.servers.map(deriveServerView),
+        servers,
         invalidEntries: workspace.invalidEntries,
         managedPolicyAllowsHarness: workspace.managedPolicyAllowsHarness,
         managedPolicyAllowsStdio: workspace.managedPolicyAllowsStdio,
@@ -819,6 +1331,83 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     "McpGateway.invalidateServer",
   )(function* (serverId) {
     yield* closeAllForServer(serverId);
+  });
+
+  const updateServer: McpGateway["Service"]["updateServer"] = Effect.fn("McpGateway.updateServer")(
+    function* <E>(
+      input: Parameters<McpGateway["Service"]["updateServer"]>[0],
+      update: Effect.Effect<void, E>,
+    ): Effect.fn.Return<HarnessMcpSnapshot, HarnessError | E> {
+      const { serverId, scope, workspaceRoot } = input;
+      const readServer = store
+        .resolveWorkspace(scope === "user" ? undefined : workspaceRoot)
+        .pipe(
+          Effect.map((workspace) =>
+            workspace.servers.find((server) => server.id === serverId && server.scope === scope),
+          ),
+        );
+      const record = getOrCreateRecord(serverId);
+      yield* record.lock.withPermits(1)(
+        Effect.gen(function* () {
+          const previous = yield* readServer;
+          yield* update;
+          yield* closeAllForServerUnlocked(serverId);
+          if (!oauth || !previous || !HarnessMcpOAuthService.oauthCredentialKey(previous)) return;
+          const current = yield* readServer;
+          if (
+            !current ||
+            !current.trusted ||
+            !oauth.supports(current) ||
+            HarnessMcpOAuthService.oauthCredentialKey(previous) !==
+              HarnessMcpOAuthService.oauthCredentialKey(current)
+          ) {
+            yield* oauth.clear(previous);
+          }
+        }),
+      );
+      return yield* getSnapshot(workspaceRoot);
+    },
+  );
+
+  const noOAuth = Effect.fail(
+    new HarnessError({ code: "invalid_config", detail: "Harness OAuth is unavailable." }),
+  );
+  const startOAuth = (input: HarnessMcpRestartInput) => oauth?.start(input) ?? noOAuth;
+  const completeOAuth = Effect.fn("McpGateway.completeOAuth")(function* (
+    callbackUrl: string,
+    expected?: HarnessMcpRestartInput,
+  ) {
+    const { input, exchanged } = yield* oauth?.complete(callbackUrl, expected) ?? noOAuth;
+    if (exchanged) {
+      const record = getOrCreateRecord(input.serverId);
+      yield* record.lock.withPermits(1)(
+        Effect.gen(function* () {
+          const workspace = yield* store.resolveWorkspace(input.workspaceRoot);
+          const server = workspace.servers.find(
+            (entry) => entry.id === input.serverId && entry.effectiveEnabled,
+          );
+          if (
+            !workspace.managedPolicyAllowsHarness ||
+            !server?.effectiveEnabled ||
+            !server.trusted ||
+            !oauth?.supports(server)
+          )
+            return;
+          const key = poolKeyFor(server);
+          yield* closePooled(key);
+          setDigestState(record, runtimeScopeKey(server), "idle", null);
+          yield* ensureConnectedUnlocked(server, record).pipe(Effect.ignore);
+        }),
+      );
+    }
+    return yield* getSnapshot(input.workspaceRoot);
+  });
+  const disconnectOAuth = Effect.fn("McpGateway.disconnectOAuth")(function* (
+    input: HarnessMcpRestartInput,
+  ) {
+    yield* oauth?.disconnect(input) ?? noOAuth;
+    yield* invalidateServer(input.serverId);
+    return yield* getSnapshot(input.workspaceRoot);
   });
 
   const restartServer: McpGateway["Service"]["restartServer"] = Effect.fn(
@@ -883,7 +1472,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       return { harnessActive: false, gatewayServersDigest: "", nativeMcpServers: [] };
     }
     const needsProposePlan =
-      input.interactionMode === "plan" && !input.emitsProposedPlan && input.supportsMcpTools;
+      (input.interactionMode === "plan" || input.activeMode?.proposePlan === true) &&
+      !input.emitsProposedPlan &&
+      input.supportsMcpTools;
 
     const nativeMcpServers: Array<HarnessNativeMcpServer> = [];
     const gatewayServerFingerprints: Array<string> = [];
@@ -893,7 +1484,8 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         !server.effectiveEnabled ||
         !server.trusted ||
         server.needsTrustConfirmation ||
-        server.blockedByPolicyReason !== null
+        server.blockedByPolicyReason !== null ||
+        !isMcpServerAllowedByMode(server.id, input.activeMode)
       ) {
         continue;
       }
@@ -937,13 +1529,28 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     }
 
     gatewayServerFingerprints.sort();
+    const hasLibraryTools = input.hasLibraryGatewayTools === true && input.supportsMcpTools;
+    const hasCreatorTools = input.hasCreatorTools === true && input.supportsMcpTools;
+    const hasMemoryTools = input.hasMemoryTools === true && input.supportsMcpTools;
+    const sdkToolsDigest = input.supportsMcpTools ? (input.sdkToolsDigest ?? "") : "";
+    const activeModeSig = input.activeMode
+      ? `${input.activeMode.id}@${input.activeMode.contentDigest}:${input.activeMode.readonly ? "ro" : "rw"}:${input.activeMode.proposePlan ? "pp" : "no"}`
+      : "";
     const gatewayServersDigest = NodeCrypto.createHash("sha256")
-      .update(`${needsProposePlan ? "1" : "0"}\u0000${gatewayServerFingerprints.join("\u001f")}`)
+      .update(
+        `${needsProposePlan ? "1" : "0"}\u0000${hasLibraryTools ? "1" : "0"}\u0000${hasCreatorTools ? "1" : "0"}\u0000${hasMemoryTools ? "1" : "0"}\u0000${sdkToolsDigest}\u0000${activeModeSig}\u0000${input.libraryDigest ?? ""}\u0000${gatewayServerFingerprints.join("\u001f")}`,
+      )
       .digest("hex")
       .slice(0, 24);
 
     return {
-      harnessActive: needsProposePlan || gatewayServerFingerprints.length > 0,
+      harnessActive:
+        needsProposePlan ||
+        hasLibraryTools ||
+        hasCreatorTools ||
+        hasMemoryTools ||
+        sdkToolsDigest.length > 0 ||
+        gatewayServerFingerprints.length > 0,
       gatewayServersDigest,
       nativeMcpServers,
     };
@@ -951,6 +1558,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
 
   const collectAllGatewayTools = Effect.fn("McpGateway.collectAllGatewayTools")(function* (
     context: GatewaySessionContext,
+    appOwner?: GatewayAppOwner,
   ) {
     const workspace = yield* store.resolveWorkspace(context.workspaceRoot);
     if (!workspace.managedPolicyAllowsHarness) {
@@ -958,35 +1566,32 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     }
     const activeGatewayServers = workspace.servers.filter(
       (server) =>
+        (appOwner === undefined || server.id === appOwner.serverId) &&
         server.effectiveEnabled &&
         server.trusted &&
         !server.needsTrustConfirmation &&
         server.blockedByPolicyReason === null &&
+        isMcpServerAllowedByMode(server.id, context.activeMode) &&
         resolveServerChannel(server.config, context.harnessCapabilities) === "gateway",
     );
 
     const connectedResults = yield* Effect.forEach(
       activeGatewayServers,
       (server) =>
-        ensureConnectedFresh({
-          serverId: server.id,
-          scope: server.scope,
-          workspaceRoot: context.workspaceRoot,
-          harnessCapabilities: context.harnessCapabilities,
-        }).pipe(
-          Effect.map(({ server: freshServer, pooled }) => ({
-            server: freshServer,
-            pooled: pooled as PooledUpstream | null,
-            tools: pooled.tools,
-            configDigest: freshServer.configDigest as string | null,
-          })),
-          Effect.orElseSucceed(() => ({
-            server,
-            pooled: null as PooledUpstream | null,
-            tools: [] as ReadonlyArray<UpstreamMcpTool>,
-            configDigest: null as string | null,
-          })),
-        ),
+        Effect.gen(function* () {
+          if (appOwner && appOwner.configId !== (yield* approvalConfigDigest(server.config))) {
+            return null;
+          }
+          const connected = yield* ensureConnectedFresh({
+            serverId: server.id,
+            scope: server.scope,
+            workspaceRoot: context.workspaceRoot,
+            harnessCapabilities: context.harnessCapabilities,
+          });
+          return appOwner && server.configDigest !== connected.server.configDigest
+            ? null
+            : { ...connected, tools: connected.pooled.tools };
+        }).pipe(Effect.orElseSucceed(() => null)),
       { concurrency: 4 },
     );
 
@@ -996,29 +1601,55 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     if (!postWorkspace.managedPolicyAllowsHarness) {
       return [] as ReadonlyArray<GatewayExposedTool>;
     }
-    const stillActive = connectedResults.filter((entry) => {
-      if (entry.configDigest === null || entry.pooled === null || entry.tools.length === 0) {
-        return false;
-      }
-      if (entry.pooled.connection.isClosed()) {
-        return false;
-      }
-      const current = postWorkspace.servers.find(
-        (candidate) => candidate.id === entry.server.id && candidate.scope === entry.server.scope,
-      );
-      if (current === undefined) return false;
-      return (
-        current.configDigest === entry.configDigest &&
-        current.effectiveEnabled &&
-        current.trusted &&
-        !current.needsTrustConfirmation &&
-        current.blockedByPolicyReason === null &&
-        resolveServerChannel(current.config, context.harnessCapabilities) === "gateway" &&
-        pool.get(poolKeyFor(current)) === entry.pooled
-      );
-    });
+    const stillActive = connectedResults
+      .filter((entry) => entry !== null)
+      .filter((entry) => {
+        if (entry.tools.length === 0) {
+          return false;
+        }
+        if (entry.pooled.connection.isClosed()) {
+          return false;
+        }
+        const current = postWorkspace.servers.find(
+          (candidate) => candidate.id === entry.server.id && candidate.scope === entry.server.scope,
+        );
+        if (current === undefined) return false;
+        return (
+          current.configDigest === entry.server.configDigest &&
+          current.effectiveEnabled &&
+          current.trusted &&
+          !current.needsTrustConfirmation &&
+          current.blockedByPolicyReason === null &&
+          resolveServerChannel(current.config, context.harnessCapabilities) === "gateway" &&
+          pool.get(poolKeyFor(current)) === entry.pooled
+        );
+      });
 
-    return buildGatewayExposedCatalog(stillActive).tools;
+    return yield* Effect.filter(
+      [...buildGatewayExposedCatalog(stillActive).byExposedName.values()],
+      (binding) =>
+        Effect.gen(function* () {
+          if (appOwner && !mcpAppToolCallableByApp(binding.tool._meta)) return false;
+          const policy = upstreamToolPolicy(context, binding);
+          if (policy === "allow") return true;
+          const approval = context.approval;
+          if (policy !== "ask" || approval === undefined) return false;
+          if (!appOwner || approval.request !== undefined) return true;
+          return approvalAudit === undefined
+            ? false
+            : yield* approvalAudit.hasActiveGatewayGrant({
+                target: {
+                  serverId: binding.server.id,
+                  serverScope: binding.server.scope,
+                  repoRoot: postWorkspace.workspaceRoot,
+                  toolName: binding.tool.name,
+                  configDigest: appOwner.configId,
+                },
+                threadId: approval.threadId,
+                providerSessionId: approval.providerSessionId,
+              });
+        }),
+    ).pipe(Effect.map((bindings) => bindings.map(({ exposed }) => exposed)));
   });
 
   const recordSessionLoadedTools = (
@@ -1051,6 +1682,47 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     if (context.includeProposePlan) {
       listed.push(HARNESS_PROPOSE_PLAN_DEF);
     }
+    if (context.includeLibraryTools) {
+      listed.push(
+        HARNESS_SKILL_SEARCH_DEF,
+        HARNESS_SKILL_LOAD_DEF,
+        HARNESS_RULE_READ_DEF,
+        HARNESS_WORKFLOW_VALIDATE_DEF,
+      );
+    }
+    if (context.includeCreatorTools) {
+      const canWriteCreator =
+        checkHarnessRuntimeToolCeiling({
+          toolName: HARNESS_WRITE_SKILL_NAME,
+          interactionMode: context.interactionMode,
+          runtimeMode: context.runtimeMode,
+          activeMode: context.activeMode,
+          readOnly: false,
+        }) === null;
+      if (canWriteCreator) {
+        listed.push(HARNESS_WRITE_SKILL_DEF, HARNESS_CREATE_MODE_DEF);
+      }
+      if (!context.includeLibraryTools) {
+        listed.push(HARNESS_WORKFLOW_VALIDATE_DEF);
+      }
+      if (canWriteCreator && store.managedPolicyAllowsPlugins) {
+        listed.push(HARNESS_PLUGIN_PACK_DEF);
+      }
+    }
+    if (context.includeMemoryTools) {
+      listed.push(HARNESS_MEMORY_SEARCH_DEF, HARNESS_MEMORY_READ_DEF);
+      if (
+        checkHarnessRuntimeToolCeiling({
+          toolName: HARNESS_MEMORY_WRITE_NAME,
+          interactionMode: context.interactionMode,
+          runtimeMode: context.runtimeMode,
+          activeMode: context.activeMode,
+          readOnly: false,
+        }) === null
+      ) {
+        listed.push(HARNESS_MEMORY_WRITE_DEF);
+      }
+    }
     if (!shouldDefer) {
       listed.push(...upstreamTools);
       return listed;
@@ -1070,7 +1742,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
 
   const callToolForSession: McpGateway["Service"]["callToolForSession"] = Effect.fn(
     "McpGateway.callToolForSession",
-  )(function* ({ context, toolName, arguments: args }) {
+  )(function* ({ context, toolName, arguments: args, appOwner }) {
     const workspace = yield* store.resolveWorkspace(context.workspaceRoot);
     if (!workspace.managedPolicyAllowsHarness) {
       return yield* new HarnessError({
@@ -1079,7 +1751,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       });
     }
 
-    if (toolName === HARNESS_TOOL_SEARCH_NAME) {
+    if (toolName === HARNESS_TOOL_SEARCH_NAME && appOwner === undefined) {
       const query = typeof args.query === "string" ? args.query : "";
       const terms = query
         .toLowerCase()
@@ -1125,7 +1797,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
 
     const decodedTool = decodeCanonicalExposedToolName(toolName);
     const prefixMatchingServers =
-      decodedTool === null
+      decodedTool === null || (appOwner !== undefined && appOwner.serverId !== decodedTool.serverId)
         ? []
         : workspace.servers.filter((server) => server.id === decodedTool.serverId);
     if (prefixMatchingServers.length === 0) {
@@ -1143,6 +1815,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         server.trusted &&
         !server.needsTrustConfirmation &&
         server.blockedByPolicyReason === null &&
+        isMcpServerAllowedByMode(server.id, context.activeMode) &&
         resolveServerChannel(server.config, context.harnessCapabilities) === "gateway",
     );
 
@@ -1173,6 +1846,13 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
           detail: `MCP server "${primary.id}" is disabled.`,
         });
       }
+      if (!isMcpServerAllowedByMode(primary.id, context.activeMode)) {
+        return yield* new HarnessError({
+          code: "policy_denied",
+          serverId: primary.id,
+          detail: `MCP server "${primary.id}" is disabled by active mode "${context.activeMode?.id ?? ""}".`,
+        });
+      }
       return yield* new HarnessError({
         code: "not_found",
         serverId: primary.id,
@@ -1186,6 +1866,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     }> = [];
     let firstConnectError: HarnessError | null = null;
     for (const candidate of activeGatewayCandidates) {
+      if (appOwner && appOwner.configId !== (yield* approvalConfigDigest(candidate.config))) {
+        continue;
+      }
       const result = yield* ensureConnectedFresh({
         serverId: candidate.id,
         scope: candidate.scope,
@@ -1193,7 +1876,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         harnessCapabilities: context.harnessCapabilities,
       }).pipe(Effect.result);
       if (Result.isSuccess(result)) {
-        connectedCandidates.push(result.success);
+        if (!appOwner || result.success.server.configDigest === candidate.configDigest) {
+          connectedCandidates.push(result.success);
+        }
       } else if (firstConnectError === null) {
         firstConnectError = result.failure;
       }
@@ -1220,136 +1905,339 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     }
 
     const { server, tool: targetTool } = binding;
+    if (appOwner !== undefined && !mcpAppToolCallableByApp(targetTool._meta)) {
+      return yield* new HarnessError({
+        code: "policy_denied",
+        serverId: server.id,
+        detail: "This tool is not callable by the MCP app.",
+      });
+    }
     const serverId = server.id;
     const upstreamToolName = targetTool.name;
     const pooled = connectedCandidates.find(
       (entry) => entry.server.id === server.id && entry.server.scope === server.scope,
     )!.pooled;
 
-    const isReadOnlyAnnotated = targetTool.annotations?.readOnlyHint === true;
-    const isExplicitlyAllowlisted =
-      server.config.allowedTools !== undefined &&
-      server.config.allowedTools.includes(upstreamToolName);
-    const policy = server.config.approvalPolicy;
-
-    // 1. Server policy `always-ask` always fails closed until interactive gateway prompts exist.
-    if (policy === "always-ask") {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: `Blocked "${toolName}" because MCP server "${serverId}" is configured with "always-ask" policy. Interactive gateway approval is not yet enabled; update the server's policy in Harness settings to permit execution.`,
-          },
-        ],
-      };
+    const policy = upstreamToolPolicy(context, binding);
+    if (typeof policy === "object") {
+      return { isError: true, content: [{ type: "text", text: policy.deny }] };
     }
-
-    // 2. Plan mode enforces read-only gating on gateway-hosted MCP tools.
-    if (context.interactionMode === "plan" && !isReadOnlyAnnotated) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: `Blocked "${toolName}" in Plan mode because it is not marked read-only. Switch back to Default mode to run mutating tools.`,
-          },
-        ],
-      };
-    }
-
-    // 3. Server policy `auto-read` never silently executes non-read-only tools.
-    if (policy === "auto-read" && !isReadOnlyAnnotated) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: `Blocked "${toolName}" because MCP server "${serverId}" policy is "auto-read" and this tool is not read-only. Switch the server policy to "auto-all" in Harness settings and use Full access mode to allow mutating tools.`,
-          },
-        ],
-      };
-    }
-
-    // 4. Supervised runtime modes enforce ceiling:
-    //    - Mutating tools require `full-access` even under `auto-all`.
-    //    - In `approval-required`, upstream `readOnlyHint` alone never bypasses approval unless
-    //      the owner explicitly pinned the tool in `allowedTools`.
-    if (!isReadOnlyAnnotated && context.runtimeMode !== "full-access") {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: `Blocked mutating tool "${toolName}" because this thread runs in "${context.runtimeMode}" mode. Switch the thread to Full access mode to allow mutating gateway tools.`,
-          },
-        ],
-      };
-    }
-    if (context.runtimeMode === "approval-required" && !isExplicitlyAllowlisted) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: `Blocked "${toolName}" in Approval-required mode: upstream readOnlyHint annotations alone do not bypass approval. Add "${upstreamToolName}" to the server's Allowed tools list or switch the thread out of Approval-required mode.`,
-          },
-        ],
-      };
-    }
-
-    // Re-verify live workspace trust, policy, config revision, and pool membership right before
-    // dispatch so a revocation or edit occurring while sibling candidates connected can never execute.
-    const preDispatchWorkspace = yield* store.resolveWorkspace(context.workspaceRoot);
-    if (!preDispatchWorkspace.managedPolicyAllowsHarness) {
-      return yield* new HarnessError({
-        code: "policy_denied",
-        serverId,
-        detail: "Organization policy does not allow portable harness extensions.",
+    const approval = context.approval;
+    const target = {
+      serverId,
+      serverScope: server.scope,
+      repoRoot: workspace.workspaceRoot,
+      toolName: upstreamToolName,
+      configDigest:
+        policy === "ask" && approval && approvalAudit
+          ? yield* approvalConfigDigest(server.config)
+          : server.configDigest,
+    } satisfies HarnessGatewayApprovalTarget;
+    const grantTarget =
+      approval === undefined
+        ? undefined
+        : { target, threadId: approval.threadId, providerSessionId: approval.providerSessionId };
+    const hasGrant =
+      policy === "ask" && grantTarget && approvalAudit
+        ? yield* approvalAudit.hasActiveGatewayGrant(grantTarget)
+        : false;
+    let grantScope: "always" | "session" | undefined;
+    if (policy === "ask" && !hasGrant) {
+      if (!approval?.request) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `MCP tool "${toolName}" requires approval from an active T3 Code thread.`,
+            },
+          ],
+        };
+      }
+      const properties = targetTool.inputSchema.properties;
+      const { decision, feedback } = yield* approval.request({
+        target,
+        readOnly: binding.exposed.readOnly,
+        argumentCount: Object.keys(args).length,
+        argumentNames:
+          properties !== null && typeof properties === "object"
+            ? Object.keys(properties)
+                .filter((name) => Object.hasOwn(args, name))
+                .slice(0, 16)
+            : [],
       });
+      if (decision === "decline" || decision === "cancel") {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: feedback
+                ? `User denied the MCP tool call: ${feedback}`
+                : "User denied the MCP tool call.",
+            },
+          ],
+        };
+      }
+      if (decision === "acceptAlways") grantScope = "always";
+      if (decision === "acceptForSession") grantScope = "session";
     }
-    const latestServer = preDispatchWorkspace.servers.find(
-      (candidate) => candidate.id === server.id && candidate.scope === server.scope,
+    const expectedPoolKey = yield* getOrCreateRecord(serverId).lock.withPermits(1)(
+      Effect.gen(function* () {
+        yield* (
+          approval?.validate?.({ serverId, readOnly: binding.exposed.readOnly }) ?? Effect.void
+        );
+        // Re-verify live workspace trust, policy, config revision, and pool membership right before
+        // dispatch so a revocation or edit occurring while sibling candidates connected can never execute.
+        const preDispatchWorkspace = yield* store.resolveWorkspace(context.workspaceRoot);
+        if (!preDispatchWorkspace.managedPolicyAllowsHarness) {
+          return yield* new HarnessError({
+            code: "policy_denied",
+            serverId,
+            detail: "Organization policy does not allow portable harness extensions.",
+          });
+        }
+        const latestServer = preDispatchWorkspace.servers.find(
+          (candidate) => candidate.id === server.id && candidate.scope === server.scope,
+        );
+        if (latestServer === undefined) {
+          return yield* new HarnessError({
+            code: "not_found",
+            serverId,
+            detail: `MCP server "${serverId}" is no longer configured.`,
+          });
+        }
+        yield* assertServerRunnable(latestServer);
+        if (resolveServerChannel(latestServer.config, context.harnessCapabilities) !== "gateway") {
+          return yield* new HarnessError({
+            code: "not_found",
+            serverId,
+            detail: `MCP server "${serverId}" is routed natively for this provider and is not callable through the T3 Harness gateway.`,
+          });
+        }
+        const expectedPoolKey = poolKeyFor(latestServer);
+        if (
+          latestServer.configDigest !== server.configDigest ||
+          preDispatchWorkspace.workspaceRoot !== workspace.workspaceRoot ||
+          runtimeScopeKey(latestServer) !== runtimeScopeKey(server) ||
+          pooled.connection.isClosed() ||
+          pool.get(expectedPoolKey) !== pooled
+        ) {
+          return yield* new HarnessError({
+            code: "invalid_config",
+            serverId,
+            detail: `MCP server "${serverId}" configuration or trust changed before tool execution. Retry the call.`,
+          });
+        }
+
+        if (
+          hasGrant &&
+          grantTarget &&
+          approvalAudit &&
+          !(yield* approvalAudit.hasActiveGatewayGrant(grantTarget))
+        ) {
+          return yield* new HarnessError({
+            code: "policy_denied",
+            serverId,
+            detail: "The MCP approval was revoked. Retry to request approval.",
+          });
+        }
+        if (grantScope !== undefined) {
+          if (!grantTarget || !approval || !approvalAudit) {
+            return yield* new HarnessError({
+              code: "policy_denied",
+              serverId,
+              detail: "The selected MCP approval could not be saved.",
+            });
+          }
+          yield* approvalAudit.recordGatewayGrant({
+            ...grantTarget,
+            providerInstanceId: approval.providerInstanceId,
+            workspaceRoot: workspace.workspaceRoot,
+            requestKind: "permission",
+            scope: grantScope,
+            summary: `${serverId}: ${upstreamToolName}`,
+          });
+        }
+        return expectedPoolKey;
+      }),
     );
-    if (latestServer === undefined) {
-      return yield* new HarnessError({
-        code: "not_found",
-        serverId,
-        detail: `MCP server "${serverId}" is no longer configured.`,
-      });
-    }
-    yield* assertServerRunnable(latestServer);
-    if (resolveServerChannel(latestServer.config, context.harnessCapabilities) !== "gateway") {
-      return yield* new HarnessError({
-        code: "not_found",
-        serverId,
-        detail: `MCP server "${serverId}" is routed natively for this provider and is not callable through the T3 Harness gateway.`,
-      });
-    }
-    const expectedPoolKey = poolKeyFor(latestServer);
-    if (
-      latestServer.configDigest !== server.configDigest ||
-      runtimeScopeKey(latestServer) !== runtimeScopeKey(server) ||
-      pooled.connection.isClosed() ||
-      pool.get(expectedPoolKey) !== pooled
-    ) {
-      return yield* new HarnessError({
-        code: "invalid_config",
-        serverId,
-        detail: `MCP server "${serverId}" configuration or trust changed before tool execution. Retry the call.`,
-      });
-    }
 
     pooled.lastUsedMs = yield* Clock.currentTimeMillis;
-    return yield* pooled.connection
+    const callRes = yield* pooled.connection
       .callTool(upstreamToolName, args)
       .pipe(
-        Effect.tapError(() =>
-          pooled.connection.isClosed()
-            ? closePooledInstance(serverId, expectedPoolKey, pooled)
+        Effect.tapError((error) =>
+          pooled.connection.isClosed() || error.code === "auth_required"
+            ? closePooledInstance(serverId, expectedPoolKey, pooled, error)
             : Effect.void,
         ),
       );
+    const rewrittenResultMeta = rewriteMcpAppMeta(serverId, callRes._meta);
+    const cleaned = stripMcpAppToolOutput(callRes) as UpstreamMcpCallResult;
+    const appResourceUri =
+      callRes.isError || appOwner !== undefined
+        ? undefined
+        : (mcpAppToolResourceUri(rewrittenResultMeta) ??
+          mcpAppToolResourceUri(binding.exposed._meta));
+    const appConfigId =
+      appResourceUri === undefined
+        ? undefined
+        : yield* approvalConfigDigest(server.config).pipe(Effect.orElseSucceed(() => undefined));
+    return {
+      ...cleaned,
+      ...(rewrittenResultMeta === undefined ? {} : { _meta: rewrittenResultMeta }),
+      ...(appResourceUri === undefined || appConfigId === undefined
+        ? {}
+        : { appSource: { uri: appResourceUri, configId: appConfigId } }),
+    };
+  });
+
+  const listResourcesForSession: McpGateway["Service"]["listResourcesForSession"] = Effect.fn(
+    "McpGateway.listResourcesForSession",
+  )(function* (context, options) {
+    const workspace = yield* store.resolveWorkspace(context.workspaceRoot);
+    if (!workspace.managedPolicyAllowsHarness) {
+      return [];
+    }
+    const activeGatewayServers = workspace.servers.filter(
+      (server) =>
+        server.effectiveEnabled &&
+        server.trusted &&
+        !server.needsTrustConfirmation &&
+        server.blockedByPolicyReason === null &&
+        isMcpServerAllowedByMode(server.id, context.activeMode) &&
+        resolveServerChannel(server.config, context.harnessCapabilities) === "gateway",
+    );
+
+    const perServer = yield* Effect.forEach(
+      activeGatewayServers,
+      (server) =>
+        Effect.gen(function* () {
+          const existing = pool.get(poolKeyFor(server));
+          if (options?.connectedOnly && (existing === undefined || existing.connection.isClosed()))
+            return [];
+          const { server: freshServer, pooled } = options?.connectedOnly
+            ? { server, pooled: existing! }
+            : yield* ensureConnectedFresh({
+                serverId: server.id,
+                scope: server.scope,
+                workspaceRoot: context.workspaceRoot,
+                harnessCapabilities: context.harnessCapabilities,
+              });
+          const listRes = pooled.connection.listResources;
+          if (!listRes) {
+            return [];
+          }
+          return yield* listRes().pipe(
+            Effect.map((resources: ReadonlyArray<UpstreamMcpResource>) =>
+              resources.map((resource): GatewayExposedResource => ({
+                uri: canonicalExposedResourceUri(freshServer.id, resource.uri),
+                serverId: freshServer.id,
+                upstreamUri: resource.uri,
+                name: resource.name,
+                ...(resource.description ? { description: resource.description } : {}),
+                ...(resource.mimeType ? { mimeType: resource.mimeType } : {}),
+                ...(resource._meta ? { _meta: resource._meta } : {}),
+              })),
+            ),
+            Effect.orElseSucceed(() => [] as ReadonlyArray<GatewayExposedResource>),
+          );
+        }).pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<GatewayExposedResource>)),
+      { concurrency: 4 },
+    );
+
+    return perServer.flat();
+  });
+
+  const readResourceForSession: McpGateway["Service"]["readResourceForSession"] = Effect.fn(
+    "McpGateway.readResourceForSession",
+  )(function* ({ context, uri, connectedOnly, appOwner }) {
+    const workspace = yield* store.resolveWorkspace(context.workspaceRoot);
+    if (!workspace.managedPolicyAllowsHarness) {
+      return yield* new HarnessError({
+        code: "policy_denied",
+        detail: "Organization policy does not allow portable harness extensions.",
+      });
+    }
+    const decoded = decodeCanonicalExposedResourceUri(uri);
+    if (decoded === null || (appOwner && decoded.serverId !== appOwner.serverId)) {
+      return yield* new HarnessError({
+        code: "not_found",
+        detail: `Unknown gateway resource URI "${uri}".`,
+      });
+    }
+    const server = workspace.servers.find(
+      (candidate) =>
+        candidate.id === decoded.serverId &&
+        candidate.effectiveEnabled &&
+        candidate.trusted &&
+        !candidate.needsTrustConfirmation &&
+        candidate.blockedByPolicyReason === null &&
+        isMcpServerAllowedByMode(candidate.id, context.activeMode) &&
+        resolveServerChannel(candidate.config, context.harnessCapabilities) === "gateway",
+    );
+    if (server === undefined) {
+      return yield* new HarnessError({
+        code: "not_found",
+        serverId: decoded.serverId,
+        detail: `MCP server "${decoded.serverId}" is not active on the T3 Harness gateway.`,
+      });
+    }
+    if (appOwner && appOwner.configId !== (yield* approvalConfigDigest(server.config))) {
+      return yield* new HarnessError({
+        code: "policy_denied",
+        serverId: server.id,
+        detail: "The MCP app's server configuration changed.",
+      });
+    }
+    const existing = pool.get(poolKeyFor(server));
+    if (connectedOnly && (existing === undefined || existing.connection.isClosed())) {
+      return yield* new HarnessError({
+        code: "not_found",
+        serverId: server.id,
+        detail: "MCP server is not connected.",
+      });
+    }
+    const connected = connectedOnly
+      ? { server, pooled: existing! }
+      : yield* ensureConnectedFresh({
+          serverId: server.id,
+          scope: server.scope,
+          workspaceRoot: context.workspaceRoot,
+          harnessCapabilities: context.harnessCapabilities,
+        });
+    if (appOwner && connected.server.configDigest !== server.configDigest) {
+      return yield* new HarnessError({
+        code: "policy_denied",
+        serverId: server.id,
+        detail: "The MCP app's server configuration changed.",
+      });
+    }
+    const { pooled } = connected;
+    const readRes = pooled.connection.readResource;
+    if (!readRes) {
+      return yield* new HarnessError({
+        code: "upstream_error",
+        serverId: server.id,
+        detail: `MCP server "${server.id}" does not support resources/read.`,
+      });
+    }
+    pooled.lastUsedMs = yield* Clock.currentTimeMillis;
+    const raw = yield* readRes(decoded.upstreamUri).pipe(
+      Effect.tapError((error) =>
+        pooled.connection.isClosed() || error.code === "auth_required"
+          ? closePooledInstance(server.id, poolKeyFor(server), pooled, error)
+          : Effect.void,
+      ),
+    );
+    // Rewrite returned content URIs back to the canonical gateway URI so MCP App frames resolve cleanly.
+    return {
+      contents: raw.contents.map((item) => ({
+        ...item,
+        uri,
+      })),
+    };
   });
 
   return McpGateway.of({
@@ -1357,9 +2245,16 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     getLogs,
     restartServer,
     invalidateServer,
+    updateServer,
+    startOAuth,
+    completeOAuth,
+    disconnectOAuth,
     resolveSessionInjection,
     listToolsForSession,
+    listAppTools: collectAllGatewayTools,
     callToolForSession,
+    listResourcesForSession,
+    readResourceForSession,
     evictIdle,
   });
 });

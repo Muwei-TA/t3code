@@ -567,11 +567,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("beta link another machine vps peer agents work there delegate")],
   },
   {
-    id: "workflows-beta",
+    id: "workflows",
     title: msg("Workflows"),
-    to: "/settings/labs",
-    scope: "environment",
-    searchTerms: [msg("beta workflow durable runs automation steps schedule webhook folder")],
+    to: "/settings/scheduled-tasks",
+    scope: "environment-defaults",
+    searchTerms: [msg("workflow durable runs automation steps schedule webhook folder")],
   },
   {
     id: "prompt-suggestions-beta",
@@ -1529,9 +1529,15 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "harness-mcp",
-    title: msg("Portable MCP servers"),
+    title: msg(
+      "Portable MCP servers, modes, skills, rules, commands, plugins, hooks, memory & sync",
+    ),
     to: "/settings/harness",
-    searchTerms: [msg("harness mcp gateway stdio http sse import codex claude cursor antigravity")],
+    searchTerms: [
+      msg(
+        "harness mcp gateway stdio http sse modes build plan review creator plugins claude-plugin sdk hooks pretooluse posttooluse memory notes git sync push pull diff approvals allow always revoke skills rules agents.md commands slash import export codex claude cursor antigravity",
+      ),
+    ],
   },
   {
     id: "archive",
@@ -1593,6 +1599,12 @@ const MOVED_SECTION_ANCHORS: Readonly<Record<string, SettingsPath>> = {
 
 /** Where an old settings link now lives. Its anchor finds the page its row moved to. */
 export function movedSettingsPath(pathname: string, hash: string): SettingsPath | null {
+  if (
+    (pathname === "/settings/labs" || pathname === "/settings/beta") &&
+    hash === "workflows-beta"
+  ) {
+    return "/settings/scheduled-tasks";
+  }
   if (!SPLIT_SETTINGS_PATHS.has(pathname)) return null;
   const items: readonly SettingsSearchItem[] = SETTINGS_SEARCH_ITEMS;
   const anchored = hash

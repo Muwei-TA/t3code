@@ -1,5 +1,7 @@
 import {
   type EnvironmentId,
+  type HarnessCommandEntry,
+  type HarnessSkillEntry,
   isProviderWorkspaceSnapshotCurrent,
   isProviderWorkspaceSnapshotPending,
   PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS,
@@ -7,6 +9,7 @@ import {
   type ServerProvider,
   type ServerProviderSkill,
   type ServerProviderSlashCommand,
+  TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 
@@ -31,6 +34,66 @@ export function dedupeProviderSkillsByName(
     seenNames.add(normalizedName);
     return true;
   });
+}
+
+/** Merges enabled portable Harness skills into provider-native skills, deduplicating by path and name. */
+export function mergePortableHarnessSkills(
+  nativeSkills: ReadonlyArray<ServerProviderSkill>,
+  portableSkills: ReadonlyArray<HarnessSkillEntry> | undefined,
+): ReadonlyArray<ServerProviderSkill> {
+  if (!portableSkills || portableSkills.length === 0) return nativeSkills;
+  const seenPaths = new Set(nativeSkills.map((skill) => normalizePathSeparators(skill.path)));
+  const seenNames = new Set(nativeSkills.map((skill) => skill.name.trim().toLowerCase()));
+  const extras: Array<ServerProviderSkill> = [];
+  for (const entry of portableSkills) {
+    if (!entry.effectiveEnabled) continue;
+    const normalizedPath = normalizePathSeparators(entry.sourcePath);
+    const normalizedName = entry.name.trim().toLowerCase();
+    if (seenPaths.has(normalizedPath) || seenNames.has(normalizedName)) continue;
+    seenPaths.add(normalizedPath);
+    seenNames.add(normalizedName);
+    extras.push({
+      name: entry.name,
+      path: TrimmedNonEmptyString.make(entry.sourcePath),
+      scope: TrimmedNonEmptyString.make(entry.scope === "project" ? "project" : "personal"),
+      enabled: true,
+      ...(entry.description !== undefined && entry.description.trim().length > 0
+        ? { description: TrimmedNonEmptyString.make(entry.description.trim()) }
+        : {}),
+      ...(entry.shortDescription !== undefined && entry.shortDescription.trim().length > 0
+        ? { shortDescription: TrimmedNonEmptyString.make(entry.shortDescription.trim()) }
+        : {}),
+      ...(entry.userInvocationOnly ? { userInvocationOnly: true } : {}),
+      ...(!entry.userInvocable ? { userInvocable: false } : {}),
+    });
+  }
+  return extras.length === 0 ? nativeSkills : [...nativeSkills, ...extras];
+}
+
+/** Merges enabled portable Harness custom `/` commands into provider slash commands without shadowing. */
+export function mergePortableHarnessCommands(
+  nativeCommands: ReadonlyArray<ServerProviderSlashCommand>,
+  portableCommands: ReadonlyArray<HarnessCommandEntry> | undefined,
+): ReadonlyArray<ServerProviderSlashCommand> {
+  if (!portableCommands || portableCommands.length === 0) return nativeCommands;
+  const seen = new Set(nativeCommands.map((cmd) => cmd.name.trim().toLowerCase()));
+  const extras: Array<ServerProviderSlashCommand> = [];
+  for (const entry of portableCommands) {
+    if (!entry.effectiveEnabled) continue;
+    const key = entry.id.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    extras.push({
+      name: entry.name,
+      ...(entry.description !== undefined && entry.description.trim().length > 0
+        ? { description: TrimmedNonEmptyString.make(entry.description.trim()) }
+        : {}),
+      ...(entry.argumentHint !== undefined && entry.argumentHint.trim().length > 0
+        ? { input: { hint: TrimmedNonEmptyString.make(entry.argumentHint.trim()) } }
+        : {}),
+    });
+  }
+  return extras.length === 0 ? nativeCommands : [...nativeCommands, ...extras];
 }
 
 /**

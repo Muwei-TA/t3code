@@ -22,8 +22,11 @@ import {
 import { isUsageLimitsCommand } from "@t3tools/shared/usageLimits";
 import {
   AuthOrchestrationOperateScope,
+  workflowHostLaunchCommandId,
+  type WorkflowSummary,
   DEFAULT_MODEL,
   type EnvironmentId,
+  type HarnessModeId,
   type ModelSelection,
   type PreviewAnnotationPayload,
   type ResponseContextRecord,
@@ -95,7 +98,8 @@ import {
   previewAnnotationContextReference,
   responseContextReference,
 } from "../../lib/composerContextRecords";
-import { environmentServerConfigsAtom } from "../../state/server";
+import { environmentServerConfigsAtom, serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { threadEnvironment } from "../../state/threads";
 import { runMobileComposerTransition } from "./draftHeroTransition";
 import { useClientSettingsHydrated } from "../../hooks/useSettings";
@@ -106,6 +110,7 @@ import {
   composerDraftContentChanged,
   loadBalancingSendWarning,
   multipleModelSendBlock,
+  referencedMcpResources,
   referencedThreadContexts,
 } from "./composerSend.logic";
 import { useMultipleModelSend } from "./useMultipleModelSend";
@@ -199,6 +204,7 @@ type UsageLimitsPanel = ReturnType<typeof useUsageLimitsPanel>;
 type TimelineFollow = ReturnType<typeof useTimelineFollow>;
 
 interface ComposerSendInput {
+  readonly selectedWorkflow: WorkflowSummary | null;
   readonly environmentId: EnvironmentId;
   readonly routeThreadKey: string;
   readonly currentRouteThreadKeyRef: { readonly current: string | null };
@@ -217,6 +223,7 @@ interface ComposerSendInput {
   readonly phase: SessionPhase;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
+  readonly modeId?: HarnessModeId | undefined;
   readonly sendEnvMode: DraftThreadEnvMode;
   /** Tracked repositories a new worktree takes; undefined leaves the choice to the server. */
   readonly worktreeRepositories: ReadonlyArray<{ readonly path: string }> | undefined;
@@ -288,8 +295,10 @@ interface ComposerSendInput {
     threadId: ThreadId;
     createdAt: string;
     branch?: string;
+    modelSelection?: ModelSelection;
     runtimeMode: RuntimeMode;
     interactionMode: ProviderInteractionMode;
+    modeId?: HarnessModeId | undefined;
   }) => Promise<AtomCommandResult<void, unknown>>;
   /** Links a checked-out pull request to its thread; best effort, failures only logged. */
   readonly linkCheckoutPullRequest: (threadRef: ScopedThreadRef, url: string) => void;
@@ -321,6 +330,7 @@ export function useComposerSend(input: ComposerSendInput) {
     phase,
     runtimeMode,
     interactionMode,
+    modeId,
     sendEnvMode,
     worktreeRepositories,
     startFromOrigin,
@@ -378,6 +388,11 @@ export function useComposerSend(input: ComposerSendInput) {
     persistThreadSettingsForNextTurn,
     linkCheckoutPullRequest,
   } = input;
+  const launchWorkflowHost = useAtomCommand(threadEnvironment.launch, { reportFailure: false });
+  const startWorkflow = useAtomCommand(serverEnvironment.startWorkflowRun, {
+    reportFailure: false,
+  });
+  const workflowAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
   const linkedEnvironments = useLinkedEnvironments(environmentId);
   const handleNewThread = useNewThreadHandler();
   const navigate = useNavigate();
@@ -404,7 +419,7 @@ export function useComposerSend(input: ComposerSendInput) {
     resetLocalDispatch,
     setThreadError,
   });
-  const { sendInFlight: sendInFlightRef } = draftSendState(routeThreadKey);
+  const { sendInFlight: sendInFlightRef, pendingWorkflowHost } = draftSendState(routeThreadKey);
   const composerSendGenerationRef = useRef(0);
   const environmentUnavailableSendToastSlotRef = useRef(0);
   // A send awaits uploads before it declines, so it reads the approvals pending by then.
@@ -569,6 +584,7 @@ export function useComposerSend(input: ComposerSendInput) {
           reviewComments: draftAfterHold.reviewComments,
           threadContexts: draftAfterHold.threadContexts,
           environmentContexts: draftAfterHold.environmentContexts,
+          mcpResourceContexts: draftAfterHold.mcpResourceContexts,
         };
       }
     }
@@ -622,6 +638,7 @@ export function useComposerSend(input: ComposerSendInput) {
       const replyTo =
         useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.replyTo ?? null;
       const prompt = withReplyReference(sideChatCommand.prompt, replyTo);
+      const mcpResourceContexts = referencedMcpResources(prompt, sendCtx.mcpResourceContexts);
       const { sendableTerminalContexts, hasSendableContent } = deriveComposerSendState({
         prompt,
         imageCount: sendCtx.images.length + sendCtx.files.length,
@@ -631,7 +648,8 @@ export function useComposerSend(input: ComposerSendInput) {
           sendCtx.previewAnnotations.length +
           sendCtx.reviewComments.length +
           sendCtx.threadContexts.length +
-          sendCtx.environmentContexts.length,
+          sendCtx.environmentContexts.length +
+          mcpResourceContexts.length,
       });
       // An answer's text and attachments live in the question's draft, apart from this one.
       if (
@@ -643,7 +661,8 @@ export function useComposerSend(input: ComposerSendInput) {
           sendCtx.previewAnnotations.length > 0 ||
           sendCtx.reviewComments.length > 0 ||
           sendCtx.threadContexts.length > 0 ||
-          sendCtx.environmentContexts.length > 0)
+          sendCtx.environmentContexts.length > 0 ||
+          mcpResourceContexts.length > 0)
       ) {
         toastManager.add(
           stackedThreadToast({
@@ -658,6 +677,7 @@ export function useComposerSend(input: ComposerSendInput) {
       const snapshot = snapshotComposerSend({
         ...sendCtx,
         prompt,
+        mcpResourceContexts,
         sendableTerminalContexts,
         replyTo,
       });
@@ -805,6 +825,7 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
       environmentContexts: composerEnvironmentContexts,
+      mcpResourceContexts: draftMcpResourceContexts,
       selectedProvider: ctxSelectedProvider,
       selectedModel: ctxSelectedModel,
       selectedProviderModels: ctxSelectedProviderModels,
@@ -828,6 +849,10 @@ export function useComposerSend(input: ComposerSendInput) {
     const replyTo =
       useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.replyTo ?? null;
     const promptForSend = withReplyReference(draftPrompt, replyTo);
+    const composerMcpResourceContexts = referencedMcpResources(
+      promptForSend,
+      draftMcpResourceContexts,
+    );
     if (warnStrandedThreadContext(promptForSend, composerThreadContexts)) return;
     if (queuedRunEdit.isEditing) {
       // A queued message stays in its thread, so saving `/side` would send it to main.
@@ -855,6 +880,7 @@ export function useComposerSend(input: ComposerSendInput) {
           previewAnnotations: composerPreviewAnnotations,
           threadContexts: composerThreadContexts,
           environmentContexts: composerEnvironmentContexts,
+          mcpResourceContexts: composerMcpResourceContexts,
           replyTo,
         },
         setThreadError,
@@ -875,7 +901,8 @@ export function useComposerSend(input: ComposerSendInput) {
         composerPreviewAnnotations.length +
         composerReviewComments.length +
         composerThreadContexts.length +
-        composerEnvironmentContexts.length,
+        composerEnvironmentContexts.length +
+        composerMcpResourceContexts.length,
     });
     const feedbackCommand =
       ctxSelectedProvider === "codex" &&
@@ -885,7 +912,8 @@ export function useComposerSend(input: ComposerSendInput) {
       composerPreviewAnnotations.length === 0 &&
       composerReviewComments.length === 0 &&
       composerThreadContexts.length === 0 &&
-      composerEnvironmentContexts.length === 0
+      composerEnvironmentContexts.length === 0 &&
+      composerMcpResourceContexts.length === 0
         ? parseCodexFeedbackCommand(trimmed)
         : null;
     if (feedbackCommand && multipleModelSelections === null) {
@@ -947,6 +975,7 @@ export function useComposerSend(input: ComposerSendInput) {
       composerReviewComments.length === 0 &&
       composerThreadContexts.length === 0 &&
       composerEnvironmentContexts.length === 0 &&
+      composerMcpResourceContexts.length === 0 &&
       replyTo === null;
     if (freshSessionAvailable && composerHoldsOnlyText && isClearComposerCommand(trimmed)) {
       armFreshSession(routeThreadKey);
@@ -996,6 +1025,7 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
       environmentContexts: composerEnvironmentContexts,
+      mcpResourceContexts: composerMcpResourceContexts,
       replyTo,
     });
     const {
@@ -1006,6 +1036,7 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewCommentsSnapshot,
       threadContexts: composerThreadContextsSnapshot,
       environmentContexts: composerEnvironmentContextsSnapshot,
+      mcpResourceContexts: composerMcpResourceContextsSnapshot,
       messageText: messageTextForSend,
     } = sendSnapshot;
     const {
@@ -1031,11 +1062,146 @@ export function useComposerSend(input: ComposerSendInput) {
       dispatchMode,
       freshContext: freshArm !== undefined,
     });
-    if (missingWorktreeBaseBranch) {
+    const pendingHost =
+      pendingWorkflowHost.current?.threadId === threadIdForSend
+        ? pendingWorkflowHost.current
+        : null;
+    if (missingWorktreeBaseBranch && (input.selectedWorkflow === null || pendingHost === null)) {
       setThreadError(
         threadIdForSend,
         m(msg("Select a base branch before sending in New worktree mode.")),
       );
+      return;
+    }
+    if (input.selectedWorkflow !== null) {
+      const workflow = input.selectedWorkflow;
+      const worktreeBase =
+        baseBranchForWorktree ??
+        (draftId !== null && draftThread?.envMode === "worktree" ? draftThread.branch : null);
+      if (
+        !composerHoldsOnlyText ||
+        !trimmed ||
+        multipleModelSelections !== null ||
+        directAnnotation
+      ) {
+        setThreadError(
+          threadIdForSend,
+          m(msg("Workflow Mode starts with a text prompt and one model.")),
+        );
+        return;
+      }
+      const fingerprint = JSON.stringify([
+        environmentId,
+        threadIdForSend,
+        workflow.name,
+        workflow.version,
+        trimmed,
+      ]);
+      const key =
+        workflowAttempt.current?.fingerprint === fingerprint
+          ? workflowAttempt.current.key
+          : newMessageId();
+      workflowAttempt.current = { fingerprint, key };
+      const target = scopeThreadRef(environmentId, threadIdForSend);
+      sendInFlightRef.current = true;
+      const attempt = await settlePromise(async () => {
+        if (pendingHost !== null || isLocalDraftThread || worktreeBase) {
+          const host =
+            pendingHost ??
+            ({
+              commandId: workflowHostLaunchCommandId(threadIdForSend),
+              threadId: threadIdForSend,
+              ...(draftId !== null || isLocalDraftThread ? {} : { reuseExistingThread: true }),
+              projectId: activeProject.id,
+              title: deriveThreadTitleSeed({ text: trimmed, attachments: [] }, m),
+              modelSelection: ctxSelectedModelSelection,
+              runtimeMode,
+              interactionMode,
+              ...(modeId === undefined ? {} : { modeId }),
+              awaitWorkspacePreparation: true,
+              workspaceStrategy: worktreeBase
+                ? {
+                    type: "worktree",
+                    baseRef: worktreeBase,
+                    ...((
+                      draftId !== null
+                        ? (draftThread?.startFromOrigin ?? startFromOrigin)
+                        : startFromOrigin
+                    )
+                      ? { startFromOrigin: true }
+                      : {}),
+                    ...(worktreeRepositories ? { repositories: worktreeRepositories } : {}),
+                  }
+                : activeThread.worktreePath === null
+                  ? {
+                      type: "root",
+                      ...(activeThreadBranch === null ? {} : { branch: activeThreadBranch }),
+                    }
+                  : { type: "existing_worktree", worktreePath: activeThread.worktreePath },
+            } satisfies import("@t3tools/contracts").OrchestrationV2ThreadLaunchInput);
+          pendingWorkflowHost.current = host;
+          const launch = await launchWorkflowHost({ environmentId, input: host });
+          if (launch._tag === "Failure") throw squashAtomCommandFailure(launch);
+          pendingWorkflowHost.current = null;
+        }
+        const settings = await persistThreadSettingsForNextTurn({
+          threadId: threadIdForSend,
+          createdAt: new Date().toISOString(),
+          ...(localCheckoutBranchMismatch && pendingHost === null && !worktreeBase
+            ? { branch: localCheckoutBranchMismatch.currentBranch }
+            : {}),
+          modelSelection: ctxSelectedModelSelection,
+          runtimeMode,
+          interactionMode,
+          ...(modeId === undefined ? {} : { modeId }),
+        });
+        if (settings._tag === "Failure") throw squashAtomCommandFailure(settings);
+        const started = await startWorkflow({
+          environmentId,
+          input: {
+            workflow: workflow.name,
+            version: workflow.version,
+            projectId: activeProject.id,
+            threadId: threadIdForSend,
+            prompt: trimmed,
+            idempotencyKey: key,
+          },
+        });
+        if (started._tag === "Failure") throw squashAtomCommandFailure(started);
+      });
+      sendInFlightRef.current = false;
+      if (attempt._tag === "Failure") {
+        setThreadError(
+          threadIdForSend,
+          thrownErrorMessage(squashAtomCommandFailure(attempt), m) ??
+            m(msg("Could not start the workflow.")),
+        );
+        return;
+      }
+      workflowAttempt.current = null;
+      setThreadError(threadIdForSend, null);
+      if (
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ===
+          promptAtSend &&
+        !draftHasNonPromptContent(composerDraftTarget)
+      ) {
+        setComposerDraftPrompt(composerDraftTarget, "");
+        if (isCurrentRouteThread()) {
+          promptRef.current = "";
+          composerRef.current?.resetCursorState();
+        }
+      }
+      if (draftId !== null || isLocalDraftThread) {
+        markPromotedDraftThreadByRef(target);
+        if (isCurrentRouteThread()) {
+          void navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(target),
+          });
+        } else {
+          finalizePromotedDraftThreadByRef(target);
+        }
+      }
       return;
     }
     // Records bind attachments by the id each side knows: the local id for the optimistic
@@ -1048,6 +1214,7 @@ export function useComposerSend(input: ComposerSendInput) {
         previewAnnotations: composerPreviewAnnotationsSnapshot,
         threadContexts: composerThreadContextsSnapshot,
         environmentContexts: composerEnvironmentContextsSnapshot,
+        mcpResourceContexts: composerMcpResourceContextsSnapshot,
         replyTo,
         attachments: composerAttachmentsSnapshot.map((attachment, index) => ({
           attachment,
@@ -1456,6 +1623,7 @@ export function useComposerSend(input: ComposerSendInput) {
           : {}),
         runtimeMode,
         interactionMode,
+        ...(modeId !== undefined ? { modeId } : {}),
       });
       if (settingsResult._tag === "Failure") {
         failure = settingsResult;
@@ -1489,6 +1657,7 @@ export function useComposerSend(input: ComposerSendInput) {
           modelSelection: ctxSelectedModelSelection,
           runtimeMode,
           interactionMode,
+          ...(modeId !== undefined ? { modeId } : {}),
         },
       });
       if (compactResult._tag === "Failure") {
@@ -1510,6 +1679,7 @@ export function useComposerSend(input: ComposerSendInput) {
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
                       interactionMode,
+                      ...(modeId !== undefined ? { modeId } : {}),
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
@@ -1560,6 +1730,7 @@ export function useComposerSend(input: ComposerSendInput) {
           titleSeed: title,
           runtimeMode,
           interactionMode,
+          ...(modeId !== undefined ? { modeId } : {}),
           dispatchMode: turnDispatchMode,
           ...(freshArm === undefined ? {} : { freshContext: true }),
           ...(bootstrap ? { bootstrap } : {}),

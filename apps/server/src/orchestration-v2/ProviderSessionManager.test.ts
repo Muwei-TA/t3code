@@ -5437,7 +5437,9 @@ it.effect(
       yield* Effect.gen(function* () {
         const { manager, parent, resumeChild } = yield* makeNativeChildFixture();
         yield* resumeChild;
+        assert.isTrue(yield* manager.isLive(parent.providerSessionId, parent.threadId));
         yield* manager.detach(parent);
+        assert.isFalse(yield* manager.isLive(parent.providerSessionId, parent.threadId));
 
         assert.deepEqual((yield* Ref.get(state)).unloadedNativeThreadIds, []);
         // The child's next turn trusts the manager's loaded cache, so the

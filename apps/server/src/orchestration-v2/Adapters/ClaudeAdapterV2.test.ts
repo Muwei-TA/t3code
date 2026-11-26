@@ -7335,6 +7335,28 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("leaves gateway MCP app capture to the server", () =>
+    Effect.gen(function* () {
+      const { item, mcpRequests } = yield* runClaudeMcpAppToolTurn(
+        MCP_APP_CAPABILITIES,
+        { mcpServerStatus: Effect.succeed([{ ...PROBE_SERVER_STATUS, name: "t3-harness" }]) },
+        "mcp__t3-harness__show_weather",
+      );
+      assert.isUndefined(mcpAppFromToolItem(item));
+      assert.deepEqual(mcpRequests, []);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
+  );
+
   it.effect("keeps a plain MCP tool row when the Claude CLI lacks MCP Apps support", () =>
     Effect.gen(function* () {
       const { harness, item, mcpRequests } = yield* runClaudeMcpAppToolTurn([]);

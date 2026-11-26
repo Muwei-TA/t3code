@@ -19,6 +19,11 @@ vi.mock("../../state/server", () => ({
     refreshProviders: Symbol("refreshProviders"),
   },
 }));
+vi.mock("../../state/harness", () => ({
+  harnessEnvironment: {
+    libraryQuery: vi.fn(),
+  },
+}));
 
 import type { ModelOption } from "../../lib/modelOptions";
 import {

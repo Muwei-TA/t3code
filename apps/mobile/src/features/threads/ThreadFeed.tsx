@@ -372,6 +372,7 @@ export interface ThreadFeedHistoryControls {
 }
 
 export interface ThreadFeedProps {
+  readonly workflowRuns?: ReactNode;
   readonly toolCallVisibility?: ToolCallVisibility;
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
   readonly preparingWorktree?: boolean;
@@ -4468,8 +4469,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
               </>
             }
             ListFooterComponent={
-              props.pendingHandoff || props.statusLines?.length ? (
+              props.pendingHandoff || props.statusLines?.length || props.workflowRuns ? (
                 <>
+                  {props.workflowRuns}
                   {props.pendingHandoff ? (
                     <ThreadHandoffDivider
                       environmentId={props.environmentId}
@@ -4494,6 +4496,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           />
         </View>
         {presentedFeed.length === 0 &&
+        !props.workflowRuns &&
         !props.worktreeSetup &&
         props.activeWorkStartedAt === null &&
         props.contentPresentation.kind === "ready" ? (

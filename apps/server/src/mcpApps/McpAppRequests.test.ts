@@ -1,11 +1,16 @@
 import {
+  HarnessMcpServerId,
+  ProjectId,
   ProviderDriverKind,
+  ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
+  RunId,
   ThreadId,
   TurnItemId,
   type McpAppRequestError,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2ThreadShell,
   type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
@@ -13,13 +18,20 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as McpAppModelContext from "./McpAppModelContext.ts";
 import * as McpAppRequests from "./McpAppRequests.ts";
+import * as McpGateway from "../harness/McpGateway.ts";
+import * as HarnessLibraryStore from "../harness/HarnessLibraryStore.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import { gatewayAppTurnItemSignal } from "./GatewayMcpAppCapture.ts";
 
 const threadId = ThreadId.make("thread-app");
 const itemId = TurnItemId.make("item-app");
@@ -35,7 +47,7 @@ const deepParent = (id: ThreadId): ThreadId | null => {
   return depth === 1 ? threadId : deepForkId(depth - 1);
 };
 
-const appItem = (output: unknown): OrchestrationV2TurnItem => ({
+const appItem = (output: unknown): Extract<OrchestrationV2TurnItem, { type: "dynamic_tool" }> => ({
   id: itemId,
   threadId,
   runId: null,
@@ -64,11 +76,32 @@ const app = {
 };
 
 const storedContext = new Map<string, string>();
+const projectId = ProjectId.make("project-app");
+const providerInstanceId = ProviderInstanceId.make("fixture-provider");
+
+const gatewayApp = {
+  ...app,
+  server: "t3-harness",
+  tool: "fixture__show",
+  resourceUri: "ui://fixture/fixture/app",
+};
+const gatewayRunId = RunId.make("gateway-app-run");
+const gatewayItemId = IdAllocator.derive.runSignalTurnItem({
+  runId: gatewayRunId,
+  signal: gatewayAppTurnItemSignal(gatewayApp.attachmentId),
+});
+const gatewayItem = {
+  ...appItem({ t3McpApp: gatewayApp, gatewayConfigId: "fixture-config" }),
+  id: gatewayItemId,
+  runId: gatewayRunId,
+  toolName: "t3-harness.fixture__show",
+} satisfies OrchestrationV2TurnItem;
 
 function makeLayer(input: {
   readonly item: OrchestrationV2TurnItem | null;
   readonly mcpApps?: ProviderAdapter.ProviderAdapterV2McpApps;
   readonly live?: boolean;
+  readonly isLive?: ProviderSessionManager.ProviderSessionManagerV2["Service"]["isLive"];
 }) {
   return McpAppRequests.layer.pipe(
     Layer.provide(
@@ -85,6 +118,17 @@ function makeLayer(input: {
           getTurnItem: () => Effect.succeed(input.item),
         }),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadShell: () =>
+            Effect.succeed({
+              projectId,
+              providerInstanceId,
+              worktreePath: null,
+              archivedAt: null,
+              deletedAt: null,
+              activeRunId: null,
+              runtimeMode: "approval-required",
+              interactionMode: "default",
+            } as OrchestrationV2ThreadShell),
           getThreadRecords: (id: ThreadId) =>
             Effect.succeed({
               thread: {
@@ -104,11 +148,17 @@ function makeLayer(input: {
                       : { parentThreadId: null, relationshipToParent: null, rootThreadId: id },
               },
               providerThreads: [
-                { id: providerThreadId, providerSessionId } as OrchestrationV2ProviderThread,
+                {
+                  id: providerThreadId,
+                  providerSessionId,
+                  providerInstanceId,
+                } as OrchestrationV2ProviderThread,
               ],
+              runs: [],
             } as never),
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+          isLive: input.isLive ?? (() => Effect.succeed(false)),
           get: () =>
             Effect.succeed(
               input.live === false
@@ -134,6 +184,112 @@ const reason = <A, R>(effect: Effect.Effect<A, McpAppRequestError, R>) =>
   );
 
 describe("McpAppRequests", () => {
+  it.effect(
+    "uses session approvals only while their provider is attached and keeps app reads on the same server",
+    () =>
+      Effect.gen(function* () {
+        let attached = true;
+        let detachDuringCall = false;
+        const reads: Array<string> = [];
+        const grantSessions: Array<ProviderSessionId | undefined> = [];
+        const harness = Layer.mergeAll(
+          Layer.mock(McpGateway.McpGateway)({
+            listAppTools: () =>
+              Effect.succeed([
+                {
+                  exposedName: "fixture__refresh",
+                  serverId: HarnessMcpServerId.make("fixture"),
+                  upstreamName: "refresh",
+                  description: "Refresh",
+                  inputSchema: {},
+                  readOnly: true,
+                },
+              ]),
+            callToolForSession: (input) =>
+              Effect.gen(function* () {
+                if (detachDuringCall) attached = false;
+                yield* (
+                  input.context.approval?.validate?.({
+                    serverId: input.appOwner!.serverId,
+                    readOnly: true,
+                  }) ?? Effect.void
+                );
+                grantSessions.push(input.context.approval?.providerSessionId);
+                return { content: [] };
+              }),
+            readResourceForSession: ({ uri, appOwner }) =>
+              Effect.sync(() => {
+                const decoded = McpGateway.decodeCanonicalExposedResourceUri(uri)!;
+                assert.equal(decoded.serverId, appOwner?.serverId);
+                reads.push(decoded.upstreamUri);
+                return { contents: [{ uri, text: "ok" }] };
+              }),
+          }),
+          Layer.mock(HarnessLibraryStore.HarnessLibraryStore)({
+            resolveMode: () => Effect.succeed(null),
+          }),
+          Layer.mock(ProjectStore.ProjectStoreV2)({
+            get: () => Effect.succeedSome({ workspaceRoot: "/repo", deletedAt: null } as never),
+          }),
+          Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+            get: () =>
+              Effect.succeed({
+                instanceId: providerInstanceId,
+                driver: ProviderDriverKind.make("codex"),
+                getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+                planSelectionTransition: () => Effect.die("Unexpected selection transition"),
+                openSession: () => Effect.die("Unexpected session start"),
+              }),
+          }),
+        );
+        yield* Effect.gen(function* () {
+          const requests = yield* McpAppRequests.McpAppRequests;
+          const call = { threadId, itemId: gatewayItemId, name: "refresh", arguments: {} };
+          yield* requests.callTool(call);
+          attached = false;
+          yield* requests.callTool(call);
+          attached = true;
+          detachDuringCall = true;
+          assert.equal(yield* reason(requests.callTool(call)), "request-failed");
+          assert.deepEqual(grantSessions, [providerSessionId, undefined]);
+
+          const uris = [
+            "ui://fixture/fixture/app",
+            "ui://fixture/app",
+            "ui://widgets/data.json",
+            "t3-harness://fixture/memo%3Aguide",
+          ];
+          for (const uri of uris) {
+            const result = yield* requests.readResource({ threadId, itemId: gatewayItemId, uri });
+            assert.deepEqual(result.contents, [{ uri, text: "ok" }]);
+          }
+          assert.deepEqual(reads, [
+            "ui://fixture/app",
+            "ui://fixture/app",
+            "ui://widgets/data.json",
+            "memo:guide",
+          ]);
+          assert.equal(
+            yield* reason(
+              requests.readResource({
+                threadId,
+                itemId: gatewayItemId,
+                uri: "t3-harness://other/memo%3Aguide",
+              }),
+            ),
+            "request-failed",
+          );
+        }).pipe(
+          Effect.provide(
+            makeLayer({
+              item: gatewayItem,
+              isLive: (session, target) =>
+                Effect.succeed(attached && session === providerSessionId && target === threadId),
+            }).pipe(Layer.provide(harness)),
+          ),
+        );
+      }),
+  );
   const calls: Array<{ server: string; tool: string }> = [];
   const mcpApps: ProviderAdapter.ProviderAdapterV2McpApps = {
     listTools: () =>

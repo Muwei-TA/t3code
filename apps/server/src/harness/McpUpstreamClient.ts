@@ -35,17 +35,41 @@ const CLOSE_DELETE_TIMEOUT_MS = 3_000;
 const MAX_SAME_ORIGIN_REDIRECTS = 2;
 const MAX_RING_LOG_LINES = 200;
 
+interface UpstreamOAuth {
+  readonly bearer: Effect.Effect<string | undefined, HarnessError>;
+  readonly explicitlyEnabled?: boolean;
+  readonly unauthorized: (
+    header: string | null,
+    rejectedBearer: string | undefined,
+  ) => Effect.Effect<string, HarnessError>;
+  readonly logs: RingLogBuffer;
+}
+
 export interface UpstreamMcpTool {
   readonly name: string;
   readonly description?: string | undefined;
   readonly inputSchema: Record<string, unknown>;
   readonly annotations?: { readonly readOnlyHint?: boolean | undefined } | undefined;
+  readonly _meta?: Record<string, unknown> | undefined;
 }
 
 export interface UpstreamMcpCallResult {
   readonly content: ReadonlyArray<Record<string, unknown>>;
   readonly structuredContent?: unknown;
   readonly isError?: boolean | undefined;
+  readonly _meta?: Record<string, unknown> | undefined;
+}
+
+export interface UpstreamMcpResource {
+  readonly uri: string;
+  readonly name: string;
+  readonly description?: string | undefined;
+  readonly mimeType?: string | undefined;
+  readonly _meta?: Record<string, unknown> | undefined;
+}
+
+export interface UpstreamMcpResourceReadResult {
+  readonly contents: ReadonlyArray<Record<string, unknown>>;
 }
 
 export interface McpUpstreamConnection {
@@ -54,6 +78,10 @@ export interface McpUpstreamConnection {
     name: string,
     args: Readonly<Record<string, unknown>>,
   ) => Effect.Effect<UpstreamMcpCallResult, HarnessError>;
+  readonly listResources?: () => Effect.Effect<ReadonlyArray<UpstreamMcpResource>, HarnessError>;
+  readonly readResource?: (
+    uri: string,
+  ) => Effect.Effect<UpstreamMcpResourceReadResult, HarnessError>;
   readonly close: () => Effect.Effect<void>;
   readonly isClosed: () => boolean;
 }
@@ -66,10 +94,15 @@ export class RingLogBuffer {
     for (const value of values) {
       if (value.length >= 4) this.#secrets.add(value);
     }
+    while (this.#secrets.size > 256) this.#secrets.delete(this.#secrets.values().next().value!);
+  }
+
+  redact(text: string): string {
+    return scrubHarnessLogText(text, this.#secrets);
   }
 
   append(stream: "stderr" | "lifecycle", text: string): void {
-    const trimmed = scrubHarnessLogText(text.replace(/\r?\n$/u, ""), this.#secrets);
+    const trimmed = this.redact(text.replace(/\r?\n$/u, ""));
     if (trimmed.length === 0) return;
     this.#lines.push({
       timestamp: IsoDateTime.make(DateTime.formatIso(DateTime.nowUnsafe())),
@@ -122,11 +155,16 @@ function parseToolsFromResult(result: unknown): ReadonlyArray<UpstreamMcpTool> {
       rawAnnotations !== null &&
       typeof rawAnnotations === "object" &&
       Reflect.get(rawAnnotations, "readOnlyHint") === true;
+    const meta =
+      rec._meta !== null && typeof rec._meta === "object" && !Array.isArray(rec._meta)
+        ? (rec._meta as Record<string, unknown>)
+        : undefined;
     tools.push({
       name: rec.name,
       description: typeof rec.description === "string" ? rec.description : undefined,
       inputSchema,
       ...(readOnlyHint ? { annotations: { readOnlyHint: true } } : {}),
+      ...(meta ? { _meta: meta } : {}),
     });
   }
   return tools;
@@ -143,10 +181,55 @@ function parseCallResult(result: unknown): UpstreamMcpCallResult {
           item !== null && typeof item === "object" && !Array.isArray(item),
       )
     : [];
+  const meta =
+    rec._meta !== null && typeof rec._meta === "object" && !Array.isArray(rec._meta)
+      ? (rec._meta as Record<string, unknown>)
+      : undefined;
   return {
     content: content.length > 0 ? content : [{ type: "text", text: "" }],
     ...(rec.structuredContent !== undefined ? { structuredContent: rec.structuredContent } : {}),
     ...(rec.isError === true ? { isError: true } : {}),
+    ...(meta ? { _meta: meta } : {}),
+  };
+}
+
+function parseResourcesFromResult(result: unknown): ReadonlyArray<UpstreamMcpResource> {
+  if (result === null || typeof result !== "object") return [];
+  const rawResources = Reflect.get(result, "resources");
+  if (!Array.isArray(rawResources)) return [];
+  const resources: Array<UpstreamMcpResource> = [];
+  for (const raw of rawResources) {
+    if (raw === null || typeof raw !== "object") continue;
+    const rec = raw as Record<string, unknown>;
+    if (typeof rec.uri !== "string" || rec.uri.trim().length === 0) continue;
+    const name =
+      typeof rec.name === "string" && rec.name.trim().length > 0 ? rec.name.trim() : rec.uri;
+    const meta =
+      rec._meta !== null && typeof rec._meta === "object" && !Array.isArray(rec._meta)
+        ? (rec._meta as Record<string, unknown>)
+        : undefined;
+    resources.push({
+      uri: rec.uri,
+      name,
+      ...(typeof rec.description === "string" ? { description: rec.description } : {}),
+      ...(typeof rec.mimeType === "string" ? { mimeType: rec.mimeType } : {}),
+      ...(meta ? { _meta: meta } : {}),
+    });
+  }
+  return resources;
+}
+
+function parseResourceReadResult(result: unknown): UpstreamMcpResourceReadResult {
+  if (result === null || typeof result !== "object") {
+    return { contents: [] };
+  }
+  const rawContents = Reflect.get(result, "contents");
+  if (!Array.isArray(rawContents)) return { contents: [] };
+  return {
+    contents: rawContents.filter(
+      (item): item is Record<string, unknown> =>
+        item !== null && typeof item === "object" && !Array.isArray(item),
+    ),
   };
 }
 
@@ -465,6 +548,31 @@ const connectStdioUpstream = Effect.fn("McpUpstreamClient.connectStdio")(functio
             : Effect.succeed(parseCallResult(msg.result)),
         ),
       ),
+    listResources: () =>
+      sendRequest("resources/list", {}, DEFAULT_INIT_TIMEOUT_MS).pipe(
+        Effect.flatMap((msg) =>
+          msg.error !== undefined
+            ? Effect.succeed([] as ReadonlyArray<UpstreamMcpResource>)
+            : Effect.succeed(parseResourcesFromResult(msg.result)),
+        ),
+      ),
+    readResource: (uri) =>
+      sendRequest("resources/read", { uri }, DEFAULT_TOOL_CALL_TIMEOUT_MS).pipe(
+        Effect.flatMap((msg) =>
+          msg.error !== undefined
+            ? Effect.fail(
+                new HarnessError({
+                  code: "upstream_error",
+                  serverId: input.serverId,
+                  detail: scrubHarnessLogText(
+                    `resources/read(${uri}) failed: ${String(msg.error.message ?? "unknown error")}`,
+                    input.sensitiveValues,
+                  ),
+                }),
+              )
+            : Effect.succeed(parseResourceReadResult(msg.result)),
+        ),
+      ),
     close: () =>
       Effect.sync(() => {
         if (!closed) {
@@ -506,6 +614,7 @@ const fetchSameOriginOnly = Effect.fn("McpUpstreamClient.fetchSameOriginOnly")(f
   readonly timeoutAppliesToHeadersOnly?: boolean;
   readonly sensitiveValues: ReadonlyArray<string>;
   readonly fetchImpl: (url: string, init?: RequestInit) => Promise<Response>;
+  readonly oauth?: UpstreamOAuth | undefined;
 }): Effect.fn.Return<Response, HarnessError> {
   const mapFetchError = (cause: unknown): HarnessError =>
     isHarnessError(cause)
@@ -520,6 +629,8 @@ const fetchSameOriginOnly = Effect.fn("McpUpstreamClient.fetchSameOriginOnly")(f
         });
 
   let currentUrl = input.url;
+  let oauthBearer = input.oauth === undefined ? undefined : yield* input.oauth.bearer;
+  let refreshed = false;
   for (let hop = 0; hop <= MAX_SAME_ORIGIN_REDIRECTS; hop += 1) {
     const currentOrigin = originOfUrl(currentUrl);
     if (currentOrigin === null || currentOrigin !== input.allowedOrigin) {
@@ -530,12 +641,21 @@ const fetchSameOriginOnly = Effect.fn("McpUpstreamClient.fetchSameOriginOnly")(f
       });
     }
 
+    const headers = new Headers(input.init.headers);
+    if (input.oauth !== undefined) {
+      headers.delete("authorization");
+      if (oauthBearer !== undefined) {
+        input.oauth.logs.addSecretValues([oauthBearer]);
+        headers.set("authorization", `Bearer ${oauthBearer}`);
+      }
+    }
     const response = input.timeoutAppliesToHeadersOnly
       ? yield* Effect.tryPromise({
           try: (signal) => {
             const signals = input.init.signal ? [signal, input.init.signal] : [signal];
             return input.fetchImpl(currentUrl, {
               ...input.init,
+              headers,
               redirect: "manual",
               signal: AbortSignal.any(signals),
             });
@@ -565,6 +685,7 @@ const fetchSameOriginOnly = Effect.fn("McpUpstreamClient.fetchSameOriginOnly")(f
               : [signal, timeoutSignal];
             return input.fetchImpl(currentUrl, {
               ...input.init,
+              headers,
               redirect: "manual",
               signal: AbortSignal.any(signals),
             });
@@ -572,9 +693,37 @@ const fetchSameOriginOnly = Effect.fn("McpUpstreamClient.fetchSameOriginOnly")(f
           catch: mapFetchError,
         });
 
+    if (
+      response.status === 401 &&
+      input.oauth !== undefined &&
+      input.init.method !== "DELETE" &&
+      (oauthBearer !== undefined ||
+        input.oauth.explicitlyEnabled ||
+        /^\s*Bearer\b/i.test(response.headers.get("www-authenticate") ?? ""))
+    ) {
+      const challenge = response.headers.get("www-authenticate");
+      yield* discardResponseBody(response);
+      if (refreshed)
+        return yield* new HarnessError({
+          code: "auth_required",
+          serverId: input.serverId,
+          detail: "Sign in to this MCP server in Harness settings.",
+        });
+      oauthBearer = yield* input.oauth.unauthorized(challenge, oauthBearer);
+      refreshed = true;
+      hop -= 1;
+      continue;
+    }
+
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
       yield* discardResponseBody(response);
+      if (oauthBearer !== undefined)
+        return yield* new HarnessError({
+          code: "upstream_error",
+          serverId: input.serverId,
+          detail: "Refused redirect from an OAuth-authenticated MCP endpoint.",
+        });
       if (!location) {
         return yield* new HarnessError({
           code: "upstream_error",
@@ -647,6 +796,7 @@ const connectHttpUpstream = Effect.fn("McpUpstreamClient.connectHttp")(function*
   readonly resolvedHeaders: Readonly<Record<string, string>>;
   readonly sensitiveValues: ReadonlyArray<string>;
   readonly logs: RingLogBuffer;
+  readonly oauth?: UpstreamOAuth | undefined;
   readonly fetchImplementation?: (url: string, init?: RequestInit) => Promise<Response>;
 }): Effect.fn.Return<McpUpstreamConnection, HarnessError> {
   const fetchImpl = input.fetchImplementation ?? fetch;
@@ -716,7 +866,14 @@ const connectHttpUpstream = Effect.fn("McpUpstreamClient.connectHttp")(function*
       timeoutMs,
       sensitiveValues: input.sensitiveValues,
       fetchImpl,
-    });
+      oauth: input.oauth,
+    }).pipe(
+      Effect.tapError((error) =>
+        Effect.sync(() => {
+          if (error.code === "auth_required") closed = true;
+        }),
+      ),
+    );
 
     const nextSessionId = response.headers.get("mcp-session-id");
     if (nextSessionId) sessionId = nextSessionId;
@@ -793,9 +950,8 @@ const connectHttpUpstream = Effect.fn("McpUpstreamClient.connectHttp")(function*
       return yield* new HarnessError({
         code: "upstream_error",
         serverId: input.serverId,
-        detail: scrubHarnessLogText(
+        detail: input.logs.redact(
           `${method} failed: ${String(matched.error.message ?? "unknown error")}`,
-          input.sensitiveValues,
         ),
       });
     }
@@ -823,6 +979,7 @@ const connectHttpUpstream = Effect.fn("McpUpstreamClient.connectHttp")(function*
         timeoutMs: CLOSE_DELETE_TIMEOUT_MS,
         sensitiveValues: input.sensitiveValues,
         fetchImpl,
+        oauth: input.oauth,
       }).pipe(
         Effect.flatMap(discardResponseBody),
         Effect.timeoutOption(Duration.millis(CLOSE_DELETE_TIMEOUT_MS)),
@@ -868,6 +1025,15 @@ const connectHttpUpstream = Effect.fn("McpUpstreamClient.connectHttp")(function*
       sendRequest("tools/call", { name, arguments: args }, DEFAULT_TOOL_CALL_TIMEOUT_MS).pipe(
         Effect.map((msg) => parseCallResult(msg.result)),
       ),
+    listResources: () =>
+      sendRequest("resources/list", {}, DEFAULT_INIT_TIMEOUT_MS).pipe(
+        Effect.map((msg) => parseResourcesFromResult(msg.result)),
+        Effect.orElseSucceed(() => [] as ReadonlyArray<UpstreamMcpResource>),
+      ),
+    readResource: (uri) =>
+      sendRequest("resources/read", { uri }, DEFAULT_TOOL_CALL_TIMEOUT_MS).pipe(
+        Effect.map((msg) => parseResourceReadResult(msg.result)),
+      ),
     close: closeSession,
     isClosed: () => closed,
   };
@@ -904,6 +1070,7 @@ const connectLegacySseUpstream = Effect.fn("McpUpstreamClient.connectLegacySse")
   readonly resolvedHeaders: Readonly<Record<string, string>>;
   readonly sensitiveValues: ReadonlyArray<string>;
   readonly logs: RingLogBuffer;
+  readonly oauth?: UpstreamOAuth | undefined;
   readonly fetchImplementation?: (url: string, init?: RequestInit) => Promise<Response>;
 }): Effect.fn.Return<McpUpstreamConnection, HarnessError> {
   const fetchImpl = input.fetchImplementation ?? fetch;
@@ -938,6 +1105,7 @@ const connectLegacySseUpstream = Effect.fn("McpUpstreamClient.connectLegacySse")
     timeoutAppliesToHeadersOnly: true,
     sensitiveValues: input.sensitiveValues,
     fetchImpl,
+    oauth: input.oauth,
   });
 
   if (sseResponse.status === 405) {
@@ -950,6 +1118,7 @@ const connectLegacySseUpstream = Effect.fn("McpUpstreamClient.connectLegacySse")
       resolvedHeaders: input.resolvedHeaders,
       sensitiveValues: input.sensitiveValues,
       logs: input.logs,
+      oauth: input.oauth,
       ...(input.fetchImplementation ? { fetchImplementation: input.fetchImplementation } : {}),
     });
   }
@@ -1112,7 +1281,13 @@ const connectLegacySseUpstream = Effect.fn("McpUpstreamClient.connectLegacySse")
         timeoutMs,
         sensitiveValues: input.sensitiveValues,
         fetchImpl,
+        oauth: input.oauth,
       }).pipe(
+        Effect.tapError((error) =>
+          Effect.sync(() => {
+            if (error.code === "auth_required") stopSseStream();
+          }),
+        ),
         Effect.onExit((exit) =>
           Exit.isSuccess(exit) ? Effect.void : Effect.sync(() => pending.delete(id)),
         ),
@@ -1179,9 +1354,8 @@ const connectLegacySseUpstream = Effect.fn("McpUpstreamClient.connectLegacySse")
         return yield* new HarnessError({
           code: "upstream_error",
           serverId: input.serverId,
-          detail: scrubHarnessLogText(
+          detail: input.logs.redact(
             `${method} failed: ${String(msg.error.message ?? "unknown error")}`,
-            input.sensitiveValues,
           ),
         });
       }
@@ -1216,6 +1390,7 @@ const connectLegacySseUpstream = Effect.fn("McpUpstreamClient.connectLegacySse")
         timeoutMs: 10_000,
         sensitiveValues: input.sensitiveValues,
         fetchImpl,
+        oauth: input.oauth,
       }).pipe(Effect.flatMap(discardResponseBody), Effect.ignore);
     }
 
@@ -1235,6 +1410,15 @@ const connectLegacySseUpstream = Effect.fn("McpUpstreamClient.connectLegacySse")
       sendSseRequest("tools/call", { name, arguments: args }, DEFAULT_TOOL_CALL_TIMEOUT_MS).pipe(
         Effect.map((msg) => parseCallResult(msg.result)),
       ),
+    listResources: () =>
+      sendSseRequest("resources/list", {}, DEFAULT_INIT_TIMEOUT_MS).pipe(
+        Effect.map((msg) => parseResourcesFromResult(msg.result)),
+        Effect.orElseSucceed(() => [] as ReadonlyArray<UpstreamMcpResource>),
+      ),
+    readResource: (uri) =>
+      sendSseRequest("resources/read", { uri }, DEFAULT_TOOL_CALL_TIMEOUT_MS).pipe(
+        Effect.map((msg) => parseResourceReadResult(msg.result)),
+      ),
     close: () => Effect.sync(stopSseStream),
     isClosed: () => closed,
   };
@@ -1246,6 +1430,7 @@ export const connectUpstream = (input: {
   readonly resolvedEnvOrHeaders: Readonly<Record<string, string>>;
   readonly sensitiveValues?: ReadonlyArray<string>;
   readonly logs: RingLogBuffer;
+  readonly oauth?: UpstreamOAuth | undefined;
   readonly fetchImplementation?: (url: string, init?: RequestInit) => Promise<Response>;
 }): Effect.Effect<McpUpstreamConnection, HarnessError> => {
   const sensitiveValues = input.sensitiveValues ?? [];
@@ -1267,6 +1452,7 @@ export const connectUpstream = (input: {
       resolvedHeaders: input.resolvedEnvOrHeaders,
       sensitiveValues,
       logs: input.logs,
+      oauth: input.oauth,
       ...(input.fetchImplementation ? { fetchImplementation: input.fetchImplementation } : {}),
     });
   }
@@ -1277,6 +1463,7 @@ export const connectUpstream = (input: {
     resolvedHeaders: input.resolvedEnvOrHeaders,
     sensitiveValues,
     logs: input.logs,
+    oauth: input.oauth,
     ...(input.fetchImplementation ? { fetchImplementation: input.fetchImplementation } : {}),
   });
 };

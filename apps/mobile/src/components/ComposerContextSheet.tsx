@@ -392,6 +392,9 @@ export function ComposerContextSheet(props: {
             {record.kind === "environment" ? (
               <ContextField label={gt("Machine", { $context: "computer" })} value={record.label} />
             ) : null}
+            {record.kind === "mcp-resource" ? (
+              <ContextField label={record.label} value={record.uri} code />
+            ) : null}
             {record.kind === "skill" ? (
               <View className="gap-3">
                 <ContextField

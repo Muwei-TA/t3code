@@ -20,6 +20,11 @@ vi.mock("../../state/server", () => ({
     refreshProviders: Symbol("refreshProviders"),
   },
 }));
+vi.mock("../../state/harness", () => ({
+  harnessEnvironment: {
+    libraryQuery: vi.fn(),
+  },
+}));
 
 import { useComposerCommandMenu } from "./use-composer-command-menu";
 

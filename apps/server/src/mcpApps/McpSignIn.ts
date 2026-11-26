@@ -1,9 +1,11 @@
 import {
+  HarnessMcpServerId,
   ProviderMcpSignInError,
   type ProviderMcpSignInCompleteInput,
   type ProviderMcpSignInCompleteResult,
   type ProviderMcpSignInStartInput,
   type ProviderMcpSignInStartResult,
+  TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -14,7 +16,9 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as McpGateway from "../harness/McpGateway.ts";
 
 /**
  * Signs an agent's MCP server in through the session that reported it needs
@@ -33,14 +37,45 @@ export class McpSignIn extends Context.Service<
 >()("t3/mcpApps/McpSignIn") {}
 
 const isSignInError = Schema.is(ProviderMcpSignInError);
+const decodeServerId = Schema.decodeUnknownOption(HarnessMcpServerId);
 
 const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+  const gateway = yield* Effect.serviceOption(McpGateway.McpGateway);
+  const projects = yield* Effect.serviceOption(ProjectStore.ProjectStoreV2);
 
   const fail = (server: string, detail: string) => new ProviderMcpSignInError({ server, detail });
   const stopped = (server: string) =>
     fail(server, "The agent session has ended. Send a message, then sign in again.");
+
+  const resolveGateway = Effect.fn("McpSignIn.resolveGateway")(function* (
+    input: ProviderMcpSignInStartInput,
+  ) {
+    const serverId = decodeServerId(input.server.slice("t3-harness:".length));
+    if (Option.isNone(serverId) || Option.isNone(gateway) || Option.isNone(projects)) {
+      return yield* fail(input.server, "This Harness server cannot be signed into here.");
+    }
+    const { thread, providerThreads } = yield* threadManagement.getThreadRecords(input.threadId, [
+      "providerThreads",
+    ]);
+    if (
+      thread.archivedAt !== null ||
+      thread.deletedAt !== null ||
+      !providerThreads.some((item) => item.id === input.providerThreadId)
+    ) {
+      return yield* stopped(input.server);
+    }
+    const project = yield* projects.value.get(thread.projectId);
+    const workspace = thread.worktreePath ?? Option.getOrUndefined(project)?.workspaceRoot;
+    return {
+      gateway: gateway.value,
+      input: {
+        serverId: serverId.value,
+        ...(workspace ? { workspaceRoot: TrimmedNonEmptyString.make(workspace) } : {}),
+      },
+    };
+  });
 
   const resolve = Effect.fn("McpSignIn.resolve")(function* (input: ProviderMcpSignInStartInput) {
     const projection = yield* threadManagement.getThreadRecords(input.threadId, [
@@ -74,6 +109,18 @@ const make = Effect.gen(function* () {
 
   const start = Effect.fn("McpSignIn.start")(
     function* (input: ProviderMcpSignInStartInput) {
+      if (input.server.startsWith("t3-harness:")) {
+        const resolved = yield* resolveGateway(input);
+        const snapshot = yield* resolved.gateway.getSnapshot(resolved.input.workspaceRoot);
+        const server = snapshot.servers.find(
+          (entry) => entry.id === resolved.input.serverId && entry.effectiveEnabled,
+        );
+        if (server?.oauthStatus === "connected" && server.state !== "auth_required") {
+          return { authorizationUrl: null, signedInAt: DateTime.formatIso(yield* DateTime.now) };
+        }
+        const result = yield* resolved.gateway.startOAuth(resolved.input);
+        return { ...result, signedInAt: null };
+      }
       const { providerThread, mcpSignIn } = yield* resolve(input);
       const { authorizationUrl } = yield* mcpSignIn.start({
         providerThread,
@@ -92,6 +139,11 @@ const make = Effect.gen(function* () {
 
   const complete = Effect.fn("McpSignIn.complete")(
     function* (input: ProviderMcpSignInCompleteInput) {
+      if (input.server.startsWith("t3-harness:")) {
+        const resolved = yield* resolveGateway(input);
+        yield* resolved.gateway.completeOAuth(input.callbackUrl, resolved.input);
+        return { signedInAt: DateTime.formatIso(yield* DateTime.now) };
+      }
       const { providerThread, mcpSignIn } = yield* resolve(input);
       yield* mcpSignIn.complete({
         providerThread,

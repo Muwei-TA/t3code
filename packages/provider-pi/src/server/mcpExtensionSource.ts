@@ -355,7 +355,13 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
 
   const readOnlyMcpTools = new Set<string>();
   const readOnlyHarnessTools = new Set<string>();
-  const T3_OWNED_HARNESS_READ_ONLY_TOOLS = new Set(["propose_plan", "harness_tool_search"]);
+  const T3_OWNED_HARNESS_READ_ONLY_TOOLS = new Set([
+    "propose_plan",
+    "harness_tool_search",
+    "harness_skill_search",
+    "harness_skill_load",
+    "harness_rule_read",
+  ]);
   const isReadOnlyMcpTool = (name: string) => {
     const extensionPath = env(EXTENSION_PATH_ENV);
     if (

@@ -1,6 +1,7 @@
 import { classifyCodexManagedError } from "../provider/CodexManagedErrors.ts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
+import * as HarnessMcpResourceMentions from "../harness/HarnessMcpResourceMentions.ts";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import {
   CommandId,
@@ -22,6 +23,7 @@ import {
   NodeId,
   ThreadId,
 } from "@t3tools/contracts";
+import { runInteractionMode } from "../harness/HarnessTurnPreprocess.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -305,6 +307,7 @@ export const layer: Layer.Layer<
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     const restoreMissingWorktree = yield* makeRestoreMissingWorktree;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
+    const projectComposerMessage = yield* HarnessMcpResourceMentions.makeMessageProjector;
 
     // Build draining callbacks outside startup scope so they cannot retain full thread history.
     const makeRunControls = (input: {
@@ -880,7 +883,10 @@ export const layer: Layer.Layer<
 
       const resolvedPolicy = yield* runtimePolicy
         .resolve({
-          thread: projection.thread,
+          thread: {
+            ...projection.thread,
+            interactionMode: runInteractionMode(projection.thread.interactionMode, run.harnessMode),
+          },
           modelSelection: run.modelSelection,
         })
         .pipe(Effect.result);
@@ -1019,10 +1025,15 @@ export const layer: Layer.Layer<
       let resumeFellBack = false;
       const messageText = withMessageSenderNote(
         providerMessage,
-        projectComposerContextForProvider({
-          text: providerMessage.text,
-          records: providerMessage.context?.records ?? [],
-        }),
+        yield* projectComposerMessage(
+          {
+            text: providerMessage.text,
+            records: providerMessage.context?.records ?? [],
+          },
+          projection.thread,
+          run.harnessMode,
+          session.providerSession?.capabilities.harness,
+        ),
       );
       const slashCommand = isSlashCommandMessage(providerMessage);
       const goalDriver =

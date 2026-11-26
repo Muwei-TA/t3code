@@ -3,12 +3,14 @@ import {
   COMPOSER_CONTEXT_MAX_RECORDS,
   ComposerContextId,
   EnvironmentId,
+  ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
 import {
   collectComposerContextReferences,
   formatComposerContextReference,
+  mcpResourceContextRecord,
 } from "@t3tools/shared/composerContextReferences";
 
 const mocks = vi.hoisted(() => ({
@@ -149,6 +151,51 @@ beforeEach(() => {
 });
 
 describe("mobile context clipboard imports", () => {
+  it("keeps MCP resource references within the destination environment and project", async () => {
+    const environmentId = EnvironmentId.make("destination");
+    const projectId = ProjectId.make("project");
+    const valid = mcpResourceContextRecord(
+      environmentId,
+      projectId,
+      "t3-harness://guide/memo%3Aone",
+      "Local Guide",
+    );
+    const foreign = mcpResourceContextRecord(
+      environmentId,
+      ProjectId.make("other"),
+      "t3-harness://guide/memo%3Atwo",
+      "Other Guide",
+    );
+    const remote = mcpResourceContextRecord(
+      EnvironmentId.make("remote"),
+      projectId,
+      "t3-harness://guide/memo%3Athree",
+      "Remote Guide",
+    );
+    const records = [valid, foreign, remote];
+    const result = await importComposerContextClipboard(
+      {
+        text: records.map(formatComposerContextReference).join(" "),
+        fragment: encodeComposerContextFragment({
+          version: 1,
+          source: { environmentId },
+          records,
+        })!,
+        html: "",
+      },
+      0,
+      new AbortController().signal,
+      0,
+      environmentId,
+      new Map(),
+      projectId,
+    );
+    expect(result?.context.records.map(({ label }) => label)).toEqual([valid.label]);
+    expect(result?.text).toContain("Other Guide Remote Guide");
+    expect(collectComposerContextReferences(result!.text).map(({ label }) => label)).toEqual([
+      valid.label,
+    ]);
+  });
   it("copies original bytes and rewrites file bindings using a signal without throwIfAborted", async () => {
     const signal = { aborted: false } as AbortSignal;
     const result = await importComposerContextClipboard(clipboard, 0, signal);

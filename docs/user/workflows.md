@@ -1,12 +1,14 @@
 # Workflows
 
-A workflow is a TypeScript script that chains agents, plain code, schedules, webhooks, issue and pull request events, and questions to you into one durable run that survives server restarts. Each step's result is saved when it succeeds, so restarts pick up where the run left off and failures do not lose earlier work. Workflows are an early feature: start runs from the `t3` CLI or a trigger, and follow them in the app.
+A workflow chains agent steps and questions into a durable run that survives server restarts. Each successful step is saved so the run can pick up where it left off. Define a workflow in YAML, or use TypeScript for plain code, schedules, webhooks, and issue or pull request triggers.
 
 For one prompt on a timer or webhook, use a scheduled task. Use a workflow when work has stages — such as triage, a fix, your approval, and a release.
 
-## Turn on workflows
+## Start from chat
 
-Workflows are a Labs feature, off by default. Turn on **Settings → Labs → Workflows** for the server that runs them. On a server without a desktop, set `"workflowsEnabled": true` in `userdata/settings.json` in its T3 home (`~/.t3` by default). While off, nothing in the workflows folder runs and `t3 workflow` says how to turn it on; runs are kept and continue once it is on again.
+Choose a workflow in the composer's Mode menu and send a text prompt. The run appears in the conversation. Expand it to follow its steps or open a child agent's thread. Answer questions, resume paused runs, or stop a run from the same conversation. A YAML workflow can also pause before its next stage starts. Choose Build or another portable mode to return to ordinary chat.
+
+Workflows are enabled by default. You can turn them off for a server in **Settings → Scheduled tasks**, or set `"workflowsEnabled": false` in `userdata/settings.json` in its T3 home. Stored runs continue when workflows are enabled again.
 
 ## Create a workflow
 
@@ -14,6 +16,30 @@ Workflow files live in `~/.t3/workflows/` (or wherever `T3CODE_WORKFLOWS` points
 
 - **Ask an agent (recommended):** copy the [`t3-workflows` skill](https://github.com/pingdotgg/t3code/blob/main/skills/t3-workflows/SKILL.md) into your agent's skills folder (such as `~/.claude/skills/` or `~/.agents/skills/`) and describe what you want.
 - **Edit directly:** edit files in `~/.t3/workflows/`, or use **Definitions** on the Workflows page (saving and deleting in the app require terminal access). Before anything has run, open the page with **Open workflows** in the command palette.
+
+On web or desktop, open **Automations → Workflows** to validate and save YAML. An `in-thread` step continues the conversation that started the run, a `child` step starts its own thread, and an `ask` step waits for one of its listed choices. Use `dependsOn` to pass earlier step results or answers to later agent steps.
+
+```yaml
+name: plan-review
+version: 1
+steps:
+  - id: plan
+    kind: in-thread
+    modeId: plan
+    prompt: Draft a plan for the request.
+  - id: priority
+    kind: ask
+    dependsOn: [plan]
+    prompt: What should the review prioritize?
+    choices: [Correctness, Simplicity]
+  - id: review
+    kind: child
+    modeId: review
+    dependsOn: [plan, priority]
+    prompt: Review the plan with the chosen priority in mind.
+```
+
+A TypeScript workflow can opt into chat with `chat: { description: "…" }` in its `T3.workflow` options. Its payload schema must accept `input` and `project` strings and a `thread` object with a `threadId` string.
 
 A small workflow, saved as `~/.t3/workflows/release.ts`:
 

@@ -5117,6 +5117,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         turnInput.runtimePolicy.interactionMode === "plan" && registeredHarnessName !== undefined
           ? T3_CODE_HARNESS_PROPOSE_PLAN_NOTE
           : undefined,
+        ...(turnInput.harnessContext ?? []).map((entry) => entry.text),
       ]
         .filter((part) => part !== undefined && part.length > 0)
         .join("\n\n");

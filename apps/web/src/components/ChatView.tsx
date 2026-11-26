@@ -72,6 +72,7 @@ import {
   AuthSourceControlWriteScope,
   AuthPreviewOperateScope,
   AuthTerminalOperateScope,
+  HarnessModeId,
   type AssistantCitation,
   type ResponseContextRecord,
   type ChatFileAttachment,
@@ -158,7 +159,10 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import { AsyncResult } from "effect/reactivity";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/reactivity";
+import { type WorkflowSummary } from "@t3tools/contracts";
+import { ThreadWorkflowRuns } from "./chat/ThreadWorkflowRuns";
 import { isElectron } from "../env";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
 import { composerRequiresModifier } from "../composer-logic";
@@ -417,6 +421,10 @@ import {
   makeThreadErrorSetter,
 } from "./ChatView.logic";
 
+const EMPTY_CHAT_WORKFLOWS = Atom.make(
+  AsyncResult.initial<import("@t3tools/contracts").WorkflowRunsSnapshot>(),
+);
+
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
 const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
@@ -641,6 +649,9 @@ export default function ChatView(props: ChatViewProps) {
   );
   const composerInteractionMode = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.interactionMode ?? null,
+  );
+  const composerModeId = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.modeId ?? null,
   );
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
@@ -1452,6 +1463,12 @@ export default function ChatView(props: ChatViewProps) {
   const interactionMode: ProviderInteractionMode = providerSupportsPlanMode
     ? rawInteractionMode
     : DEFAULT_INTERACTION_MODE;
+  const rawModeId: HarnessModeId =
+    composerModeId ??
+    (isServerThread ? activeThread?.modeId : undefined) ??
+    HarnessModeId.make(rawInteractionMode === "plan" ? "plan" : "build");
+  const modeId: HarnessModeId =
+    !providerSupportsPlanMode && rawModeId === "plan" ? HarnessModeId.make("build") : rawModeId;
   const activeUsageModel =
     [
       composerModelSelectionApplies ? composerSelectedModelSelection : null,
@@ -2193,8 +2210,10 @@ export default function ChatView(props: ChatViewProps) {
     threadId: ThreadId;
     createdAt: string;
     branch?: string;
+    modelSelection?: ModelSelection;
     runtimeMode: RuntimeMode;
     interactionMode: ProviderInteractionMode;
+    modeId?: HarnessModeId | undefined;
   }): Promise<AtomCommandResult<void, unknown>> => {
     if (!serverThread) {
       return AsyncResult.success(undefined);
@@ -2203,6 +2222,7 @@ export default function ChatView(props: ChatViewProps) {
     let result: AtomCommandResult<void, unknown> = AsyncResult.success(undefined);
     const metadataUpdate = resolveThreadMetadataUpdateForNextTurn({
       currentModelSelection: serverThread.modelSelection,
+      ...(input.modelSelection === undefined ? {} : { nextModelSelection: input.modelSelection }),
       currentBranch: serverThread.branch,
       ...(input.branch ? { nextBranch: input.branch } : {}),
     });
@@ -2239,13 +2259,17 @@ export default function ChatView(props: ChatViewProps) {
       }
     }
 
-    if (input.interactionMode !== serverThread.interactionMode) {
+    if (
+      input.interactionMode !== serverThread.interactionMode ||
+      (input.modeId !== undefined && input.modeId !== serverThread.modeId)
+    ) {
       result = mapAtomCommandResult(
         await setThreadInteractionMode({
           environmentId,
           input: {
             threadId: input.threadId,
             interactionMode: input.interactionMode,
+            ...(input.modeId !== undefined ? { modeId: input.modeId } : {}),
             createdAt: input.createdAt,
           },
         }),
@@ -2380,7 +2404,7 @@ export default function ChatView(props: ChatViewProps) {
   const activeThreadBranch =
     canOverrideServerThreadEnvMode && pendingServerThreadBranchEntryForThread !== null
       ? pendingServerThreadBranchEntryForThread.branch
-      : (activeThread?.branch ?? null);
+      : (activeThread?.branch ?? (draftThread?.envMode === "worktree" ? draftThread.branch : null));
   const startFromOrigin = isLocalDraftThread
     ? (draftThread?.startFromOrigin ?? false)
     : canOverrideServerThreadEnvMode
@@ -3080,6 +3104,7 @@ export default function ChatView(props: ChatViewProps) {
   const {
     getModelDisabledReason,
     handleInteractionModeChangeStable,
+    handleModeChangeStable,
     handleRuntimeModeChangeStable,
     onEnvModeChangeStable,
     onProviderModelSelectStable,
@@ -3098,7 +3123,6 @@ export default function ChatView(props: ChatViewProps) {
     supportsProviderSwitchingViaHandoff,
     multipleModelSelections,
     runtimeMode,
-    interactionMode,
     isLocalDraftThread,
     canOverrideServerThreadEnvMode,
     setPendingServerThreadEnvModeEntry,
@@ -3119,6 +3143,7 @@ export default function ChatView(props: ChatViewProps) {
     activeEnvironmentUnavailable,
     runtimeMode,
     interactionMode,
+    modeId,
     localCheckoutBranchMismatch,
     composerRef,
     persistThreadSettingsForNextTurn,
@@ -3126,7 +3151,33 @@ export default function ChatView(props: ChatViewProps) {
     scrollToEnd,
     setThreadError,
   });
+  const workflowChatAvailable =
+    serverConfig?.environment.capabilities.workflowChat === true &&
+    serverConfig.settings.workflowsEnabled;
+  const workflowSnapshot = useAtomValue(
+    workflowChatAvailable
+      ? serverEnvironment.workflowsLive({
+          environmentId,
+          input: { chat: isServerThread && activeThread ? { threadId: activeThread.id } : {} },
+        })
+      : EMPTY_CHAT_WORKFLOWS,
+  );
+  const workflowData = Option.getOrNull(AsyncResult.value(workflowSnapshot));
+  const [workflowSelection, setWorkflowSelection] = useState<{
+    threadKey: string | null;
+    workflow: WorkflowSummary;
+  } | null>(null);
+  const selectedWorkflow =
+    workflowChatAvailable && workflowSelection?.threadKey === activeThreadKey
+      ? workflowSelection.workflow
+      : null;
+  const selectWorkflow = (workflow: WorkflowSummary | null) => {
+    setWorkflowSelection(workflow === null ? null : { threadKey: activeThreadKey, workflow });
+  };
+  const workflowModes =
+    workflowData?.workflows.filter((item) => item.chatModeCompatible === true) ?? [];
   const { onSend, captureDetachedSend } = useComposerSend({
+    selectedWorkflow,
     environmentId,
     routeThreadKey,
     currentRouteThreadKeyRef,
@@ -3145,6 +3196,7 @@ export default function ChatView(props: ChatViewProps) {
     phase,
     runtimeMode,
     interactionMode,
+    modeId,
     sendEnvMode,
     worktreeRepositories,
     startFromOrigin,
@@ -3258,6 +3310,7 @@ export default function ChatView(props: ChatViewProps) {
             titleSeed: planTitle,
             runtimeMode,
             interactionMode: DEFAULT_INTERACTION_MODE,
+            modeId: HarnessModeId.make("build"),
             sourceProposedPlan: { threadId: activeThread.id, planId: input.planId },
             bootstrap: {
               createThread: {
@@ -3266,6 +3319,7 @@ export default function ChatView(props: ChatViewProps) {
                 modelSelection,
                 runtimeMode,
                 interactionMode: DEFAULT_INTERACTION_MODE,
+                modeId: HarnessModeId.make("build"),
                 branch: activeThreadBranch,
                 worktreePath: null,
                 createdAt,
@@ -3310,6 +3364,7 @@ export default function ChatView(props: ChatViewProps) {
           : {}),
         runtimeMode,
         interactionMode: DEFAULT_INTERACTION_MODE,
+        modeId: HarnessModeId.make("build"),
       });
       if (settingsResult._tag === "Failure") {
         if (!isAtomCommandInterrupted(settingsResult)) {
@@ -3480,8 +3535,12 @@ export default function ChatView(props: ChatViewProps) {
     !hasThreadNow &&
     threadStatusLine === null &&
     pendingGuestMessageCount === 0 &&
-    !hasQueuedTurns ? null : (
+    !hasQueuedTurns &&
+    !workflowData?.runs.length ? null : (
       <>
+        {workflowData && workflowData.runs.length > 0 ? (
+          <ThreadWorkflowRuns environmentId={environmentId} snapshot={workflowData} />
+        ) : null}
         {pendingHandoff === null ? null : (
           <div className="chat-content-lane">
             <HandoffRow
@@ -3975,6 +4034,13 @@ export default function ChatView(props: ChatViewProps) {
                             ) : null}
                             {!composerMounted ? null : (
                               <ChatComposer
+                                workflowModes={
+                                  workflowChatAvailable && workflowData !== null
+                                    ? workflowModes
+                                    : null
+                                }
+                                selectedWorkflow={selectedWorkflow}
+                                onSelectWorkflow={selectWorkflow}
                                 canOperateThread={canOperateThread}
                                 reportedModelSelection={reportedModelSelection}
                                 multipleModelSelections={multipleModelSelections}
@@ -4061,6 +4127,7 @@ export default function ChatView(props: ChatViewProps) {
                                 runtimeMode={runtimeMode}
                                 defaultRuntimeMode={defaultRuntimeMode}
                                 interactionMode={interactionMode}
+                                modeId={modeId}
                                 lockedProvider={modelPickerLockedProvider}
                                 providerStatuses={providerStatuses as ServerProvider[]}
                                 providerCatalogKnown={serverConfig !== null}
@@ -4121,6 +4188,7 @@ export default function ChatView(props: ChatViewProps) {
                                 getModelDisabledReason={getModelDisabledReason}
                                 handleRuntimeModeChange={handleRuntimeModeChangeStable}
                                 handleInteractionModeChange={handleInteractionModeChangeStable}
+                                handleModeChange={handleModeChangeStable}
                                 focusComposer={focusComposerStable}
                                 scheduleComposerFocus={scheduleComposerFocusStable}
                                 setThreadError={setThreadError}

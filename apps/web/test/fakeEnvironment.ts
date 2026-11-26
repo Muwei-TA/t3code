@@ -111,11 +111,12 @@ const decodeServerConfig = Schema.decodeUnknownSync(ServerConfig);
 const makeServerConfig = (
   providers: ReadonlyArray<unknown>,
   supportsIssues = false,
+  workflowChat = false,
 ): ServerConfig => ({
   ...decodeServerConfig({
     environment: {
       ...descriptor,
-      capabilities: { ...descriptor.capabilities, issues: supportsIssues },
+      capabilities: { ...descriptor.capabilities, issues: supportsIssues, workflowChat },
     },
     auth,
     cwd: "/workspace/render",
@@ -240,6 +241,8 @@ export interface FakeThread {
   readonly title: string;
   /** Defaults to GPT-5.4 on Codex. */
   readonly modelSelection?: ModelSelection;
+  readonly branch?: string | null;
+  readonly worktreePath?: string | null;
   /** The first is the thread's active provider thread. */
   readonly providerThreads?: ReadonlyArray<OrchestrationV2ProviderThread>;
   readonly issues?: OrchestrationV2ThreadShell["issues"];
@@ -329,8 +332,8 @@ function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
     modelSelection,
     runtimeMode: "full-access",
     interactionMode: "default",
-    branch: "main",
-    worktreePath: null,
+    branch: thread.branch === undefined ? "main" : thread.branch,
+    worktreePath: thread.worktreePath ?? null,
     activeProviderThreadId: thread.providerThreads?.[0]?.id ?? null,
     ...(thread.issues === undefined ? {} : { issues: thread.issues }),
     lineage: {
@@ -612,6 +615,7 @@ export function installFakeEnvironment(
     /** Commands left unanswered even when accepting, until `rejectPendingCommand`. */
     readonly holdCommand?: (command: OrchestrationV2Command) => boolean;
     readonly providers?: ReadonlyArray<unknown>;
+    readonly workflowChat?: boolean;
   },
 ): Disposable {
   threads = fixtures;
@@ -619,6 +623,7 @@ export function installFakeEnvironment(
     ...makeServerConfig(
       options?.providers ?? [CODEX_PROVIDER],
       fixtures.some((thread) => (thread.issues?.length ?? 0) > 0),
+      options?.workflowChat,
     ),
     keybindings: options?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS,
   };
@@ -718,6 +723,21 @@ export function answerRpc(method: string, handler: (input: never) => unknown): D
 export async function emitTerminalMetadata(event: TerminalMetadataStreamEvent): Promise<void> {
   if (terminalMetadataSubscriber === null) throw new Error("No terminal metadata subscription");
   await Effect.runPromise(Queue.offer(terminalMetadataSubscriber, event));
+}
+
+export async function publishFakeThread(thread: FakeThread) {
+  if (shellSubscriber === null) throw new Error("No shell subscription");
+  threads = [...threads.filter((entry) => entry.id !== thread.id), thread];
+  sequence += 1;
+  await Effect.runPromise(
+    Queue.offer(shellSubscriber, {
+      kind: "thread.updated",
+      sequence,
+      location: "active",
+      thread: shellOf(thread),
+    }),
+  );
+  return projectionOf(thread);
 }
 
 /** Whether the app holds a live subscription to the thread, so events reach it. */

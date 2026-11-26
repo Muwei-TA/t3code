@@ -13,6 +13,8 @@ import {
 } from "./runtimeModeConfig";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { harnessEnvironment } from "../../state/harness";
+import { useEnvironmentQuery } from "../../state/query";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { importPastedComposerText, readPastedComposerContext } from "../composerInlineTokenPaste";
 import {
@@ -45,6 +47,7 @@ import {
   EnvironmentRequestInvalidError,
   AuthOrchestrationOperateScope,
   clampManagedRuntimeMode,
+  HarnessModeId,
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -159,6 +162,7 @@ import {
 } from "../../lib/terminalContext";
 import {
   formatComposerContextReference,
+  mcpResourceContextRecord,
   threadContextRecord,
   toKindScopedComposerContextId,
 } from "@t3tools/shared/composerContextReferences";
@@ -330,7 +334,7 @@ export interface ChatComposerHandle {
   openModelPicker: () => void;
   stepReasoningEffort: (direction: 1 | -1) => void;
   toggleModelPicker: () => void;
-  openControl: (command: KeybindingCommand) => void;
+  openControl: (command: KeybindingCommand | "workflow") => void;
   isModelPickerOpen: () => boolean;
   isCaretAtStart: () => boolean;
   compactContext: () => void;
@@ -356,6 +360,9 @@ export interface ChatComposerHandle {
     reviewComments: ReviewCommentContext[];
     threadContexts: ThreadContextRecord[];
     environmentContexts: EnvironmentContextRecord[];
+    mcpResourceContexts?:
+      | ReadonlyArray<import("@t3tools/contracts").McpResourceContextRecord>
+      | undefined;
     selectedPromptEffort: string | null;
     selectedModelSelection: ModelSelection;
     multipleModelSelections: ReadonlyArray<ModelSelection> | null;
@@ -425,6 +432,10 @@ export interface ChatComposerProps {
   runtimeMode: RuntimeMode;
   defaultRuntimeMode?: RuntimeMode;
   interactionMode: ProviderInteractionMode;
+  modeId: HarnessModeId;
+  workflowModes?: ReadonlyArray<import("@t3tools/contracts").WorkflowSummary> | null;
+  selectedWorkflow?: import("@t3tools/contracts").WorkflowSummary | null;
+  onSelectWorkflow?: (workflow: import("@t3tools/contracts").WorkflowSummary | null) => void;
 
   lockedProvider: ProviderDriverKind | null;
   providerStatuses: ServerProvider[];
@@ -511,6 +522,7 @@ export interface ChatComposerProps {
   getModelDisabledReason: (instanceId: ProviderInstanceId, model: string) => string | null;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
   handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
+  handleModeChange: (modeId: HarnessModeId, baseInteractionMode: ProviderInteractionMode) => void;
 
   focusComposer: () => void;
   scheduleComposerFocus: () => void;
@@ -562,6 +574,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     respondingRequestIds,
     runtimeMode,
     interactionMode,
+    modeId,
     lockedProvider,
     providerStatuses,
     providerCatalogKnown,
@@ -605,6 +618,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     getModelDisabledReason,
     handleRuntimeModeChange,
     handleInteractionModeChange,
+    handleModeChange: changePortableMode,
     focusComposer,
     scheduleComposerFocus,
     setThreadError,
@@ -748,6 +762,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerReviewComments = composerDraft.reviewComments;
   const composerThreadContexts = attachmentDraft.threadContexts;
   const composerEnvironmentContexts = composerDraft.environmentContexts;
+  const composerMcpResourceContexts = composerDraft.mcpResourceContexts;
   const {
     pendingSnapShotAnimations,
     pendingSnapShotIds,
@@ -838,6 +853,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     previewAnnotations: composerPreviewAnnotations,
     threadContexts: composerThreadContexts,
     environmentContexts: composerEnvironmentContexts,
+    mcpResourceContexts: composerMcpResourceContexts,
     images: composerImages,
     files: composerFiles,
     existingAttachments: activeEditingQueuedAttachments ?? undefined,
@@ -1225,6 +1241,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     linkedEnvironments,
     gitCwd,
     activeThreadId,
+    activeProjectId,
     pullRequestProjectId,
     pullRequestRepository,
     threadPullRequests,
@@ -1488,6 +1505,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     linkedEnvironments,
     activeThread,
     activeThreadId,
+    projectId: activeProjectId,
     composerDraftTarget,
     attachmentDraftTarget,
     attachmentTargetKey,
@@ -1797,6 +1815,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setComposerDraftEnvironmentContexts(composerDraftTarget, nextEnvironments);
     }
 
+    const store = useComposerDraftStore.getState();
+    const liveResources = store.getComposerDraft(composerDraftTarget)?.mcpResourceContexts ?? [];
+    const nextResources = liveResources.filter((record) => {
+      if (referenced.has(record.contextId)) return true;
+      retained.mcpResources.set(record.contextId, record);
+      return false;
+    });
+    const liveResourceIds = new Set<string>(liveResources.map((record) => record.contextId));
+    for (const contextId of referenced) {
+      if (liveResourceIds.has(contextId)) continue;
+      const record = retained.mcpResources.get(contextId);
+      if (record) nextResources.push(record);
+    }
+    if (
+      nextResources.length !== liveResources.length ||
+      nextResources.some((record, index) => record !== liveResources[index])
+    ) {
+      store.setMcpResourceContexts(composerDraftTarget, nextResources);
+    }
+
     for (const comment of composerReviewComments) {
       const contextId = reviewCommentContextId(comment.id);
       if (!referenced.has(contextId)) {
@@ -2068,6 +2106,34 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
     const { snapshot, trigger } = resolveActiveComposerTrigger();
     if (!trigger) return;
+    if (item.type === "mcp-resource") {
+      if (
+        activeProjectId === null ||
+        trigger.kind !== "path" ||
+        !composerMenuItems.some((candidate) => candidate.id === item.id)
+      )
+        return;
+      const record = mcpResourceContextRecord(environmentId, activeProjectId, item.uri, item.label);
+      const replacement = `${formatComposerContextReference(record)} `;
+      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+        snapshot.value,
+        trigger.rangeEnd,
+        replacement,
+      );
+      if (
+        applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
+          expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+        })
+      ) {
+        const store = useComposerDraftStore.getState();
+        const existing = store.getComposerDraft(composerDraftTarget)?.mcpResourceContexts ?? [];
+        if (!existing.some(({ contextId }) => contextId === record.contextId)) {
+          store.setMcpResourceContexts(composerDraftTarget, [...existing, record]);
+        }
+        setComposerHighlightedItemId(null);
+      }
+      return;
+    }
     if (item.type === "path") {
       if (!isPathSuggestionCurrent(item.searchTarget, trigger, environmentId, gitCwd)) return;
       const replacement = `${serializeComposerFileLink(item.path)} `;
@@ -2359,6 +2425,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       reviewComments: latestDraft.reviewComments,
                       threadContexts: latestDraft.threadContexts,
                       environmentContexts: latestDraft.environmentContexts,
+                      mcpResourceContexts: latestDraft.mcpResourceContexts,
                     }
                   : {}),
                 prompt: transcribedText,
@@ -2564,6 +2631,91 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ? promptSuggestion
       : null;
 
+  const selectedProviderSnapshot =
+    providerStatuses.find((provider) => provider.instanceId === selectedInstanceId) ?? null;
+  const showPlanModeToggle =
+    selectedProviderSnapshot !== null &&
+    (selectedProviderSnapshot.showInteractionModeToggle !== false ||
+      (selectedProviderSnapshot.harnessPlanMode !== undefined &&
+        selectedProviderSnapshot.harnessPlanMode !== "none"));
+  const planReadOnlyEnforcement = selectedProviderSnapshot?.planReadOnlyEnforcement ?? "none";
+  const harnessLibraryQuery = useEnvironmentQuery(
+    harnessEnvironment.libraryQuery({
+      environmentId,
+      input: gitCwd ? { workspaceRoot: gitCwd } : {},
+    }),
+  );
+  const rawAvailableModes =
+    harnessLibraryQuery.data?.modes && harnessLibraryQuery.data.modes.length > 0
+      ? harnessLibraryQuery.data.modes
+          .filter((entry) => entry.effectiveEnabled)
+          .map((entry) => ({
+            id: entry.id,
+            name: entry.name,
+            description: entry.description,
+            baseInteractionMode: entry.baseInteractionMode,
+            readonly: entry.readonly,
+          }))
+      : [
+          {
+            id: HarnessModeId.make("build"),
+            name: gt("Build", { $context: "composer mode toggle" }),
+            description: gt("Default implementation mode with full tool access."),
+            baseInteractionMode: "default" as const,
+            readonly: false,
+          },
+          {
+            id: HarnessModeId.make("plan"),
+            name: gt("Plan", { $context: "composer mode toggle" }),
+            description: gt("Read-only exploration and structured plan output."),
+            baseInteractionMode: "plan" as const,
+            readonly: true,
+          },
+          {
+            id: HarnessModeId.make("review"),
+            name: gt("Review", { $context: "composer mode toggle" }),
+            description: gt("Read-only code review focused on correctness and risks."),
+            baseInteractionMode: "default" as const,
+            readonly: true,
+          },
+          {
+            id: HarnessModeId.make("creator"),
+            name: gt("Creator", { $context: "composer mode toggle" }),
+            description: gt("Author portable skills, rules, commands, and modes."),
+            baseInteractionMode: "default" as const,
+            readonly: false,
+          },
+        ];
+  const availableModes = showPlanModeToggle
+    ? rawAvailableModes
+    : rawAvailableModes.filter((entry) => entry.baseInteractionMode !== "plan");
+  const workflowModes = props.workflowModes ?? null;
+  const selectedWorkflow = props.selectedWorkflow ?? null;
+  const handleModeChange: ChatComposerProps["handleModeChange"] = (id, interactionMode) => {
+    props.onSelectWorkflow?.(null);
+    changePortableMode(id, interactionMode);
+  };
+  const handleCycleMode = () => {
+    const workflows = workflowModes ?? [];
+    const count = availableModes.length + workflows.length;
+    if (count <= 1 && selectedWorkflow === null) return;
+    if (count === 0) {
+      props.onSelectWorkflow?.(null);
+      return;
+    }
+    const currentIndex =
+      selectedWorkflow === null
+        ? availableModes.findIndex((entry) => entry.id === modeId)
+        : availableModes.length +
+          workflows.findIndex((entry) => entry.name === selectedWorkflow.name);
+    const nextIndex = (currentIndex + 1) % count;
+    const nextMode = availableModes[nextIndex];
+    if (nextMode) {
+      handleModeChange(nextMode.id, nextMode.baseInteractionMode);
+    } else {
+      props.onSelectWorkflow?.(workflows[nextIndex - availableModes.length] ?? null);
+    }
+  };
   const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem?: boolean) => {
     if (key === "Escape" && composerSendHeld && !event.isComposing) {
       cancelHeldSend();
@@ -2607,6 +2759,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       submitComposer,
       promptSuggestion: offeredPromptSuggestion,
       dismissPromptSuggestion,
+      ...(availableModes.length + (workflowModes?.length ?? 0) > 1 || selectedWorkflow !== null
+        ? { onCycleMode: handleCycleMode }
+        : {}),
     })(key, event, isTaskItem);
   };
 
@@ -2685,14 +2840,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     : composerControlsCollapsed
       ? 0
       : expandedControlsIconOnlyBlockCount;
-  const selectedProviderSnapshot =
-    providerStatuses.find((provider) => provider.instanceId === selectedInstanceId) ?? null;
-  const showPlanModeToggle =
-    selectedProviderSnapshot !== null &&
-    (selectedProviderSnapshot.showInteractionModeToggle !== false ||
-      (selectedProviderSnapshot.harnessPlanMode !== undefined &&
-        selectedProviderSnapshot.harnessPlanMode !== "none"));
-  const planReadOnlyEnforcement = selectedProviderSnapshot?.planReadOnlyEnforcement ?? "none";
 
   const composerControls = (
     <ComposerControlsBar
@@ -2715,9 +2862,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       compatibleRuntimeModeOptions={compatibleRuntimeModeOptions}
       handleRuntimeModeChange={handleRuntimeModeChange}
       interactionMode={interactionMode}
+      modeId={modeId}
+      availableModes={availableModes}
+      workflowModes={workflowModes}
+      selectedWorkflow={selectedWorkflow}
+      onSelectWorkflow={props.onSelectWorkflow}
       showPlanModeToggle={showPlanModeToggle}
       planReadOnlyEnforcement={planReadOnlyEnforcement}
       handleInteractionModeChange={handleInteractionModeChange}
+      handleModeChange={handleModeChange}
       composerControlsCollapsed={composerControlsCollapsed}
       effortDisplay={settings.effortDisplay}
       permissionsShownInStrip={props.permissionsShownInStrip}
@@ -3506,6 +3659,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         reviewComments: composerReviewComments,
         threadContexts: composerThreadContexts,
         environmentContexts: composerEnvironmentContexts,
+        mcpResourceContexts: composerMcpResourceContexts,
         selectedPromptEffort,
         selectedModelSelection,
         multipleModelSelections:

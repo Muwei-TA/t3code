@@ -232,6 +232,11 @@ describe("readManagedPolicy", () => {
               // Registry names ignore case.
               text("maxRuntimeMode", "auto-accept-edits"),
               dword("Telemetry", 0),
+              dword("HarnessPlugins", 0),
+              text(
+                "HarnessLockedRules",
+                '[{"id":"review","apply":"always","body":"Document validation."}]',
+              ),
               text("Settings", '{"enableAgentBrowserAccess": {"value": false, "locked": true}}'),
               text("UpdatesMode", "off"),
               dword("AllowNightly", 1),
@@ -253,6 +258,8 @@ describe("readManagedPolicy", () => {
           limits: {
             maxRuntimeMode: "auto-accept-edits",
             telemetry: false,
+            harnessPlugins: false,
+            harnessLockedRules: [{ id: "review", apply: "always", body: "Document validation." }],
             updates: { mode: "off", allowNightly: true },
             clients: ["desktop", "local-browser", "remote"],
             providers: { allowedDrivers: ["codex", "claudeAgent", "UnknownDriver"] },

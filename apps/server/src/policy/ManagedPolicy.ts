@@ -70,7 +70,13 @@ export const loadedPolicy = Effect.fn("ManagedPolicy.loadedPolicy")(function* (
  */
 export function deniedBy(
   policy: Pick<ManagedPolicy["Service"], "document">,
-  capability: "webhookTasks" | "telemetry" | "previewTunnel" | "harness" | "harnessMcpStdio",
+  capability:
+    | "webhookTasks"
+    | "telemetry"
+    | "previewTunnel"
+    | "harness"
+    | "harnessMcpStdio"
+    | "harnessPlugins",
 ): string | undefined {
   return policy.document?.limits?.[capability] === false ? policy.document.organization : undefined;
 }
@@ -90,6 +96,13 @@ export const fromDocument = Effect.fn("ManagedPolicy.fromDocument")(function* (
     });
   }
   const maxRuntimeMode = document.limits?.maxRuntimeMode;
+  const ruleIds = (document.limits?.harnessLockedRules ?? []).map((rule) => rule.id.toLowerCase());
+  if (new Set(ruleIds).size !== ruleIds.length) {
+    return yield* new ManagedPolicyFileError({
+      path,
+      reason: "Duplicate organization harness rule identifiers.",
+    });
+  }
   const settings = ManagedSettings.makeManagedSettings(document.settings ?? {}, maxRuntimeMode);
   if (settings._tag === "Invalid") {
     return yield* new ManagedPolicyFileError({ path, reason: settings.reason });
@@ -138,6 +151,8 @@ function summarizeLimits(
     previewTunnel,
     harness,
     harnessMcpStdio,
+    harnessPlugins,
+    harnessLockedRules,
     providers,
     updates,
   } = document.limits ?? {};
@@ -152,6 +167,10 @@ function summarizeLimits(
     ...(previewTunnel === undefined ? {} : { previewTunnel }),
     ...(harness === undefined ? {} : { harness }),
     ...(harnessMcpStdio === undefined ? {} : { harnessMcpStdio }),
+    ...(harnessPlugins === undefined ? {} : { harnessPlugins }),
+    ...(harnessLockedRules === undefined
+      ? {}
+      : { harnessLockedRuleIds: harnessLockedRules.map((rule) => rule.id) }),
     ...(providers?.allowedDrivers === undefined && Object.keys(lockedInstanceFields).length === 0
       ? {}
       : {

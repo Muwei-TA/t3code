@@ -4,6 +4,8 @@ import { useRememberThreadProject } from "./useRememberThreadProject";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
 import { buildProjectThreadStartTurnInput } from "../../lib/projectThreadStartTurn";
+import { useChatWorkflows } from "../../state/chat-workflows";
+import { ThreadWorkflowRuns } from "../workflows/ThreadWorkflowRuns";
 import { useWorktreeSetup } from "./use-worktree-setup";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
 import { AppBar } from "../../components/ui/AppBar";
@@ -394,6 +396,10 @@ function ThreadRouteContent(
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const startSideChat = useStartSideChat();
   const composer = useThreadComposerState({ startSideChat });
+  const { snapshot: workflowSnapshot } = useChatWorkflows(
+    selectedThread?.environmentId ?? null,
+    selectedThread?.id,
+  );
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
@@ -535,6 +541,7 @@ function ThreadRouteContent(
         modelSelection: composer.modelSelection ?? selectedThread.modelSelection,
         runtimeMode: composer.runtimeMode ?? selectedThread.runtimeMode,
         interactionMode: composer.interactionMode ?? selectedThread.interactionMode,
+        ...(composer.modeId !== undefined ? { modeId: composer.modeId } : {}),
       }
     : null;
 
@@ -711,6 +718,7 @@ function ThreadRouteContent(
       queueHeld: composer.queueHeld,
       runtimeMode: composer.runtimeMode ?? selectedThread.runtimeMode,
       interactionMode: composer.interactionMode ?? selectedThread.interactionMode,
+      ...(composer.modeId !== undefined ? { modeId: composer.modeId } : {}),
       modelSelection: composer.modelSelection,
       messageId: MessageId.make(uuidv4()),
       createdAt: new Date().toISOString(),
@@ -1065,6 +1073,14 @@ function ThreadRouteContent(
           feedbackSubmissions={composer.feedbackSubmissions}
           onDismissFeedback={composer.dismissFeedback}
           selectedThreadFeed={composer.selectedThreadFeed}
+          workflowRuns={
+            selectedThread && workflowSnapshot && workflowSnapshot.runs.length > 0 ? (
+              <ThreadWorkflowRuns
+                environmentId={selectedThread.environmentId}
+                snapshot={workflowSnapshot}
+              />
+            ) : null
+          }
           pendingHandoff={composer.pendingHandoff}
           activityRun={composer.selectedThreadActivityRun}
           activeWorkStartedAt={

@@ -296,7 +296,7 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
     Effect.orElseSucceed(() => ({
       linkedEnvironments: false,
       agentFeedback: "off" as const,
-      workflows: false,
+      workflows: true,
     })),
   );
   const pullRequests = yield* Effect.serviceOption(PullRequestService.PullRequestService);

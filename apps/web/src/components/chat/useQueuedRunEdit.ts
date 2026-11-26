@@ -14,6 +14,7 @@ import {
   type ChatAttachment,
   type ComposerContextRecord,
   type EnvironmentContextRecord,
+  type McpResourceContextRecord,
   type ResponseContextRecord,
   type EnvironmentId,
   type MessageId,
@@ -67,7 +68,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ChatComposerHandle } from "./ChatComposer";
 import { fileAttachmentCapabilityBlockReason } from "./composerAttachmentFiles";
-import { composerDraftContentChanged } from "./composerSend.logic";
+import { composerDraftContentChanged, referencedMcpResources } from "./composerSend.logic";
 import {
   attachmentContextIdsForRecord,
   discardQueuedEditDraft,
@@ -101,11 +102,12 @@ interface QueuedRunEditContent {
   readonly previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
   readonly environmentContexts: ReadonlyArray<EnvironmentContextRecord>;
+  readonly mcpResourceContexts?: ReadonlyArray<McpResourceContextRecord> | undefined;
   readonly replyTo?: ResponseContextRecord | null;
 }
 
 const isDraftOwnedRecord = (record: ComposerContextRecord) =>
-  record.kind === "thread" || record.kind === "environment";
+  record.kind === "thread" || record.kind === "environment" || record.kind === "mcp-resource";
 
 async function submitQueuedRunEdit(input: {
   readonly environmentId: EnvironmentId;
@@ -165,6 +167,7 @@ async function submitQueuedRunEdit(input: {
         previewAnnotations: content.previewAnnotations,
         threadContexts: content.threadContexts,
         environmentContexts: content.environmentContexts,
+        mcpResourceContexts: referencedMcpResources(editText, content.mcpResourceContexts),
         replyTo: content.replyTo ?? null,
         attachments: newAttachments.map((attachment, index) => ({
           attachment,
@@ -301,6 +304,12 @@ export function useQueuedRunEdit(input: {
     store.setEnvironmentContexts(
       target,
       records.filter((record): record is EnvironmentContextRecord => record.kind === "environment"),
+    );
+    store.setMcpResourceContexts(
+      target,
+      records.filter(
+        (record): record is McpResourceContextRecord => record.kind === "mcp-resource",
+      ),
     );
     if (reply) store.setReplyTo(target, reply);
     const threadRef = { environmentId, threadId: activeThreadId };

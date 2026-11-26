@@ -79,6 +79,7 @@ import {
   claudeMcpToolName,
   claudeMcpToolNamePart,
   claudeMcpToolPrefix,
+  HARNESS_MCP_APP_SERVER,
   MCP_APP_OUTPUT_KEY,
   mcpAppToolResourceUri,
 } from "@t3tools/shared/mcpApp";
@@ -2450,6 +2451,8 @@ export function makeClaudeQueryOptions(input: {
   readonly supportedDialogKinds?: ClaudeQueryOptions["supportedDialogKinds"];
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly appendSystemPromptFileText?: string;
+  /** Managed read-only plugin directory mounting portable Harness skills. */
+  readonly harnessSkillPluginDir?: string;
   // Flag settings, because a user's settings.json env beats the process env in Claude Code.
   readonly toolSearchOverride?: "true";
 }): ClaudeAgentSdkQueryOptions {
@@ -2482,8 +2485,14 @@ export function makeClaudeQueryOptions(input: {
   if (requestThinkingSummaries && extraArgs["thinking-display"] === undefined) {
     extraArgs["thinking-display"] = "summarized";
   }
-  const pluginDirectories =
-    input.settings === undefined ? [] : claudeLaunchArgPluginDirectories(input.settings.launchArgs);
+  const pluginDirectories = Array.from(
+    new Set([
+      ...(input.settings === undefined
+        ? []
+        : claudeLaunchArgPluginDirectories(input.settings.launchArgs)),
+      ...(input.harnessSkillPluginDir === undefined ? [] : [input.harnessSkillPluginDir]),
+    ]),
+  );
   // A bare --plugin-dir still reaches Claude, which reports the missing path.
   if (launchArgPluginDir === null) extraArgs["plugin-dir"] = null;
   const threadIdentity: ClaudeAgentSdkThreadIdentity = input.resume
@@ -2764,7 +2773,14 @@ export function claudeMcpQueryOverrides(input: {
   const mcpAllowedTools = input.readOnlySandbox
     ? [
         ...CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS,
-        ...(session.harnessEndpoint !== undefined ? ["mcp__t3-harness__propose_plan"] : []),
+        ...(session.harnessEndpoint !== undefined
+          ? [
+              "mcp__t3-harness__propose_plan",
+              "mcp__t3-harness__harness_skill_search",
+              "mcp__t3-harness__harness_skill_load",
+              "mcp__t3-harness__harness_rule_read",
+            ]
+          : []),
       ]
     : [
         CLAUDE_T3_MCP_TOOL_WILDCARD,
@@ -9139,7 +9155,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               toolCall.toolName,
             );
             const resourceUri = mcpAppToolResourceUri(match?.tool._meta);
-            if (match === undefined || resourceUri === undefined) return undefined;
+            if (
+              match === undefined ||
+              match.server === HARNESS_MCP_APP_SERVER ||
+              resourceUri === undefined
+            ) {
+              return undefined;
+            }
             const { contents } = yield* liveQuery.query.readMcpResource({
               server: match.server,
               uri: resourceUri,
@@ -13532,6 +13554,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             onStop,
             supportedDialogKinds: ["resume_return"],
             ...(appendSystemPromptFileText === undefined ? {} : { appendSystemPromptFileText }),
+            ...(mcpSession?.harnessSkillPluginDir === undefined
+              ? {}
+              : { harnessSkillPluginDir: mcpSession.harnessSkillPluginDir }),
             ...(toolSearchOverride === undefined ? {} : { toolSearchOverride }),
           });
           const resolvedTurnCwd = yield* fileSystem
@@ -13829,7 +13854,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               turnInput.message.text,
               compileClaudeModelSelection(turnInput.modelSelection, modelCatalog).promptEffort,
             );
-            const appContext = turnInput.appContext ?? [];
+            const appContext = [
+              ...(turnInput.harnessContext ?? []),
+              ...(turnInput.appContext ?? []),
+            ];
             const delivered = deliveredAppContext.get(nativeThreadId);
             let appContextSent = false;
             const userMessage =
@@ -14427,7 +14455,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               Effect.provideService(Path.Path, path),
             );
             // Notes this turn's prompt or an earlier steer already carried are not sent again.
-            const appContext = turnInput.appContext ?? [];
+            const appContext = [
+              ...(turnInput.harnessContext ?? []),
+              ...(turnInput.appContext ?? []),
+            ];
             const seenAppContext =
               currentTurn.appContextOffered ?? deliveredAppContext.get(existing.nativeThreadId);
             const userMessage = withClaudeAppContext(

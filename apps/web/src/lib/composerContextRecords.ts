@@ -18,6 +18,7 @@ import type {
   FileContextRecord,
   ImageContextRecord,
   KnownComposerContextRecord,
+  McpResourceContextRecord,
   MessageId,
   OrchestrationMessageContext,
   PreviewAnnotationContextRecord,
@@ -551,6 +552,7 @@ export function buildMessageContext(input: {
   previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   threadContexts?: ReadonlyArray<ThreadContextRecord>;
   environmentContexts?: ReadonlyArray<EnvironmentContextRecord>;
+  mcpResourceContexts?: ReadonlyArray<McpResourceContextRecord> | undefined;
   replyTo?: ResponseContextRecord | null;
   attachments?: ReadonlyArray<BoundComposerAttachment>;
 }): OrchestrationMessageContext | undefined {
@@ -564,6 +566,7 @@ export function buildMessageContext(input: {
     ...input.reviewComments.map(reviewCommentContextRecord),
     ...(input.threadContexts ?? []),
     ...(input.environmentContexts ?? []),
+    ...(input.mcpResourceContexts ?? []),
     ...(input.replyTo ? [input.replyTo] : []),
     ...input.previewAnnotations.map((annotation) =>
       previewAnnotationContextRecord(annotation, {

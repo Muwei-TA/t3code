@@ -14,6 +14,7 @@ import {
   type OrchestrationMessageContext,
   type OrchestrationV2ThreadProjection,
   type RuntimeMode,
+  type WorkflowSummary,
   type ServerConfig,
 } from "@t3tools/contracts";
 import {
@@ -26,6 +27,7 @@ import {
   makeThreadRequestsResolvedAnnouncer,
   sendApprovalFeedback,
 } from "@t3tools/client-runtime/state/thread-requests";
+import * as Cause from "effect/Cause";
 import { DateTime } from "effect";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -60,6 +62,10 @@ const state = vi.hoisted(() => ({
   answer: vi.fn(),
   feedback: vi.fn(),
   updateSettings: vi.fn(),
+  workflow: null as WorkflowSummary | null,
+  startWorkflow: vi.fn(),
+  saveWorkflowMode: vi.fn(),
+  saveWorkflowModel: vi.fn(),
   question: {
     id: "language",
     header: "Language",
@@ -91,6 +97,10 @@ vi.mock("react", () => ({
     vi.fn(),
   ],
 }));
+vi.mock("./server", () => ({
+  serverEnvironment: { startWorkflowRun: state.startWorkflow },
+}));
+vi.mock("./chat-workflows", () => ({ readChatWorkflowMode: () => state.workflow }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => "uuid" }));
 vi.mock("gt-react-native", async (importOriginal) => {
   const gt = await importOriginal<typeof import("gt-react-native")>();
@@ -184,6 +194,8 @@ vi.mock("./threads", async () => {
       respondToApproval: state.approve,
       respondToUserInput: state.answer,
       uploadFeedback: state.feedback,
+      setRuntimeMode: state.saveWorkflowMode,
+      setModelSelection: state.saveWorkflowModel,
     },
   };
 });
@@ -234,6 +246,12 @@ vi.mock("../lib/composerImages", () => ({
   pickComposerMedia: vi.fn(),
 }));
 vi.mock("../lib/commandMetadata", () => ({
+  makeTurnCommandMetadata: () => ({
+    messageId: "workflow-attempt",
+    commandId: "workflow-command",
+    threadId: "thread",
+    createdAt: "2026-09-05T00:00:00.000Z",
+  }),
   makeQueuedMessageMetadata: () => ({
     messageId: "message",
     commandId: "command",
@@ -262,6 +280,7 @@ beforeEach(() => {
     modelSelection: undefined,
     runtimeMode: undefined,
   };
+  state.workflow = null;
   state.freshPending = false;
   state.questionDrafts = {};
   state.compactModel = null;
@@ -287,9 +306,47 @@ beforeEach(() => {
   state.approve.mockResolvedValue(AsyncResult.success(undefined));
   state.answer.mockResolvedValue(AsyncResult.success(undefined));
   state.feedback.mockResolvedValue(AsyncResult.success({ feedbackId: "feedback" }));
+  state.startWorkflow.mockResolvedValue(AsyncResult.success({ runId: "workflow-run" }));
+  state.saveWorkflowMode.mockResolvedValue(AsyncResult.success(undefined));
+  state.saveWorkflowModel.mockResolvedValue(AsyncResult.success(undefined));
 });
 
 describe("mobile task permissions", () => {
+  it("persists a lower runtime mode and changed provider before starting a workflow", async () => {
+    state.grantedEnvironments.add("secondary");
+    state.workflow = { name: "fixture", version: 1, triggers: [] };
+    state.draft.runtimeMode = "approval-required";
+    state.draft.modelSelection = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "fixture",
+    };
+    expect(await useThreadComposerState(NO_SIDE_CHATS).onSendMessage()).toBe("workflow-attempt");
+    expect(state.saveWorkflowMode).toHaveBeenCalledWith({
+      environmentId: "secondary",
+      input: expect.objectContaining({ threadId: "thread", runtimeMode: "approval-required" }),
+    });
+    expect(state.saveWorkflowModel).toHaveBeenCalledWith({
+      environmentId: "secondary",
+      input: { threadId: "thread", modelSelection: state.draft.modelSelection },
+    });
+    expect(state.startWorkflow).toHaveBeenCalledOnce();
+    expect(state.saveWorkflowMode).toHaveBeenCalledBefore(state.startWorkflow);
+    expect(state.saveWorkflowModel).toHaveBeenCalledBefore(state.startWorkflow);
+    expect(state.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("keeps the prompt and skips the workflow when the server refuses its permissions", async () => {
+    state.grantedEnvironments.add("secondary");
+    state.workflow = { name: "fixture", version: 1, triggers: [] };
+    state.draft.runtimeMode = "approval-required";
+    state.saveWorkflowMode.mockResolvedValueOnce(
+      AsyncResult.failure(Cause.fail(new Error("Refused"))),
+    );
+    expect(await useThreadComposerState(NO_SIDE_CHATS).onSendMessage()).toBeNull();
+    expect(state.startWorkflow).not.toHaveBeenCalled();
+    expect(state.draft.text).toBe("Keep my draft");
+  });
+
   it("consumes an approval reply without queueing a parent message", async () => {
     state.grantedEnvironments.add("secondary");
     const composer = useThreadComposerState(NO_SIDE_CHATS);

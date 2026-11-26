@@ -1,4 +1,5 @@
 import { useComposerAttachmentActions } from "./use-composer-attachment-actions";
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import * as Effect from "effect/Effect";
 import * as Dialog from "../components/ui/Dialog";
@@ -137,6 +138,9 @@ import {
 import { useThreadSelection } from "./use-thread-selection";
 import { enqueueThreadOutboxMessage } from "./thread-outbox";
 import { dispatchingQueuedMessageIdsAtom, useThreadOutboxMessages } from "./use-thread-outbox";
+import { readChatWorkflowMode } from "./chat-workflows";
+import { serverEnvironment } from "./server";
+import { makeTurnCommandMetadata } from "../lib/commandMetadata";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 
@@ -255,6 +259,17 @@ export function useThreadComposerState(input: {
   const [isSavingQueuedEdit, setIsSavingQueuedEdit] = useState(false);
   const savingQueuedEditRef = useRef(false);
   const startingSideChatRef = useRef(false);
+  const startingWorkflowRef = useRef(false);
+  const workflowAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
+  const saveWorkflowHostMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
+    reportFailure: false,
+  });
+  const saveWorkflowHostModel = useAtomCommand(threadEnvironment.setModelSelection, {
+    reportFailure: false,
+  });
+  const startWorkflow = useAtomCommand(serverEnvironment.startWorkflowRun, {
+    reportFailure: false,
+  });
 
   const selectedThreadKey = selectedThreadShell
     ? scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id)
@@ -374,6 +389,7 @@ export function useThreadComposerState(input: {
       ? (selectedDraft.interactionMode ?? selectedThread.interactionMode)
       : DEFAULT_PROVIDER_INTERACTION_MODE
     : null;
+  const modeId = selectedThread ? (selectedDraft.modeId ?? selectedThread.modeId) : undefined;
   const canSwitchThreadProvider = threadAllowsProviderSwitch({
     thread: selectedThreadShell,
     projection: selectedThreadProjection?.projection,
@@ -709,6 +725,74 @@ export function useThreadComposerState(input: {
     }
 
     // A redirect's text answers its approval, so `/side` there is that text, not the command.
+    const workflow =
+      beforeDispatch === undefined ? readChatWorkflowMode(threadKey, thread.environmentId) : null;
+    if (workflow !== null) {
+      if (startingWorkflowRef.current) return null;
+      if (!text || attachments.length > 0 || (draft.context?.records.length ?? 0) > 0) {
+        Dialog.alert(
+          m(msg("Could not start the workflow.")),
+          m(msg("Workflow Mode starts with a text prompt and one model.")),
+        );
+        return null;
+      }
+      const fingerprint = JSON.stringify([threadKey, workflow.name, workflow.version, text]);
+      const key =
+        workflowAttempt.current?.fingerprint === fingerprint
+          ? workflowAttempt.current.key
+          : makeTurnCommandMetadata().messageId;
+      workflowAttempt.current = { fingerprint, key };
+      startingWorkflowRef.current = true;
+      const started = await settlePromise(async () => {
+        const runtimeMode = draft.runtimeMode ?? thread.runtimeMode;
+        const target = { environmentId: thread.environmentId, input: { threadId: thread.id } };
+        if (runtimeMode !== thread.runtimeMode) {
+          const result = await saveWorkflowHostMode({
+            ...target,
+            input: { ...target.input, runtimeMode, createdAt: new Date().toISOString() },
+          });
+          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+        }
+        if (!modelSelectionsEqual(modelSelection, thread.modelSelection)) {
+          const result = await saveWorkflowHostModel({
+            ...target,
+            input: { ...target.input, modelSelection },
+          });
+          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+        }
+        const result = await startWorkflow({
+          ...target,
+          input: {
+            ...target.input,
+            workflow: workflow.name,
+            version: workflow.version,
+            projectId: thread.projectId,
+            prompt: text,
+            idempotencyKey: key,
+          },
+        });
+        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+      }).finally(() => {
+        startingWorkflowRef.current = false;
+      });
+      if (started._tag === "Failure") {
+        Dialog.alert(
+          m(msg("Could not start the workflow.")),
+          errorDisplayMessage(squashAtomCommandFailure(started), m) ?? undefined,
+        );
+        return null;
+      }
+      workflowAttempt.current = null;
+      const currentDraft = getComposerDraftSnapshot(threadKey);
+      if (
+        currentDraft.text === draft.text &&
+        currentDraft.attachments.length === 0 &&
+        !currentDraft.context?.records.length
+      ) {
+        setComposerDraftText(threadKey, "");
+      }
+      return MessageId.make(key);
+    }
     const sideChatCommand = beforeDispatch === undefined ? parseSideChatCommand(text) : null;
     if (sideChatCommand) {
       if (sideChatUnavailableReason !== null) {
@@ -869,6 +953,7 @@ export function useThreadComposerState(input: {
         JSON.stringify(current.modelSelection) !== JSON.stringify(draft.modelSelection) ||
         current.runtimeMode !== draft.runtimeMode ||
         current.interactionMode !== draft.interactionMode ||
+        current.modeId !== draft.modeId ||
         current.attachments.length !== attachments.length ||
         current.attachments.some((attachment, index) => attachment.id !== attachments[index]?.id)
       )
@@ -923,6 +1008,9 @@ export function useThreadComposerState(input: {
       interactionMode: providerSupportsPlanMode
         ? (draft.interactionMode ?? thread.interactionMode)
         : DEFAULT_PROVIDER_INTERACTION_MODE,
+      ...((draft.modeId ?? thread.modeId) !== undefined
+        ? { modeId: draft.modeId ?? thread.modeId }
+        : {}),
       ...(compactBeforeSend
         ? { compactBeforeSend, dispatchMode: "queue" as const }
         : followUpDispatchMode === null
@@ -1096,6 +1184,7 @@ export function useThreadComposerState(input: {
     canSwitchThreadProvider,
     runtimeMode,
     interactionMode,
+    modeId,
     activeThreadBusy,
     interruptibleRunId,
     onChangeDraftMessage,

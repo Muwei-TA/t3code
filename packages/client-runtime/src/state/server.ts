@@ -1466,8 +1466,14 @@ export function createServerEnvironmentAtoms<R, E>(
     label: "environment-data:server:workflows:live",
     tag: WS_METHODS.workflowsSubscribe,
   });
-  const liveWorkflowSnapshot = (environmentId: EnvironmentId) => {
-    const live = workflowsLive({ environmentId, input: {} });
+  const liveWorkflowSnapshot = (
+    environmentId: EnvironmentId,
+    hostThreadId?: import("@t3tools/contracts").ThreadId,
+  ) => {
+    const live = workflowsLive({
+      environmentId,
+      input: hostThreadId === undefined ? {} : { chat: { threadId: hostThreadId } },
+    });
     return (get: Atom.AtomContext) => Option.getOrUndefined(AsyncResult.value(get(live)));
   };
   // Keyed by a JSON array of environment ids, like the compaction notice, to read them as one.
@@ -1644,7 +1650,7 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:workflows:run",
       tag: WS_METHODS.workflowsGet,
       refreshTrigger: ({ environmentId, input }) => {
-        const snapshot = liveWorkflowSnapshot(environmentId);
+        const snapshot = liveWorkflowSnapshot(environmentId, input.hostThreadId);
         return Atom.make((get) => workflowRunRefreshKey(snapshot(get), input.runId));
       },
       isFinal: (detail) => detail.run.endedAt !== null,
@@ -1955,6 +1961,15 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
+    startWorkflowRun: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:workflows:start",
+      tag: WS_METHODS.workflowsStart,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.threadId, input.workflow, input.idempotencyKey]),
+      },
+    }),
     answerWorkflowQuestion: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:workflows:answer",
       tag: WS_METHODS.workflowsAnswer,
@@ -1962,6 +1977,11 @@ export function createServerEnvironmentAtoms<R, E>(
         mode: "singleFlight",
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input.runId, input.name]),
       },
+    }),
+    pauseWorkflowRun: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:workflows:pause",
+      tag: WS_METHODS.workflowsPause,
+      concurrency: workflowRunConcurrency,
     }),
     resumeWorkflowRun: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:workflows:resume",

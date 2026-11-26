@@ -319,6 +319,7 @@ const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
 const layerWorkflowsProvided = WorkflowRuntime.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      layerCommandReceiptStoreProvided,
       layerThreadLaunchProvided,
       layerThreadManagementProvided,
       ThreadIssueService.layer.pipe(Layer.provide(layerOrchestratorProvided)),
@@ -405,6 +406,7 @@ const layerMcpAppRequestsProvided = McpAppRequests.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       McpAppModelContext.layer,
+      ProviderAdapterRegistry.layerFromProviderInstanceRegistry,
       layerOrchestratorProvided,
       layerThreadManagementProvided,
       layerProviderSessionManagerProvided,

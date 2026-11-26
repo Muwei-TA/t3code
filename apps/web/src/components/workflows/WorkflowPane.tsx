@@ -32,17 +32,24 @@ import WorkflowThreadPane, {
 export default function WorkflowPane({
   environmentId,
   runId,
+  hostThreadId,
   state,
   onChange,
 }: {
   readonly environmentId: EnvironmentId;
   readonly runId: string | null;
+  readonly hostThreadId?: ThreadId | undefined;
   readonly state: WorkflowPaneState;
   readonly onChange: (next: WorkflowPaneState) => void;
 }) {
   const gt = useGT();
   const detail = useEnvironmentQuery(
-    runId === null ? null : serverEnvironment.workflowRun({ environmentId, input: { runId } }),
+    runId === null
+      ? null
+      : serverEnvironment.workflowRun({
+          environmentId,
+          input: { runId, ...(hostThreadId === undefined ? {} : { hostThreadId }) },
+        }),
   );
   const openThreadPage = useOpenThreadPage();
   const openReferencePage = useOpenReferencePage(environmentId);

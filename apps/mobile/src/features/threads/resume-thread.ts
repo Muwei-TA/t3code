@@ -7,6 +7,7 @@ import type {
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
+  HarnessModeId,
   MessageId,
   ModelSelection,
   ProviderInteractionMode,
@@ -27,11 +28,13 @@ export async function resumeThread<E>(input: {
     readonly id: ThreadId;
     readonly runtimeMode: RuntimeMode;
     readonly interactionMode: ProviderInteractionMode;
+    readonly modeId?: HarnessModeId | undefined;
   };
   readonly resumableRunId: RunId | null;
   readonly queueHeld: boolean;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
+  readonly modeId?: HarnessModeId | undefined;
   readonly modelSelection: ModelSelection | null;
   readonly messageId: MessageId;
   readonly createdAt: string;
@@ -40,7 +43,7 @@ export async function resumeThread<E>(input: {
   readonly startTurn: Command<StartThreadTurnInput, E>;
   readonly resumeQueue: Command<ResumeThreadQueueInput, E>;
 }): Promise<AtomCommandResult<unknown, E>> {
-  const { thread, runtimeMode, interactionMode, createdAt } = input;
+  const { thread, runtimeMode, interactionMode, modeId, createdAt } = input;
   const environmentId = thread.environmentId;
   // The server holds the queue behind a stopped or usage-limited run until that run is continued.
   if (input.resumableRunId !== null) {
@@ -52,10 +55,15 @@ export async function resumeThread<E>(input: {
       });
       if (saved._tag === "Failure") return saved;
     }
-    if (interactionMode !== thread.interactionMode) {
+    if (interactionMode !== thread.interactionMode || modeId !== thread.modeId) {
       const saved = await input.setInteractionMode({
         environmentId,
-        input: { threadId: thread.id, interactionMode, createdAt },
+        input: {
+          threadId: thread.id,
+          interactionMode,
+          ...(modeId !== undefined ? { modeId } : {}),
+          createdAt,
+        },
       });
       if (saved._tag === "Failure") return saved;
     }
@@ -74,6 +82,7 @@ export async function resumeThread<E>(input: {
         },
         runtimeMode,
         interactionMode,
+        ...(modeId !== undefined ? { modeId } : {}),
         dispatchMode: "start",
       },
     });

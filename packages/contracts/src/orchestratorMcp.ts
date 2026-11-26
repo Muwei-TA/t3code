@@ -20,6 +20,7 @@ import {
   TrimmedNonEmptyString,
   TurnItemId,
 } from "./baseSchemas.ts";
+import { HarnessModeId } from "./harness.ts";
 import {
   ScheduledTaskRunStatus,
   ScheduledTaskSchedule,
@@ -199,6 +200,11 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
     }),
   ),
   interactionMode: Schema.optional(OrchestratorMcpInteractionMode),
+  modeId: Schema.optional(
+    HarnessModeId.annotate({
+      description: "Portable mode id (build, plan, review, creator, or custom).",
+    }),
+  ),
 });
 export type OrchestratorMcpDelegateTaskInput = typeof OrchestratorMcpDelegateTaskInput.Type;
 
@@ -281,6 +287,7 @@ export const OrchestratorMcpCreateThreadRequest = Schema.Struct({
   target: Schema.optional(OrchestratorMcpTarget),
   runtimeMode: Schema.optional(OrchestratorMcpRuntimeMode),
   interactionMode: Schema.optional(OrchestratorMcpInteractionMode),
+  modeId: Schema.optional(HarnessModeId),
 });
 export type OrchestratorMcpCreateThreadRequest = typeof OrchestratorMcpCreateThreadRequest.Type;
 
@@ -555,6 +562,7 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
   threadId: ThreadId,
   message: OrchestratorMcpPrompt,
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
+  modeId: Schema.optional(HarnessModeId),
   freshContext: Schema.optional(
     Schema.Boolean.annotate({
       description:

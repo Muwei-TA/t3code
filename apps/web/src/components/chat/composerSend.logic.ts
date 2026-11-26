@@ -1,4 +1,8 @@
-import type { EnvironmentId, ThreadContextRecord } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  McpResourceContextRecord,
+  ThreadContextRecord,
+} from "@t3tools/contracts";
 import { msg } from "gt-react";
 import { m, type MessageResolver } from "../../i18n/messages";
 import { collectInlineContextIds } from "../../lib/composerContextReferences";
@@ -22,6 +26,7 @@ export function composerDraftContentChanged(
     before.reviewComments !== after.reviewComments ||
     before.threadContexts !== after.threadContexts ||
     before.environmentContexts !== after.environmentContexts ||
+    before.mcpResourceContexts !== after.mcpResourceContexts ||
     before.replyTo !== after.replyTo
   );
 }
@@ -34,6 +39,15 @@ export function referencedThreadContexts(draft: {
   if (draft.threadContexts.length === 0) return [];
   const referenced = new Set(collectInlineContextIds(draft.prompt));
   return draft.threadContexts.filter((record) => referenced.has(record.contextId));
+}
+
+export function referencedMcpResources(
+  prompt: string,
+  records?: ReadonlyArray<McpResourceContextRecord>,
+) {
+  if (!records?.length) return [];
+  const referenced = new Set(collectInlineContextIds(prompt));
+  return records.filter((record) => referenced.has(record.contextId));
 }
 
 /** Why a send waits for the user to pick a machine when no machine was chosen automatically. */

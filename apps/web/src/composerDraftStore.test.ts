@@ -37,6 +37,10 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
+import {
+  formatComposerContextReference,
+  mcpResourceContextRecord,
+} from "@t3tools/shared/composerContextReferences";
 
 const CODEX_INSTANCE = ProviderInstanceId.make("codex");
 const CODEX_SECONDARY_INSTANCE = ProviderInstanceId.make("codex_secondary");
@@ -201,6 +205,34 @@ function providerModelOptions(
 }
 
 const TEST_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
+
+it("persists a resource draft before its prompt is written and keeps the chip when clearing text", () => {
+  resetComposerDraftStore();
+  const target = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("resource-draft"));
+  const resource = mcpResourceContextRecord(
+    TEST_ENVIRONMENT_ID,
+    ProjectId.make("docs"),
+    "t3-harness://docs/memo%3Aguide",
+    "Guide",
+  );
+  const store = useComposerDraftStore.getState();
+  store.setMcpResourceContexts(target, [resource]);
+  const persisted = JSON.parse(
+    JSON.stringify(partializeComposerDraftStoreState(useComposerDraftStore.getState())),
+  );
+  const hydrated = useComposerDraftStore.persist.getOptions().merge!(
+    persisted,
+    useComposerDraftStore.getInitialState(),
+  );
+  expect(hydrated.draftsByThreadKey[scopedThreadKey(target)]?.mcpResourceContexts).toEqual([
+    resource,
+  ]);
+  store.setPrompt(target, `Read ${formatComposerContextReference(resource)}`);
+  store.clearComposerPromptAndImages(target);
+  expect(store.getComposerDraft(target)?.prompt.trim()).toBe(
+    formatComposerContextReference(resource),
+  );
+});
 const OTHER_TEST_ENVIRONMENT_ID = EnvironmentId.make("environment-remote");
 const LEGACY_TEST_ENVIRONMENT_ID = EnvironmentId.make("__legacy__");
 

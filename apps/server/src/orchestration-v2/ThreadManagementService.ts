@@ -2,6 +2,7 @@ import type {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
 } from "@t3tools/contracts";
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import type {
   ActiveThreadListEntry,
   ProjectionRecordField,
@@ -25,6 +26,8 @@ import {
   type OrchestrationV2Command,
   type OrchestrationV2GetTurnItemResult,
   type OrchestrationV2ServerCommand,
+  type OrchestrationV2RunHarnessMode,
+  type HarnessModeId,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2CreationSource,
   type OrchestrationV2LinkedSender,
@@ -74,6 +77,14 @@ import { contextBoundaryOrdinal } from "./contextBoundary.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { ThreadWorktreeRestore } from "../workspace/restoreMissingWorktree.ts";
+import * as HarnessHooksService from "../harness/HarnessHooksService.ts";
+import * as HarnessLibraryStore from "../harness/HarnessLibraryStore.ts";
+import {
+  normalizeModeSelection,
+  preprocessTurnText,
+  runInteractionMode,
+} from "../harness/HarnessTurnPreprocess.ts";
+import * as ProjectStore from "./ProjectStore.ts";
 import { checkOutput, outputRequestProblem } from "./runOutput.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
@@ -161,6 +172,7 @@ export interface ThreadManagementSendInput {
   readonly text: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly modelSelection?: ModelSelection;
+  readonly modeId?: HarnessModeId | undefined;
   readonly mode: ThreadManagementSendMode;
   /** Start a new provider session; the orchestrator queues it instead of steering. */
   readonly freshContext?: boolean;
@@ -414,6 +426,7 @@ export type ThreadManagementError = typeof ThreadManagementError.Type;
 type ThreadManagementFailure = ThreadManagementError | Orchestrator.OrchestratorV2Error;
 
 export interface ThreadManagementServiceShape {
+  readonly withMessageIntakeLock: KeyedLock.KeyedLock<CommandId>["withLock"];
   readonly searchThreadStream: (
     input: OrchestrationV2SearchThreadInput,
   ) => Stream.Stream<OrchestrationV2SearchThreadResult, Orchestrator.OrchestratorV2Error>;
@@ -425,6 +438,7 @@ export interface ThreadManagementServiceShape {
   ) => Effect.Effect<void, LegacyV1ThreadImporter.LegacyV1ThreadImportError>;
   readonly dispatch: (
     command: OrchestrationV2ServerCommand,
+    options?: Orchestrator.MessageDispatchOptions,
   ) => Effect.Effect<
     Orchestrator.OrchestratorV2DispatchResult,
     Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
@@ -640,6 +654,7 @@ const isForceStopThreadError = Schema.is(OrchestrationV2ForceStopThreadError);
 
 const make = Effect.gen(function* () {
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+  const messageIntake = yield* KeyedLock.make<CommandId>();
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
   const layerScope = yield* Effect.scope;
@@ -648,6 +663,9 @@ const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
   const worktreeRestore = yield* ThreadWorktreeRestore;
+  const projectStore = yield* Effect.serviceOption(ProjectStore.ProjectStoreV2);
+  const harnessLibraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+  const harnessHooksService = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
 
   const assertProviderInstanceEnabled: ThreadManagementServiceShape["assertProviderInstanceEnabled"] =
     (input) =>
@@ -842,10 +860,10 @@ const make = Effect.gen(function* () {
     }
   };
 
-  const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
+  const dispatch: ThreadManagementServiceShape["dispatch"] = (command, options) =>
     ensureCommandTranscripts(command).pipe(
       Effect.andThen(assertDispatchTargetEnabled(command)),
-      Effect.andThen(orchestrator.dispatch(command)),
+      Effect.andThen(orchestrator.dispatch(command, options)),
     );
 
   const getProjectThreadRecords: ThreadManagementServiceShape["getProjectThreadRecords"] = (
@@ -918,8 +936,9 @@ const make = Effect.gen(function* () {
     const steerableRun = latestSteerableRun(target);
     // A fresh send, or one that asks for a result, never joins a running turn.
     const mode =
-      (input.freshContext || input.outputSchema !== undefined) &&
-      (input.mode === "steer" || input.mode === "restart")
+      input.modeId !== undefined ||
+      ((input.freshContext || input.outputSchema !== undefined) &&
+        (input.mode === "steer" || input.mode === "restart"))
         ? "queue"
         : input.mode;
     const explicitSteer = mode === "steer" || mode === "restart";
@@ -967,24 +986,68 @@ const make = Effect.gen(function* () {
         );
     }
 
-    const dispatched = yield* dispatch({
-      type: "message.dispatch",
-      commandId: input.commandId,
-      threadId: input.threadId,
-      messageId: input.messageId,
-      ...(input.scheduledTaskId === undefined ? {} : { scheduledTaskId: input.scheduledTaskId }),
-      ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
-      ...(input.linkedSender === undefined ? {} : { linkedSender: input.linkedSender }),
-      text: input.text,
-      attachments: input.attachments,
-      ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
-      ...(input.freshContext ? { freshContext: true } : {}),
-      ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
-      dispatchMode,
-      ...(mode === "auto" ? { deliveryIntent: "auto" } : {}),
-      createdBy: input.createdBy,
-      creationSource: input.creationSource,
-    });
+    let effectiveText = input.text;
+    let harnessMode: OrchestrationV2RunHarnessMode | undefined;
+    if (!(yield* hasReceipt(input.commandId))) {
+      let workspaceRoot = target.thread.worktreePath ?? undefined;
+      if (workspaceRoot === undefined && Option.isSome(projectStore)) {
+        const proj = yield* projectStore.value
+          .get(target.thread.projectId)
+          .pipe(Effect.orElseSucceed(() => Option.none()));
+        if (Option.isSome(proj)) {
+          workspaceRoot = proj.value.workspaceRoot;
+        }
+      }
+      if (input.modeId !== undefined) {
+        const normalized = yield* normalizeModeSelection({
+          modeId: input.modeId,
+          interactionMode:
+            input.modeId === "plan" || input.modeId === "review" ? "plan" : "default",
+          workspaceRoot,
+          libraryStore: harnessLibraryStore,
+        });
+        harnessMode = { id: input.modeId, interactionMode: normalized.interactionMode };
+      }
+      const preprocessed = yield* preprocessTurnText({
+        text: input.text,
+        threadId: input.threadId,
+        workspaceRoot,
+        modeId: harnessMode?.id ?? target.thread.modeId,
+        interactionMode: runInteractionMode(target.thread.interactionMode, harnessMode),
+        libraryStore: harnessLibraryStore,
+        hooksService: harnessHooksService,
+      });
+      if (preprocessed.blocked) {
+        return yield* new Orchestrator.OrchestratorCommandRejectedError({
+          commandId: input.commandId,
+          commandType: "message.dispatch",
+          cause: preprocessed.blockReason ?? "Turn blocked by turn.beforeStart hook.",
+        });
+      }
+      effectiveText = preprocessed.text;
+    }
+
+    const dispatched = yield* dispatch(
+      {
+        type: "message.dispatch",
+        commandId: input.commandId,
+        threadId: input.threadId,
+        messageId: input.messageId,
+        ...(input.scheduledTaskId === undefined ? {} : { scheduledTaskId: input.scheduledTaskId }),
+        ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
+        ...(input.linkedSender === undefined ? {} : { linkedSender: input.linkedSender }),
+        text: effectiveText,
+        attachments: input.attachments,
+        ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+        ...(input.freshContext ? { freshContext: true } : {}),
+        ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
+        dispatchMode,
+        ...(mode === "auto" ? { deliveryIntent: "auto" } : {}),
+        createdBy: input.createdBy,
+        creationSource: input.creationSource,
+      },
+      harnessMode === undefined ? undefined : { harnessMode },
+    );
     const projection = yield* getProjectThreadRecords(input, ["runs", "messages", "turnItems"], {
       messageIds: [input.messageId],
       turnItemTypes: ["user_message"],
@@ -1906,6 +1969,7 @@ const make = Effect.gen(function* () {
     assertProviderInstanceEnabled,
     isProviderInstanceEnabledForProject,
     hasReceipt,
+    withMessageIntakeLock: messageIntake.withLock,
     waitForThread,
     settleAfterRun,
     settleThread,

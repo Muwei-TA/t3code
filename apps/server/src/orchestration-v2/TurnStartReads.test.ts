@@ -455,11 +455,36 @@ it.effect.each(["sqlite"] as const)(
           ],
         },
       });
+      const appAttachmentId = "thread-completion-reads-0b9f6c1e-3c1d-4f7a-9d2e-5a6b7c8d9e0f-html";
+      yield* store.apply({
+        id: EventId.make("attachment:gateway-app-event"),
+        type: "turn-item.updated",
+        threadId,
+        runId: oldRunId,
+        occurredAt: now,
+        payload: {
+          ...item,
+          id: TurnItemId.make("attachment:gateway-app"),
+          type: "dynamic_tool",
+          nativeItemRef: null,
+          toolName: "t3-harness.fixture__show",
+          input: {},
+          output: {
+            t3McpApp: {
+              attachmentId: appAttachmentId,
+              server: "t3-harness",
+              tool: "fixture__show",
+              resourceUri: "ui://fixture/card",
+            },
+          },
+        },
+      });
       assert.deepEqual((yield* store.getThreadAttachmentIds(threadId)).toSorted(), [
         "answer-document",
         "answer-image",
         "attachment:old",
         "message-file",
+        appAttachmentId,
         recordingId,
       ]);
     }).pipe(Effect.provide(layerDatabase)),

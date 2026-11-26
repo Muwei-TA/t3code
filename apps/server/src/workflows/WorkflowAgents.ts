@@ -33,6 +33,7 @@ export interface AgentLaunch {
   readonly workspace?: OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined;
   readonly runtimeMode?: RuntimeMode | undefined;
   readonly interactionMode?: ProviderInteractionMode | undefined;
+  readonly modeId?: import("@t3tools/contracts").HarnessModeId | undefined;
 }
 
 export const AgentTurn = Schema.Struct({
@@ -90,7 +91,7 @@ export class WorkflowAgents extends Context.Service<
       readonly thread: string | undefined;
       /** An issue the thread is about, which it is linked to. */
       readonly issue?: IssueAddress | undefined;
-      /** How a new thread starts. Refused with `thread`, which keeps how it started. */
+      /** Thread launch settings. A continued thread accepts a per-turn modeId. */
       readonly launch?: AgentLaunch | undefined;
     }) => Effect.Effect<AgentTurn, WorkflowAgentError>;
     /**

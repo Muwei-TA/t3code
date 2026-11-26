@@ -529,6 +529,7 @@ export function useComposerStash(input: {
       ...(replyTo ? [replyTo] : []),
       ...composerThreadContexts,
       ...(getComposerDraft(composerDraftTarget)?.environmentContexts ?? []),
+      ...(getComposerDraft(composerDraftTarget)?.mcpResourceContexts ?? []),
       ...readTerminalContexts().map(terminalContextRecord),
       ...composerReviewComments.map(reviewCommentContextRecord),
       ...composerPreviewAnnotations.map((annotation) =>
@@ -649,6 +650,7 @@ export function useComposerStash(input: {
       clearComposerDraftTerminalContexts(stashTarget);
       setComposerDraftThreadContexts(stashTarget, []);
       setComposerDraftEnvironmentContexts(stashTarget, []);
+      useComposerDraftStore.getState().setMcpResourceContexts(stashTarget, []);
       setComposerDraftReplyTo(stashTarget, null);
       for (const comment of composerReviewComments) {
         removeComposerDraftReviewComment(stashTarget, comment.id);

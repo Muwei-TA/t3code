@@ -8,6 +8,7 @@ import {
   matchComposerThreadItems,
 } from "@t3tools/client-runtime/composerThreadItems";
 import { useAtomValue } from "@effect/atom-react";
+import { environmentServerConfigsAtom } from "~/state/server";
 import { useState } from "react";
 import type {
   EnvironmentId,
@@ -32,10 +33,13 @@ import { basenameOfPath } from "../../pierre-icons";
 import {
   getProviderSkillsForSlashMenu,
   getProviderSlashCommandsForSlashMenu,
+  mergePortableHarnessCommands,
+  mergePortableHarnessSkills,
 } from "@t3tools/client-runtime/providerSkills";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useVisibleThreadShells } from "~/state/entities";
 import { useEnvironmentIdentities, useEnvironmentMachines } from "~/state/environments";
+import { harnessEnvironment } from "~/state/harness";
 import { offersLinkedEnvironmentsAtom } from "~/state/peerLinks";
 import {
   pullRequestEnvironment,
@@ -69,6 +73,7 @@ export function useComposerMenuItems({
   linkedEnvironments,
   gitCwd,
   activeThreadId,
+  activeProjectId,
   pullRequestProjectId,
   pullRequestRepository,
   threadPullRequests,
@@ -89,6 +94,7 @@ export function useComposerMenuItems({
   readonly linkedEnvironments: ReadonlyMap<EnvironmentId, string>;
   readonly gitCwd: string | null;
   readonly activeThreadId: ThreadId | null;
+  readonly activeProjectId: ProjectId | null;
   readonly pullRequestProjectId: ProjectId | null;
   readonly pullRequestRepository: string | null;
   readonly threadPullRequests: ReadonlyArray<ThreadPullRequestLink> | undefined;
@@ -125,6 +131,39 @@ export function useComposerMenuItems({
   const settledPullRequestTextQuery =
     pullRequestTextQuery === debouncedPullRequestTextQuery ? pullRequestTextQuery : null;
   const isPathTrigger = composerTriggerKind === "path";
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const resources = useEnvironmentQuery(
+    isPathTrigger &&
+      activeProjectId !== null &&
+      questionAttachmentTarget === null &&
+      configs.get(environmentId)?.environment.capabilities.harnessMcpResources === true
+      ? harnessEnvironment.listMcpResources({
+          environmentId,
+          input: {
+            projectId: activeProjectId,
+            ...(activeThreadId === null ? {} : { threadId: activeThreadId }),
+          },
+        })
+      : null,
+  );
+  const isHarnessMenuTrigger =
+    composerTriggerKind === "slash-command" || composerTriggerKind === "skill";
+  const harnessLibraryLookup = useEnvironmentQuery(
+    isHarnessMenuTrigger
+      ? harnessEnvironment.libraryQuery({
+          environmentId,
+          input: gitCwd ? { workspaceRoot: gitCwd } : {},
+        })
+      : null,
+  );
+  const effectiveProviderSkills = mergePortableHarnessSkills(
+    selectedProviderSkills,
+    harnessLibraryLookup.data?.skills,
+  );
+  const effectiveProviderSlashCommands = mergePortableHarnessCommands(
+    selectedProviderSlashCommands,
+    harnessLibraryLookup.data?.commands,
+  );
   const environmentThreadShells = useVisibleThreadShells(isPathTrigger);
   // Mounts older settled threads matching the mention, here and on linked machines, which shells
   // may leave out.
@@ -240,6 +279,18 @@ export function useComposerMenuItems({
           modelOptionsByInstance: modelMentions.modelOptionsByInstance,
           query: composerTrigger.query,
         }),
+        ...(resources.data ?? [])
+          .filter(({ name, serverId }) =>
+            `${serverId} ${name}`.toLowerCase().includes(pathTriggerQuery.trim().toLowerCase()),
+          )
+          .slice(0, 10)
+          .map(({ uri, name, serverId }) => ({
+            id: uri,
+            type: "mcp-resource" as const,
+            uri,
+            label: name,
+            description: serverId,
+          })),
         ...workspaceEntries.entries.map((entry) => ({
           id: `path:${entry.kind}:${entry.path}`,
           type: "path" as const,
@@ -293,11 +344,11 @@ export function useComposerMenuItems({
           : []),
       ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
       const slashMenuSkills = getProviderSkillsForSlashMenu(
-        selectedProviderSkills,
+        effectiveProviderSkills,
         showSkillsInSlashMenu,
       );
       const providerSlashCommandItems = getProviderSlashCommandsForSlashMenu(
-        selectedProviderSlashCommands,
+        effectiveProviderSlashCommands,
         slashMenuSkills,
       ).map((command) => ({
         id: `provider-slash-command:${selectedProvider}:${command.name}`,
@@ -332,7 +383,7 @@ export function useComposerMenuItems({
       return searchSlashCommandItems(slashCommandItems, query);
     }
     if (composerTrigger.kind === "skill") {
-      return searchProviderSkills(selectedProviderSkills, composerTrigger.query).map((skill) => ({
+      return searchProviderSkills(effectiveProviderSkills, composerTrigger.query).map((skill) => ({
         id: `skill:${selectedProvider}:${skill.name}`,
         type: "skill" as const,
         provider: selectedProvider,
@@ -416,7 +467,7 @@ export function useComposerMenuItems({
     return [];
   })();
   const isLoading =
-    (composerTriggerKind === "path" && workspaceEntries.isPending) ||
+    (composerTriggerKind === "path" && (workspaceEntries.isPending || resources.isPending)) ||
     ((composerTriggerKind === "skill" || composerTriggerKind === "slash-command") &&
       workspaceSkillsScanning) ||
     (composerTriggerKind === "pull-request" &&

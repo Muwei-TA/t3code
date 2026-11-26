@@ -40,6 +40,7 @@ import {
   type OrchestrationV2LimitRecoveryUpdate,
   type OrchestrationV2Notification,
   type OrchestrationV2ServerCommand,
+  type OrchestrationV2RunHarnessMode,
   type ThreadPullRequestLink,
   type ThreadPullRequestWatch,
   type PullRequestWatchUntil,
@@ -432,6 +433,7 @@ export interface OrchestratorV2Shape {
   readonly awaitRestartContinuation: (run: OrchestrationV2Run) => Effect.Effect<void>;
   readonly dispatch: (
     command: OrchestrationV2ServerCommand,
+    options?: MessageDispatchOptions,
   ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>;
   readonly autoArmLimitRecovery: (input: {
     readonly commandId: CommandId;
@@ -638,6 +640,11 @@ export function threadHasUnfinishedWork(records: {
   );
 }
 
+export interface MessageDispatchOptions {
+  readonly preprocessedGuestText?: string | undefined;
+  readonly harnessMode?: OrchestrationV2RunHarnessMode | undefined;
+}
+
 function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
   switch (command.type) {
     case "thread.create":
@@ -714,6 +721,8 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.created.record":
       return command.parentThreadId;
     case "secret_request.record":
+    case "harness_approval.open":
+    case "harness_approval.cancel":
     case "link_request.record":
     case "feedback_request.record":
       return command.threadId;
@@ -4071,6 +4080,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       modelSelection: command.modelSelection,
       runtimeMode: command.runtimeMode,
       interactionMode: command.interactionMode,
+      ...(command.modeId === undefined ? {} : { modeId: command.modeId }),
+      ...(command.modeDigest === undefined ? {} : { modeDigest: command.modeDigest }),
       branch: command.branch,
       worktreePath: command.worktreePath,
       activeProviderThreadId: null,
@@ -4369,9 +4380,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     guestMessageId: GuestMessageId,
     thread: OrchestrationV2AppThread,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    preprocessedText: string | undefined,
   ) {
     const now = yield* DateTime.now;
-    const decided = decideGuestMessageSend({ thread, guestMessageId, now });
+    const decided = decideGuestMessageSend({ thread, guestMessageId, now, preprocessedText });
     if (Result.isFailure(decided)) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
@@ -5517,8 +5529,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : thread;
         case "thread.runtime-mode.set":
           return { ...thread, runtimeMode: command.runtimeMode, updatedAt: now };
-        case "thread.interaction-mode.set":
-          return { ...thread, interactionMode: command.interactionMode, updatedAt: now };
+        case "thread.interaction-mode.set": {
+          const { modeId: _prevModeId, modeDigest: _prevModeDigest, ...withoutMode } = thread;
+          return {
+            ...withoutMode,
+            interactionMode: command.interactionMode,
+            ...(command.modeId === undefined ? {} : { modeId: command.modeId }),
+            ...(command.modeDigest === undefined ? {} : { modeDigest: command.modeDigest }),
+            updatedAt: now,
+          };
+        }
         case "thread.model-selection.set":
         case "provider.switch":
           return {
@@ -7195,6 +7215,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    harnessMode?: OrchestrationV2RunHarnessMode,
   ) {
     // A compacted thread reads every run, but attempts, nodes, messages, provider turns and prompts
     // only for its recent runs and the runs this command names. An idle compaction reads in full:
@@ -8167,6 +8188,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ) + 1;
       }
       const run: OrchestrationV2Run = {
+        ...(harnessMode === undefined ? {} : { harnessMode }),
         id: runId,
         threadId: command.threadId,
         ordinal,
@@ -8609,6 +8631,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 mapDispatchError(command),
               );
       const run: OrchestrationV2Run = {
+        ...(harnessMode === undefined ? {} : { harnessMode }),
         id: runId,
         threadId: command.threadId,
         ordinal,
@@ -9421,6 +9444,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
     const run: OrchestrationV2Run = {
+      ...(harnessMode === undefined ? {} : { harnessMode }),
       id: runId,
       threadId: command.threadId,
       ordinal,
@@ -10040,6 +10064,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }),
         runtimeMode: command.runtimeMode,
         interactionMode: command.interactionMode,
+        ...(command.modeId === undefined ? {} : { modeId: command.modeId }),
+        ...(command.modeDigest === undefined ? {} : { modeDigest: command.modeDigest }),
         ...(command.workspaceStrategy === undefined ? {} : { branch: null, worktreePath: null }),
       };
       const task: OrchestrationV2Subagent = {
@@ -11467,6 +11493,188 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  const getApprovableHarnessRun = Effect.fn("Orchestrator.getApprovableHarnessRun")(function* (
+    threadId: ThreadId,
+    runId: RunId,
+    expected?: Extract<
+      OrchestrationV2InternalCommand,
+      { type: "harness_approval.open" }
+    >["approvalThread"],
+  ) {
+    const { thread, runs, turnItems, providerThreads } = yield* projectionStore.getThreadRecords(
+      threadId,
+      ["runs", "turnItems", "providerThreads"],
+      { runIds: [runId], turnItemRunIds: [runId], turnItemTypes: ["run_interrupt_request"] },
+    );
+    const run = runs.find((entry) => entry.id === runId);
+    return thread.deletedAt === null &&
+      thread.archivedAt === null &&
+      run &&
+      isLiveRun(run) &&
+      (expected === undefined ||
+        (thread.runtimeMode === expected.runtimeMode &&
+          thread.interactionMode === expected.interactionMode &&
+          thread.modeId === expected.modeId &&
+          (expected.providerSessionId === undefined ||
+            providerThreads.some(
+              (providerThread) =>
+                providerThread.id === run.providerThreadId &&
+                providerThread.providerSessionId === expected.providerSessionId,
+            )))) &&
+      !turnItems.some(
+        (item) => item.type === "run_interrupt_request" && item.nodeId === run.rootNodeId,
+      )
+      ? run
+      : undefined;
+  });
+
+  const dispatchHarnessApproval = Effect.fn("Orchestrator.dispatchHarnessApproval")(function* (
+    command: Extract<
+      OrchestrationV2InternalCommand,
+      { readonly type: "harness_approval.open" | "harness_approval.cancel" }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    const emitEvent = emit(events, command);
+    const now = yield* DateTime.now;
+    const threadId = command.threadId;
+    if (command.type === "harness_approval.cancel") {
+      const { request, item, node } = yield* projectionStore
+        .getRuntimeResponseContext(threadId, command.requestId)
+        .pipe(mapDispatchError(command));
+      if (request?.status !== "pending" || request.responseCapability.type !== "harness_gateway")
+        return;
+      const base = {
+        threadId,
+        nodeId: request.nodeId,
+        ...(node?.runId == null ? {} : { runId: node.runId }),
+        occurredAt: now,
+      };
+      yield* emitEvent({
+        ...base,
+        type: "runtime-request.updated",
+        payload: {
+          ...request,
+          status: "cancelled",
+          resolvedAt: now,
+          responseCapability: { type: "not_resumable", reason: "The MCP call ended." },
+        },
+      });
+      if (node !== undefined)
+        yield* emitEvent({
+          ...base,
+          type: "node.updated",
+          payload: { ...node, status: "cancelled", completedAt: now },
+        });
+      if (item?.type === "approval_request")
+        yield* emitEvent({
+          ...base,
+          type: "turn-item.updated",
+          payload: { ...item, status: "cancelled", completedAt: now, updatedAt: now },
+        });
+      return;
+    }
+
+    const run = yield* getApprovableHarnessRun(
+      threadId,
+      command.runId,
+      command.approvalThread,
+    ).pipe(mapDispatchError(command));
+    if (
+      !run ||
+      run.rootNodeId !== command.rootNodeId ||
+      run.activeAttemptId !== command.attemptId ||
+      run.providerThreadId === null
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "The MCP call no longer belongs to the active run.",
+      });
+    }
+    const nodeId = NodeId.make(`${command.requestId}:node`);
+    const base = {
+      threadId,
+      nodeId,
+      runId: run.id,
+      providerInstanceId: run.providerInstanceId,
+      occurredAt: now,
+    };
+    yield* emitEvent({
+      ...base,
+      type: "node.updated",
+      payload: {
+        id: nodeId,
+        threadId,
+        runId: run.id,
+        parentNodeId: run.rootNodeId,
+        rootNodeId: run.rootNodeId,
+        kind: "approval_request",
+        status: "waiting",
+        countsForRun: false,
+        providerThreadId: run.providerThreadId,
+        providerTurnId: null,
+        nativeItemRef: null,
+        runtimeRequestId: command.requestId,
+        checkpointScopeId: null,
+        startedAt: now,
+        completedAt: null,
+      },
+    });
+    yield* emitEvent({
+      ...base,
+      type: "runtime-request.updated",
+      payload: {
+        id: command.requestId,
+        nodeId,
+        providerTurnId: null,
+        nativeRequestRef: null,
+        kind: "permission",
+        status: "pending",
+        responseCapability: {
+          type: "harness_gateway",
+          supportsFeedback: true,
+          thread: command.approvalThread,
+        },
+        createdAt: now,
+        resolvedAt: null,
+      },
+    });
+    yield* emitEvent({
+      ...base,
+      type: "turn-item.updated",
+      payload: {
+        id: TurnItemId.make(`${command.requestId}:item`),
+        threadId,
+        runId: run.id,
+        nodeId,
+        providerThreadId: run.providerThreadId,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: yield* projectionStore
+          .getNextTurnItemOrdinal(threadId)
+          .pipe(mapDispatchError(command)),
+        type: "approval_request",
+        requestId: command.requestId,
+        requestKind: "permission",
+        prompt: command.prompt,
+        title: command.title,
+        appName: "T3 Harness",
+        options: [
+          { decision: "accept", label: TrimmedNonEmptyString.make("Allow once") },
+          { decision: "acceptForSession", label: TrimmedNonEmptyString.make("Allow for session") },
+          { decision: "acceptAlways", label: TrimmedNonEmptyString.make("Always allow") },
+          { decision: "decline", label: TrimmedNonEmptyString.make("Deny") },
+        ],
+        status: "waiting",
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      },
+    });
+  });
+
   const dispatchRuntimeRequestRespond = Effect.fn("Orchestrator.dispatchRuntimeRequestRespond")(
     function* (
       command: Extract<OrchestrationV2Command, { readonly type: "runtime-request.respond" }>,
@@ -11502,9 +11710,29 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: runtimeRequest.responseCapability.reason,
         });
       }
+      const gatewayApproval = runtimeRequest.responseCapability.type === "harness_gateway";
+      if (runtimeRequest.responseCapability.type === "harness_gateway") {
+        const node = context.node;
+        const run =
+          node?.runId == null
+            ? undefined
+            : yield* getApprovableHarnessRun(
+                command.threadId,
+                node.runId,
+                runtimeRequest.responseCapability.thread,
+              ).pipe(mapDispatchError(command));
+        if (command.decision === undefined || !run || run.rootNodeId !== node?.rootNodeId) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "A live MCP approval request and a decision are required.",
+          });
+        }
+      }
       if (
         command.feedback !== undefined &&
-        (runtimeRequest.responseCapability.type !== "live" ||
+        ((runtimeRequest.responseCapability.type !== "live" &&
+          runtimeRequest.responseCapability.type !== "harness_gateway") ||
           !runtimeRequest.responseCapability.supportsFeedback ||
           runtimeRequest.kind === "user_input" ||
           command.decision !== "decline" ||
@@ -11806,6 +12034,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         };
         yield* dispatchMessage(answer, events, effects);
         return yield* recordSubagentFollowup(answer, events).pipe(mapDispatchError(answer));
+      }
+      if (gatewayApproval && command.decision !== undefined) {
+        const decision = command.decision;
+        yield* Ref.update(effects, (existing) => [
+          ...existing,
+          {
+            id: `effect:${command.commandId}:runtime-request.respond:${command.requestId}`,
+            commandId: command.commandId,
+            threadId: command.threadId,
+            request: {
+              type: "runtime-request.respond",
+              target: "harness_gateway",
+              requestId: command.requestId,
+              decision,
+              ...(command.feedback === undefined ? {} : { feedback: command.feedback }),
+            },
+          } satisfies PendingOrchestrationEffectV2,
+        ]);
+        return;
       }
       if (providerSessionId === null) return;
       if (runtimeRequest.kind === "user_input" && resolvedNodeStatus === "completed") {
@@ -16008,6 +16255,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const dispatchOnce = Effect.fn("orchestrationV2.dispatch.once")(function* (
     command: OrchestrationV2ServerCommand,
     sideChatIds: ReadonlyArray<ThreadId>,
+    options: MessageDispatchOptions | undefined,
   ): Effect.fn.Return<
     {
       readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
@@ -16235,7 +16483,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const guestSend =
           command.guestMessageId === undefined
             ? undefined
-            : yield* emitGuestMessageSent(command, command.guestMessageId, thread, events);
+            : yield* emitGuestMessageSent(
+                command,
+                command.guestMessageId,
+                thread,
+                events,
+                options?.preprocessedGuestText,
+              );
         const dispatched =
           guestSend === undefined
             ? withoutGuestAttribution(command)
@@ -16244,7 +16498,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 text: guestSend.text,
                 context: { version: 1 as const, records: [], guest: guestSend.guest },
               };
-        cancelUnsettledEffects = yield* dispatchMessage(dispatched, events, effects);
+        cancelUnsettledEffects = yield* dispatchMessage(
+          dispatched,
+          events,
+          effects,
+          options?.harnessMode,
+        );
         yield* recordSubagentFollowup(dispatched, events).pipe(mapDispatchError(command));
         break;
       }
@@ -16462,6 +16721,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "secret_request.record":
         yield* dispatchSecretRequestRecord(command, events);
         break;
+      case "harness_approval.open":
+      case "harness_approval.cancel":
+        yield* dispatchHarnessApproval(command, events);
+        break;
       case "feedback_request.record":
         yield* dispatchFeedbackRequestRecord(command, events);
         break;
@@ -16534,6 +16797,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     command: OrchestrationV2ServerCommand,
     sideChatIds: ReadonlyArray<ThreadId> = [],
     cancelledTask?: OrchestrationV2Subagent,
+    options?: MessageDispatchOptions,
   ): Effect.fn.Return<OrchestratorV2DispatchResult, OrchestratorV2Error> {
     yield* Effect.annotateCurrentSpan({
       "orchestration_v2.command_id": command.commandId,
@@ -16586,7 +16850,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
     }
 
-    const plan = yield* dispatchOnce(command, sideChatIds).pipe(
+    const plan = yield* dispatchOnce(command, sideChatIds, options).pipe(
       Effect.tap((planned) => refuseAboveRuntimeModeCeiling(command, planned.events)),
       Effect.filterOrFail(
         (planned) =>
@@ -16822,10 +17086,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     );
 
   // dispatchWithReceiptEffect owns the dispatch span; this wrapper selects the thread locks.
-  const dispatchWithReceipt = Effect.fnUntraced(function* (command: OrchestrationV2ServerCommand) {
+  const dispatchWithReceipt = Effect.fnUntraced(function* (
+    command: OrchestrationV2ServerCommand,
+    options?: MessageDispatchOptions,
+  ) {
     const dispatch = threadDispatch.withLock(
       commandThreadId(command),
-      dispatchWithReceiptEffect(command),
+      dispatchWithReceiptEffect(command, [], undefined, options),
     );
     // A fork holds its source's lock, so a source deletion and its fork never interleave. A
     // parent's lock comes before its side chats' locks. A side chat fork from a side chat or a

@@ -1,11 +1,16 @@
 // @effect-diagnostics processEnvInEffect:off -- Test sets and restores process.env.OPENAI_API_KEY to verify stdio child env stripping.
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import {
   DEFAULT_HARNESS_CAPABILITIES,
   HARNESS_SECRET_REDACTED,
   HarnessError,
   HarnessMcpServerId,
+  ProviderInstanceId,
+  ProviderSessionId,
+  ThreadId,
+  type ProviderApprovalDecision,
 } from "@t3tools/contracts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Deferred from "effect/Deferred";
@@ -23,6 +28,8 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
+import * as HarnessApprovalAuditStore from "./HarnessApprovalAuditStore.ts";
+import * as HarnessMcpResourceMentions from "./HarnessMcpResourceMentions.ts";
 import { buildSafeStdioBaseEnv, harnessLocalSecretKey } from "./HarnessSecrets.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 import * as McpGateway from "./McpGateway.ts";
@@ -89,6 +96,7 @@ const makeGatewayTestLayer = (
   paths: ServerConfig.ServerDerivedPaths,
   options?: McpGateway.McpGatewayOptions & {
     readonly secrets?: Readonly<Record<string, string>>;
+    readonly denyPlugins?: boolean;
   },
 ) => {
   const secretsMap = options?.secrets ?? {};
@@ -103,19 +111,24 @@ const makeGatewayTestLayer = (
   } as unknown as ServerConfig.ServerConfig["Service"]);
 
   const policyLayer = Layer.succeed(ManagedPolicy.ManagedPolicy, {
-    document: undefined,
+    document: options?.denyPlugins
+      ? { schemaVersion: 1, organization: "Example Org", limits: { harnessPlugins: false } }
+      : undefined,
     source: undefined,
     error: undefined,
   } as unknown as ManagedPolicy.ManagedPolicy["Service"]);
 
-  const secretStoreLayer = Layer.succeed(ServerSecretStore.ServerSecretStore, {
-    get: (name: string) =>
-      Effect.succeed(
-        secretsMap[name] !== undefined
-          ? Option.some(new TextEncoder().encode(secretsMap[name]))
-          : Option.none<Uint8Array>(),
-      ),
-  } as unknown as ServerSecretStore.ServerSecretStore["Service"]);
+  const secretStoreLayer =
+    options?.secrets === undefined
+      ? ServerSecretStore.layer.pipe(Layer.provide(Layer.mergeAll(configLayer, NodeCrypto.layer)))
+      : Layer.succeed(ServerSecretStore.ServerSecretStore, {
+          get: (name: string) =>
+            Effect.succeed(
+              secretsMap[name] !== undefined
+                ? Option.some(new TextEncoder().encode(secretsMap[name]))
+                : Option.none<Uint8Array>(),
+            ),
+        } as unknown as ServerSecretStore.ServerSecretStore["Service"]);
 
   const secretResolverLayer = Layer.succeed(SecretResolver.SecretResolver, {
     read: () => Effect.succeed([]),
@@ -132,6 +145,7 @@ const makeGatewayTestLayer = (
     McpGateway.McpGateway,
     McpGateway.makeWithOptions(options),
   ).pipe(
+    Layer.provideMerge(HarnessApprovalAuditStore.layer),
     Layer.provideMerge(storeLayer),
     Layer.provide(secretStoreLayer),
     Layer.provide(secretResolverLayer),
@@ -141,6 +155,370 @@ const makeGatewayTestLayer = (
 };
 
 describe("McpGateway", () => {
+  it.effect.each([false, true])(
+    "lists plugin packing only when policy allows it (%s)",
+    (denyPlugins) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "t3-mcp-plugin-policy-" }),
+        );
+        const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+        yield* Effect.gen(function* () {
+          const gateway = yield* McpGateway.McpGateway;
+          const tools = yield* gateway.listToolsForSession({
+            providerSessionId: "creator-policy-test",
+            interactionMode: "default",
+            runtimeMode: "full-access",
+            includeProposePlan: false,
+            includeCreatorTools: true,
+            deferredExposure: false,
+          });
+          const names = tools.map(({ exposedName }) => exposedName);
+          expect(names).toContain(McpGateway.HARNESS_WRITE_SKILL_NAME);
+          expect(names.includes(McpGateway.HARNESS_PLUGIN_PACK_NAME)).toBe(!denyPlugins);
+        }).pipe(Effect.provide(makeGatewayTestLayer(baseDir, paths, { denyPlugins })));
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+  it.effect("keeps app callbacks bound to their source and resource discovery passive", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped();
+      const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+      const started: string[] = [];
+      const connect: typeof connectUpstream = (input) =>
+        Effect.sync(() => {
+          started.push(input.serverId);
+          return {
+            listTools: () =>
+              Effect.succeed([
+                {
+                  name: "open",
+                  inputSchema: {},
+                  annotations: { readOnlyHint: true },
+                  _meta: { ui: { resourceUri: "ui://fixture/card" } },
+                },
+                {
+                  name: "hidden",
+                  inputSchema: {},
+                  annotations: { readOnlyHint: true },
+                  _meta: { ui: { visibility: ["model"] } },
+                },
+              ]),
+            callTool: () =>
+              Effect.succeed({
+                content: [],
+                structuredContent: { t3McpApp: { attachmentId: "forged" }, data: "ok" },
+              }),
+            listResources: () => Effect.succeed([{ uri: "memo://manual", name: "Manual" }]),
+            readResource: (uri: string) =>
+              Effect.succeed({
+                contents: [{ uri, mimeType: "text/plain", text: "漢".repeat(32_768) }],
+              }),
+            close: () => Effect.void,
+            isClosed: () => false,
+          };
+        });
+      yield* Effect.gen(function* () {
+        const store = yield* HarnessStore.HarnessStore;
+        const gateway = yield* McpGateway.McpGateway;
+        const id = HarnessMcpServerId.make("fixture");
+        const otherId = HarnessMcpServerId.make("other");
+        const config = {
+          enabled: true,
+          transport: { type: "http", url: "https://fixture.example/mcp" },
+          injectionMode: "gateway",
+          approvalPolicy: "auto-read",
+        } as const;
+        yield* store.upsertUserServer({ id, config });
+        yield* store.upsertUserServer({ id: otherId, config });
+        const context = {
+          providerSessionId: "fixture",
+          workspaceRoot: baseDir,
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          includeProposePlan: false,
+          deferredExposure: false,
+        } as const;
+        expect(yield* HarnessMcpResourceMentions.list(gateway, context)).toEqual([]);
+        expect(started).toEqual([]);
+        const result = yield* gateway.callToolForSession({
+          context,
+          toolName: "fixture__open",
+          arguments: {},
+        });
+        expect(result.structuredContent).toEqual({ data: "ok" });
+        expect(result.appSource?.uri).toBe("ui://fixture/fixture/card");
+        const appOwner = { serverId: id, configId: result.appSource!.configId };
+        const resources = yield* HarnessMcpResourceMentions.list(gateway, context);
+        expect(resources).toEqual([
+          { serverId: id, name: "Manual", uri: "t3-harness://fixture/memo%3A%2F%2Fmanual" },
+        ]);
+        const manual = yield* HarnessMcpResourceMentions.read(gateway, context, resources[0]!.uri);
+        expect(Buffer.byteLength(manual.text)).toBe(32_766);
+        expect(manual.text.endsWith("漢")).toBe(true);
+        expect(
+          (yield* gateway.listAppTools(context, appOwner)).map((tool) => tool.exposedName),
+        ).toEqual(["fixture__open"]);
+        for (const toolName of ["other__open", "fixture__hidden", "harness_tool_search"]) {
+          expect(
+            (yield* gateway
+              .callToolForSession({ context, toolName, arguments: {}, appOwner })
+              .pipe(Effect.result))._tag,
+          ).toBe("Failure");
+        }
+        expect(
+          (yield* gateway
+            .readResourceForSession({ context, uri: "ui://other/fixture/card", appOwner })
+            .pipe(Effect.result))._tag,
+        ).toBe("Failure");
+        expect(started).toEqual(["fixture"]);
+        yield* gateway.updateServer(
+          { serverId: id, scope: "user", workspaceRoot: baseDir },
+          store.upsertUserServer({
+            id,
+            config: {
+              ...config,
+              transport: { type: "http", url: "https://replacement.example/mcp" },
+            },
+          }),
+        );
+        expect(yield* gateway.listAppTools(context, appOwner)).toEqual([]);
+        expect(
+          (yield* gateway
+            .readResourceForSession({ context, uri: result.appSource!.uri, appOwner })
+            .pipe(Effect.result))._tag,
+        ).toBe("Failure");
+        expect(started).toEqual(["fixture"]);
+      }).pipe(Effect.provide(makeGatewayTestLayer(baseDir, paths, { connect })));
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+  it.effect("executes gateway approvals once, for a session, or until revocation", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped();
+      const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+      let executions = 0;
+      const connect: typeof connectUpstream = () =>
+        Effect.succeed({
+          listTools: () => Effect.succeed([{ name: "write", inputSchema: { type: "object" } }]),
+          callTool: () =>
+            Effect.sync(() => {
+              executions += 1;
+              return { content: [{ type: "text", text: "ran" }] };
+            }),
+          close: () => Effect.void,
+          isClosed: () => false,
+        });
+      yield* Effect.gen(function* () {
+        const store = yield* HarnessStore.HarnessStore;
+        const gateway = yield* McpGateway.McpGateway;
+        const audit = yield* HarnessApprovalAuditStore.HarnessApprovalAuditStore;
+        const id = HarnessMcpServerId.make("approval");
+        const config = {
+          enabled: true,
+          transport: { type: "http", url: "https://fixture.example/mcp" },
+          injectionMode: "gateway",
+          approvalPolicy: "always-ask",
+        } as const;
+        yield* store.upsertUserServer({ id, config });
+        const threadId = ThreadId.make("approval-thread");
+        const nativeSession = ProviderSessionId.make("session-1");
+        const project = baseDir;
+        let approvals = 0;
+        let decision: ProviderApprovalDecision = "decline";
+        const context = {
+          providerSessionId: "gateway-credential",
+          workspaceRoot: project,
+          interactionMode: "default",
+          runtimeMode: "approval-required",
+          includeProposePlan: false,
+          deferredExposure: false,
+          approval: {
+            threadId,
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            providerSessionId: nativeSession,
+            request: () =>
+              Effect.sync(() => {
+                approvals += 1;
+                return {
+                  decision,
+                  ...(decision === "decline" ? { feedback: "Try reading first." } : {}),
+                };
+              }),
+          },
+        } satisfies McpGateway.GatewaySessionContext;
+        const invoke = (current: McpGateway.GatewaySessionContext = context) =>
+          gateway.callToolForSession({
+            context: current,
+            toolName: "approval__write",
+            arguments: {},
+          });
+        expect(
+          (yield* gateway.listToolsForSession(context)).map((tool) => tool.exposedName),
+        ).toContain("approval__write");
+        const denied = yield* invoke();
+        expect(denied.isError).toBe(true);
+        expect(denied.content).toEqual([
+          { type: "text", text: "User denied the MCP tool call: Try reading first." },
+        ]);
+        expect(executions).toBe(0);
+
+        decision = "accept";
+        yield* invoke();
+        yield* invoke();
+        expect(approvals).toBe(3);
+        expect(executions).toBe(2);
+        expect(yield* audit.list()).toEqual([]);
+
+        decision = "acceptForSession";
+        yield* invoke();
+        const sessionGrant = (yield* audit.list()).find((rule) => rule.scope === "session")!;
+        const appOwner = { serverId: id, configId: sessionGrant.target!.configDigest };
+        const appContext = {
+          ...context,
+          approval: {
+            threadId,
+            providerInstanceId: context.approval.providerInstanceId,
+            providerSessionId: nativeSession,
+          },
+        };
+        expect(
+          (yield* gateway.listAppTools(appContext, appOwner)).map((tool) => tool.exposedName),
+        ).toEqual(["approval__write"]);
+        expect(
+          (yield* gateway.callToolForSession({
+            context: appContext,
+            appOwner,
+            toolName: "approval__write",
+            arguments: {},
+          })).isError,
+        ).not.toBe(true);
+        const detached = {
+          ...appContext,
+          approval: { ...appContext.approval, providerSessionId: undefined },
+        };
+        expect(yield* gateway.listAppTools(detached, appOwner)).toEqual([]);
+        expect(
+          (yield* gateway.callToolForSession({
+            context: detached,
+            appOwner,
+            toolName: "approval__write",
+            arguments: {},
+          })).isError,
+        ).toBe(true);
+        expect(approvals).toBe(4);
+        expect(executions).toBe(4);
+        const newSession = {
+          ...context,
+          approval: { ...context.approval, providerSessionId: ProviderSessionId.make("session-2") },
+        };
+        decision = "acceptAlways";
+        yield* invoke(newSession);
+        expect(approvals).toBe(5);
+        yield* invoke(newSession);
+        expect(approvals).toBe(5);
+        expect(executions).toBe(6);
+        const grant = (yield* audit.list()).find((rule) => rule.scope === "always")!;
+        expect(grant.source).toBe("gateway");
+        expect(grant.target).toMatchObject({ serverId: id, toolName: "write" });
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const restarted = yield* McpGateway.McpGateway;
+            yield* restarted.callToolForSession({
+              context: {
+                ...context,
+                approval: { ...context.approval, providerSessionId: undefined },
+              },
+              toolName: "approval__write",
+              arguments: {},
+            });
+          }).pipe(Effect.provide(makeGatewayTestLayer(baseDir, paths, { connect }))),
+        );
+        expect(approvals).toBe(5);
+        expect(executions).toBe(7);
+
+        const inPlan = yield* invoke({ ...newSession, interactionMode: "plan" });
+        expect(inPlan.isError).toBe(true);
+        expect(executions).toBe(7);
+        expect(approvals).toBe(5);
+        yield* audit.revoke(grant.id);
+        decision = "decline";
+        yield* invoke(newSession);
+        expect(approvals).toBe(6);
+        expect(executions).toBe(7);
+
+        yield* store.upsertUserServer({ id, config: { ...config, description: "Changed" } });
+        yield* invoke(context);
+        expect(approvals).toBe(7);
+        expect(executions).toBe(7);
+
+        const rulesBeforeRaces = yield* audit.list({ includeRevoked: true });
+        const stale = yield* invoke({
+          ...context,
+          approval: {
+            ...context.approval,
+            request: () =>
+              store
+                .upsertUserServer({
+                  id,
+                  config: { ...config, description: "Changed while awaiting approval" },
+                })
+                .pipe(Effect.as({ decision: "acceptAlways" as const })),
+          },
+        }).pipe(Effect.flip);
+        expect(stale.code).toBe("invalid_config");
+        expect(executions).toBe(7);
+        const disabled = yield* invoke({
+          ...context,
+          approval: {
+            ...context.approval,
+            request: () =>
+              store
+                .setServerEnabled({ id, enabled: false })
+                .pipe(Effect.as({ decision: "acceptForSession" as const })),
+          },
+        }).pipe(Effect.flip);
+        expect(disabled.code).toBe("invalid_config");
+
+        const projectServerId = HarnessMcpServerId.make("approval-project");
+        yield* fs.writeFileString(
+          path.join(project, "t3.json"),
+          JSON.stringify({
+            harness: { mcpServers: { [projectServerId]: config } },
+          }),
+        );
+        const projectServer = (yield* store.resolveWorkspace(project)).servers.find(
+          (entry) => entry.id === projectServerId,
+        )!;
+        const trust = {
+          repoRoot: projectServer.repoRoot!,
+          serverId: projectServerId,
+          digest: projectServer.trustDigest!,
+        };
+        yield* store.trustProjectServer(trust);
+        const projectCall = (approval: McpGateway.GatewayApprovalContext) =>
+          gateway.callToolForSession({
+            context: { ...context, approval },
+            toolName: "approval-project__write",
+            arguments: {},
+          });
+        const revoked = yield* projectCall({
+          ...context.approval,
+          request: () =>
+            store.revokeProjectTrust(trust).pipe(Effect.as({ decision: "acceptAlways" as const })),
+        }).pipe(Effect.flip);
+        expect(revoked.code).toBe("untrusted");
+        yield* store.trustProjectServer(trust);
+        expect((yield* projectCall(context.approval)).isError).toBe(true);
+        expect(yield* audit.list({ includeRevoked: true })).toEqual(rulesBeforeRaces);
+        expect(executions).toBe(7);
+      }).pipe(Effect.provide(makeGatewayTestLayer(baseDir, paths, { connect })));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it("strips ambient API credentials from stdio base environment", () => {
     const safe = buildSafeStdioBaseEnv({
       PATH: "/usr/bin",
@@ -258,11 +636,9 @@ describe("McpGateway", () => {
           const readEnvToolName = listedEchoTools.find(
             (t) => t.serverId === "my__echo" && t.upstreamName === "read_env",
           )!.exposedName;
-          const mutateItemToolName = listedEchoTools.find(
-            (t) => t.serverId === "my__echo" && t.upstreamName === "mutate_item",
-          )!.exposedName;
+          const mutateItemToolName = "my__echo__mutate_item__8";
           expect(readEnvToolName).toBe("my__echo__read_env__8");
-          expect(mutateItemToolName).toBe("my__echo__mutate_item__8");
+          expect(listedEchoTools.some((t) => t.exposedName === mutateItemToolName)).toBe(false);
           expect(McpGateway.decodeCanonicalExposedToolName(readEnvToolName)).toEqual({
             serverId: "my__echo",
             upstreamToolName: "read_env",
@@ -302,7 +678,7 @@ describe("McpGateway", () => {
           });
           expect(readBlockedInApprovalRequired.isError).toBe(true);
           expect(String(readBlockedInApprovalRequired.content[0]?.text ?? "")).toContain(
-            "Approval-required",
+            "requires approval",
           );
 
           // Under `auto-read`, mutating tool MUST be blocked even in Default + full-access mode!
@@ -318,7 +694,9 @@ describe("McpGateway", () => {
             arguments: { value: "abc" },
           });
           expect(writeBlockedByAutoRead.isError).toBe(true);
-          expect(String(writeBlockedByAutoRead.content[0]?.text ?? "")).toContain("auto-read");
+          expect(String(writeBlockedByAutoRead.content[0]?.text ?? "")).toContain(
+            "requires approval",
+          );
 
           const filteredConfig = { ...config, allowedTools: [], disabledTools: ["mutate_item"] };
           const conflict = yield* store
@@ -374,7 +752,9 @@ describe("McpGateway", () => {
             arguments: {},
           });
           expect(readBlockedByAlwaysAsk.isError).toBe(true);
-          expect(String(readBlockedByAlwaysAsk.content[0]?.text ?? "")).toContain("always-ask");
+          expect(String(readBlockedByAlwaysAsk.content[0]?.text ?? "")).toContain(
+            "requires approval",
+          );
 
           // Under `auto-all`, mutating tool is blocked in supervised `auto` mode and Plan mode,
           // and allowed ONLY in Default + `full-access` mode.
@@ -404,7 +784,9 @@ describe("McpGateway", () => {
             arguments: { value: "abc" },
           });
           expect(writeBlockedInSupervised.isError).toBe(true);
-          expect(String(writeBlockedInSupervised.content[0]?.text ?? "")).toContain("Full access");
+          expect(String(writeBlockedInSupervised.content[0]?.text ?? "")).toContain(
+            "requires approval",
+          );
 
           const writeBlockedInPlan = yield* gateway.callToolForSession({
             context: {

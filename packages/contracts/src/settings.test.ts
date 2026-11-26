@@ -55,6 +55,11 @@ it("drops theme defaults from a client's settings patch", () => {
   ).toEqual({ newWorktreesStartFromOrigin: false });
 });
 
+it("enables workflows by default and preserves an explicit opt-out", () => {
+  expect(decodeServerSettings({}).workflowsEnabled).toBe(true);
+  expect(decodeServerSettings({ workflowsEnabled: false }).workflowsEnabled).toBe(false);
+});
+
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();

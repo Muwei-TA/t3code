@@ -1,4 +1,5 @@
 import { msg, T, useGT, useMessages } from "gt-react";
+import { BlocksIcon } from "lucide-react";
 import type { MessageResolver } from "~/i18n/messages";
 import { useNativeFileDrag } from "../../useNativeFileDrag";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
@@ -38,6 +39,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   ContextChipPopover as UserMessageContextPopover,
   FileChip,
+  ContextChipShell,
   ImageChipButton,
   PULL_REQUEST_CHIP_KINDS,
   PullRequestChip,
@@ -309,6 +311,13 @@ const userMessageContextPresentationRegistry = createContextPresentationRegistry
 >({
   requiredKinds: COMPOSER_CONTEXT_KINDS,
   handlers: [
+    {
+      kind: "mcp-resource",
+      canRender: (record) => record.kind === "mcp-resource",
+      render: (record) => (
+        <ContextChipShell kind="mcp-resource" icon={<BlocksIcon />} label={record.label} />
+      ),
+    },
     {
       kind: "mention",
       canRender: (record) => record.kind === "mention",

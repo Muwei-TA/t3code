@@ -8,6 +8,7 @@ import {
   WorkflowReferenceKind,
   type WorkflowQuestion,
   type WorkflowRun,
+  type WorkflowRunDetail,
   type WorkflowRunReference,
   type WorkflowRunsSnapshot,
   type WorkflowStep,
@@ -56,6 +57,20 @@ export function workflowRunRefreshKey(
 ): unknown {
   const run = snapshot?.runs.find((candidate) => candidate.runId === runId);
   return run === undefined || run.endedAt === null ? snapshot : run.updatedAt;
+}
+
+export function workflowThreadProgress(detail: WorkflowRunDetail | null) {
+  if (detail === null) return null;
+  const { steps, stages } = detail;
+  const active =
+    detail.run.pausedBeforeStage ??
+    (steps.find((step) => step.status === "running") ?? steps.at(-1))?.name;
+  return {
+    completed: steps.filter((step) => step.status === "completed").length,
+    total: stages?.length ?? steps.length,
+    active:
+      active === undefined ? null : (stages?.find((stage) => stage.id === active)?.name ?? active),
+  };
 }
 
 export interface WorkflowRunNode {

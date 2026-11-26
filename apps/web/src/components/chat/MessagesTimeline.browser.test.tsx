@@ -2496,6 +2496,15 @@ it("keeps concurrent approvals actionable outside collapsed work and restores se
   await screen.rerender(
     ui({
       timelineEntries: [],
+      pendingApprovals: [{ ...approvals[1]!, harnessGateway: true }],
+    }),
+  );
+  await click(screen.button("More approval options"));
+  await page.getByRole("menuitem", { name: "Always allow", exact: true }).click();
+  expect(onRespondToApproval).toHaveBeenLastCalledWith(appRequest, "acceptAlways");
+  await screen.rerender(
+    ui({
+      timelineEntries: [],
       isWorking: false,
       pendingApprovals: [{ ...approvals[0]!, detail: "" }],
     }),

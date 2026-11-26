@@ -92,6 +92,36 @@ it.layer(NodeServices.layer)("ManagedPolicy.load", (it) => {
     }),
   );
 
+  it.effect("summarizes Harness governance without publishing rule bodies", () =>
+    Effect.gen(function* () {
+      const base = { schemaVersion: 1, organization: "Example Corp" };
+      const rule = {
+        id: "review",
+        apply: "glob",
+        globs: ["src/**"],
+        body: "Organization instructions",
+      } as const;
+      const policy = yield* loadFrom(
+        JSON.stringify({
+          ...base,
+          limits: { harnessPlugins: false, harnessLockedRules: [rule] },
+        }),
+      );
+      assert.equal(ManagedPolicy.deniedBy(policy, "harnessPlugins"), "Example Corp");
+      assert.deepEqual(policy.summary?.limits, {
+        harnessPlugins: false,
+        harnessLockedRuleIds: ["review"],
+      });
+      assert.deepEqual(policy.document?.limits?.harnessLockedRules, [rule]);
+
+      for (const rules of [[rule, { ...rule, id: "REVIEW" }], [{ ...rule, globs: undefined }]]) {
+        yield* loadFrom(JSON.stringify({ ...base, limits: { harnessLockedRules: rules } })).pipe(
+          Effect.flip,
+        );
+      }
+    }),
+  );
+
   it.effect("refuses files it cannot fully enforce", () =>
     Effect.gen(function* () {
       const base = { schemaVersion: 1, organization: "Example Corp" };

@@ -150,7 +150,13 @@ const make = Effect.gen(function* () {
         input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema };
 
       if (input.thread !== undefined) {
-        if (input.launch !== undefined) return yield* launchOnContinue;
+        if (
+          input.launch?.workspace !== undefined ||
+          input.launch?.runtimeMode !== undefined ||
+          input.launch?.interactionMode !== undefined
+        ) {
+          return yield* launchOnContinue;
+        }
         const threadId = ThreadId.make(input.thread);
         const shell = yield* threads
           .getThreadShell(threadId)
@@ -169,6 +175,7 @@ const make = Effect.gen(function* () {
             text: input.prompt,
             attachments: [],
             mode: "queue",
+            modeId: input.launch?.modeId,
             ...outputSchema,
             createdBy: "system",
             creationSource: "server",
@@ -213,7 +220,12 @@ const make = Effect.gen(function* () {
           title: input.title,
           modelSelection,
           runtimeMode: input.launch?.runtimeMode ?? defaults.defaultRuntimeMode,
-          interactionMode: input.launch?.interactionMode ?? "default",
+          interactionMode:
+            input.launch?.interactionMode ??
+            (input.launch?.modeId === "plan" || input.launch?.modeId === "review"
+              ? "plan"
+              : "default"),
+          modeId: input.launch?.modeId,
           workspaceStrategy: input.launch?.workspace ?? { type: "root" },
           initialMessage: { messageId, text: input.prompt, attachments: [], ...outputSchema },
           createdBy: "system",

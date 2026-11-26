@@ -169,11 +169,18 @@ export const make = Effect.gen(function* () {
     const outputSchema =
       input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema };
     if (input.thread !== undefined) {
-      if (input.launch !== undefined) return yield* launchOnContinue;
+      if (
+        input.launch?.workspace !== undefined ||
+        input.launch?.runtimeMode !== undefined ||
+        input.launch?.interactionMode !== undefined
+      ) {
+        return yield* launchOnContinue;
+      }
       const sent = yield* call(environment, "t3_thread_send", OrchestratorMcpThreadSendResult, {
         threadId: input.thread,
         message: input.prompt,
         mode: "queue",
+        ...(input.launch?.modeId === undefined ? {} : { modeId: input.launch.modeId }),
         ...outputSchema,
         clientRequestId: requestId,
       });
@@ -204,6 +211,7 @@ export const make = Effect.gen(function* () {
         ...(input.launch?.workspace === undefined
           ? {}
           : { workspaceStrategy: input.launch.workspace }),
+        ...(input.launch?.modeId === undefined ? {} : { modeId: input.launch.modeId }),
         message: input.prompt,
         ...outputSchema,
         clientRequestId: requestId,

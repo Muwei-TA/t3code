@@ -67,6 +67,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import packageJson from "../../../package.json" with { type: "json" };
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import type { McpProviderSessionConfig } from "@t3tools/provider-core/server/mcpSession";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as EffectWorker from "../EffectWorker.ts";
@@ -1242,6 +1243,118 @@ describe("CodexAdapterV2 session initialize", () => {
 
   const replayPreamble = (nativeThreadId: string) =>
     codexReplayPreamble({ nativeThreadId, nativeTurnId: "unused", prompt: "unused" });
+
+  it.effect.each([true, false])(
+    "mounts portable skills without sharing roots across unrelated threads (RPC supported: %s)",
+    (supported) =>
+      Effect.gen(function* () {
+        const firstId = "portable-first";
+        const secondId = "portable-second";
+        const path = "/isolated/t3/harness-mounts/codex-skills";
+        const mounts = new Set<symbol>();
+        const skillRoot: NonNullable<McpProviderSessionConfig["harnessCodexSkillRoot"]> = {
+          path,
+          mounts,
+        };
+        yield* (yield* McpProviderSessions.McpProviderSessions).set({
+          environmentId: EnvironmentId.make("portable-test"),
+          threadId: ThreadId.make(firstId),
+          providerSessionId: "portable-test-credential",
+          providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: "Bearer fixture-token",
+          browserToolsAvailable: false,
+          harnessCodexSkillRoot: skillRoot,
+        });
+
+        const reply = (
+          id: number,
+          method: string,
+          params: unknown,
+          data: { readonly result: unknown } | { readonly error: unknown },
+        ): Array<CodexReplay.CodexAppServerReplayEntry> => [
+          { type: "expect_outbound", label: method, frame: { id, method, params } },
+          { type: "emit_inbound", label: method, frame: { id, ...data } },
+        ];
+        const config = (id: number) =>
+          reply(
+            id,
+            "config/read",
+            { includeLayers: false },
+            { result: { config: {}, origins: {} } },
+          );
+        const mount = (id: number, extraRoots: ReadonlyArray<string>) =>
+          reply(
+            id,
+            "skills/extraRoots/set",
+            { extraRoots },
+            supported ? { result: {} } : { error: { code: -32601, message: "Method not found" } },
+          );
+        const nativeStart = (id: number, thread: string) =>
+          replayPreamble(thread)
+            .slice(3, 5)
+            .map((entry) => withReplayRequestId(entry, id));
+        const failedStart: Array<CodexReplay.CodexAppServerReplayEntry> = [
+          nativeStart(7, secondId)[0]!,
+          {
+            type: "emit_inbound",
+            label: "thread/start failed",
+            frame: { id: 7, error: { code: -32000, message: "Thread failed to start" } },
+          },
+        ];
+        const session = yield* openReplaySession(
+          makeCodexReplayTranscript({
+            scenario: "portable-codex-skill-roots",
+            entries: [
+              ...replayPreamble(firstId).slice(0, 3),
+              ...config(2),
+              ...mount(3, [path]),
+              ...nativeStart(4, firstId),
+              ...config(5),
+              ...(supported
+                ? [
+                    ...mount(6, []),
+                    ...failedStart,
+                    ...mount(8, [path]),
+                    ...config(9),
+                    ...mount(10, []),
+                    ...nativeStart(11, secondId),
+                    ...reply(12, "thread/archive", { threadId: secondId }, { result: {} }),
+                    ...mount(13, [path]),
+                  ]
+                : nativeStart(6, secondId)),
+            ],
+          }),
+        );
+        yield* session.ensureThread(firstId);
+        assert.equal(mounts.size, supported ? 1 : 0);
+        if (supported) {
+          const error = yield* Effect.flip(session.ensureThread(secondId));
+          assert.instanceOf(error, ProviderAdapter.ProviderAdapterEnsureThreadError);
+          assert.equal(mounts.size, 1);
+        }
+        const second = yield* session.ensureThread(secondId);
+        assert.equal(mounts.size, 0);
+        assert.equal(
+          skillRoot.fallbackReason,
+          supported ? "shared_session_conflict" : "unsupported",
+        );
+        if (supported) {
+          yield* session.runtime.unloadThread!({ providerThread: second, archive: true });
+          assert.equal(mounts.size, 1);
+        }
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+  );
 
   it.effect("sends one initialize when two threads start on a fresh session at once", () =>
     Effect.gen(function* () {
@@ -9433,76 +9546,121 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
-  it.effect("captures an MCP app's resource and holds the turn open until it lands", () =>
-    Effect.gen(function* () {
-      const appCaptured = yield* Deferred.make<OrchestrationV2TurnItem>();
-      const harness = yield* makeCodexReplayHarness(mcpAppTranscript, (event) =>
-        event.type === "turn_item.updated" &&
-        event.turnItem.type === "dynamic_tool" &&
-        event.turnItem.status === "completed"
-          ? Deferred.succeed(appCaptured, event.turnItem)
-          : Effect.void,
-      );
-      const now = yield* DateTime.now;
-
-      yield* harness.runtime.startTurn(
-        makeCodexTestTurnInput({
-          threadId: harness.threadId,
-          providerThread: harness.providerThread,
-          now,
-          attemptId: RunAttemptId.make("attempt-codex-mcp-app"),
-          text: MCP_APP_PROMPT,
-        }),
-      );
-      const item = yield* Deferred.await(appCaptured);
-      assert.equal(harness.terminalEvents()[0]?.status, "completed");
-
-      const completedRows = harness.events.filter(
-        (event) =>
+  it.effect.each([false, true])(
+    "captures a native MCP app and leaves gateway capture to the server (gateway: %s)",
+    (gateway) =>
+      Effect.gen(function* () {
+        const appCaptured = yield* Deferred.make<OrchestrationV2TurnItem>();
+        const transcript = gateway
+          ? makeCodexReplayTranscript({
+              scenario: MCP_APP_SCENARIO,
+              entries: mcpAppTranscript.entries.flatMap<CodexReplay.CodexAppServerReplayEntry>(
+                (entry) => {
+                  if (!("label" in entry)) return [entry];
+                  if (entry.label === "mcpServer/resource/read") return [];
+                  if (
+                    entry.label !== "item/started/app-tool" &&
+                    entry.label !== "item/completed/app-tool"
+                  )
+                    return [entry];
+                  const completed = entry.label === "item/completed/app-tool";
+                  return [
+                    {
+                      type: "emit_inbound",
+                      label: entry.label,
+                      frame: {
+                        method: completed ? "item/completed" : "item/started",
+                        params: {
+                          item: {
+                            ...mcpAppToolItem(completed ? "completed" : "inProgress"),
+                            server: "t3-harness",
+                          },
+                          threadId: MCP_APP_NATIVE_THREAD,
+                          turnId: MCP_APP_NATIVE_TURN,
+                          ...(completed
+                            ? { completedAtMs: 1782622441500 }
+                            : { startedAtMs: 1782622440500 }),
+                        },
+                      },
+                    },
+                  ];
+                },
+              ),
+            })
+          : mcpAppTranscript;
+        const harness = yield* makeCodexReplayHarness(transcript, (event) =>
           event.type === "turn_item.updated" &&
           event.turnItem.type === "dynamic_tool" &&
-          event.turnItem.status === "completed",
-      );
-      assert.lengthOf(completedRows, 1);
+          event.turnItem.status === "completed"
+            ? Deferred.succeed(appCaptured, event.turnItem)
+            : Effect.void,
+        );
+        const now = yield* DateTime.now;
 
-      assert.equal(item.type, "dynamic_tool");
-      const output = item.type === "dynamic_tool" ? (item.output as Record<string, unknown>) : {};
-      const reference = readMcpAppReference(output[MCP_APP_OUTPUT_KEY]);
-      assert.deepEqual(
-        { ...reference, attachmentId: undefined },
-        {
-          attachmentId: undefined,
-          server: "weather",
-          tool: "get_weather",
-          resourceUri: MCP_APP_RESOURCE,
-          csp: { connectDomains: ["https://api.weather.test"] },
-        },
-      );
-      assert.deepEqual(output.result, {
-        content: [{ type: "text", text: "Sunny" }],
-        structuredContent: { temp: 21 },
-      });
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-codex-mcp-app"),
+            text: MCP_APP_PROMPT,
+          }),
+        );
+        const item = yield* Deferred.await(appCaptured);
+        yield* harness.firstTerminal;
+        assert.equal(harness.terminalEvents()[0]?.status, "completed");
 
-      const fileSystem = yield* FileSystem.FileSystem;
-      const stored = yield* fileSystem.readFileString(
-        resolveAttachmentPathById({
-          attachmentsDir: harness.serverConfig.attachmentsDir,
-          attachmentId: reference!.attachmentId,
-        })!,
-      );
-      assert.include(stored, "connect-src https://api.weather.test");
-      assert.isBelow(stored.indexOf("Content-Security-Policy"), stored.indexOf("<script>"));
-      assert.isFalse(yield* harness.hasPendingBackgroundWork);
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          IdAllocator.layer,
-          McpProviderSessions.layer,
-          NodeServices.layer,
-          NodeCrypto.layer,
+        const completedRows = harness.events.filter(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "dynamic_tool" &&
+            event.turnItem.status === "completed",
+        );
+        assert.lengthOf(completedRows, 1);
+
+        assert.equal(item.type, "dynamic_tool");
+        const output = item.type === "dynamic_tool" ? (item.output as Record<string, unknown>) : {};
+        const reference = readMcpAppReference(output[MCP_APP_OUTPUT_KEY]);
+        if (gateway) {
+          assert.isUndefined(reference);
+          assert.isFalse(yield* harness.hasPendingBackgroundWork);
+          return;
+        }
+        assert.deepEqual(
+          { ...reference, attachmentId: undefined },
+          {
+            attachmentId: undefined,
+            server: "weather",
+            tool: "get_weather",
+            resourceUri: MCP_APP_RESOURCE,
+            csp: { connectDomains: ["https://api.weather.test"] },
+          },
+        );
+        assert.deepEqual(output.result, {
+          content: [{ type: "text", text: "Sunny" }],
+          structuredContent: { temp: 21 },
+        });
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        const stored = yield* fileSystem.readFileString(
+          resolveAttachmentPathById({
+            attachmentsDir: harness.serverConfig.attachmentsDir,
+            attachmentId: reference!.attachmentId,
+          })!,
+        );
+        assert.include(stored, "connect-src https://api.weather.test");
+        assert.isBelow(stored.indexOf("Content-Security-Policy"), stored.indexOf("<script>"));
+        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
         ),
       ),
-    ),
   );
 
   const MCP_APP_DEFERRED_RESULT = {

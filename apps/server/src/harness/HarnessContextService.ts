@@ -3,11 +3,15 @@ import {
   type HarnessPlanModeKind,
   type HarnessPlanReadOnlyEnforcement,
   IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
   type ThreadContextDegradedItem,
   type ThreadContextManifest,
   type ThreadContextMcpItem,
+  type ThreadContextTokenUsage,
   type ThreadId,
 } from "@t3tools/contracts";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -17,7 +21,17 @@ import * as Option from "effect/Option";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as HarnessApprovalAuditStore from "./HarnessApprovalAuditStore.ts";
+import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
+import * as HarnessMemoryStore from "./HarnessMemoryStore.ts";
+import {
+  isMcpServerAllowedByMode,
+  type NativeDiscoveredSkill,
+  projectHarnessContext,
+} from "./HarnessProjector.ts";
 import * as McpGateway from "./McpGateway.ts";
+import * as PluginHost from "./PluginHost.ts";
 
 export class HarnessContextService extends Context.Service<
   HarnessContextService,
@@ -30,6 +44,14 @@ export class HarnessContextService extends Context.Service<
 
 const make = Effect.gen(function* () {
   const gateway = yield* McpGateway.McpGateway;
+  const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
+  const memoryStore = yield* Effect.serviceOption(HarnessMemoryStore.HarnessMemoryStore);
+  const pluginHost = yield* Effect.serviceOption(PluginHost.PluginHost);
+  const approvalAuditStore = yield* Effect.serviceOption(
+    HarnessApprovalAuditStore.HarnessApprovalAuditStore,
+  );
+  const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
+  const mcpSessions = yield* Effect.serviceOption(McpProviderSessions.McpProviderSessions);
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const adapterRegistry = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
@@ -75,6 +97,87 @@ const make = Effect.gen(function* () {
           };
 
       const snapshot = yield* gateway.getSnapshot(workspaceRoot);
+      const librarySnapshot = Option.isSome(libraryStore)
+        ? yield* libraryStore.value
+            .getSnapshot(workspaceRoot)
+            .pipe(Effect.orElseSucceed(() => null))
+        : null;
+      const nativeSkills: ReadonlyArray<NativeDiscoveredSkill> = Option.isSome(providerRegistry)
+        ? yield* providerRegistry.value.getProviders.pipe(
+            Effect.map((providers) => {
+              const matched = providers.find(
+                (provider) => provider.instanceId === thread.providerInstanceId,
+              );
+              if (!matched) return [];
+              const ws =
+                workspaceRoot !== undefined
+                  ? matched.workspaceSnapshots?.find((snap) => snap.cwd === workspaceRoot)
+                  : undefined;
+              const skills = ws?.skills ?? matched.skills;
+              return skills.map((skill) => ({ name: skill.name, path: skill.path }));
+            }),
+            Effect.orElseSucceed(() => [] as ReadonlyArray<NativeDiscoveredSkill>),
+          )
+        : [];
+      const activeMode = Option.isSome(libraryStore)
+        ? yield* libraryStore.value
+            .resolveMode({
+              ...(thread.modeId !== undefined ? { modeId: thread.modeId } : {}),
+              interactionMode: thread.interactionMode,
+              workspaceRoot,
+            })
+            .pipe(Effect.orElseSucceed(() => null))
+        : null;
+      const codexMount =
+        harnessCapabilities.skillMount === "managed-home" && Option.isSome(mcpSessions)
+          ? (yield* mcpSessions.value.read(threadId))?.harnessCodexSkillRoot
+          : undefined;
+      const projected =
+        librarySnapshot !== null
+          ? projectHarnessContext({
+              library: librarySnapshot,
+              harnessCapabilities,
+              activeMode,
+              nativeSkills,
+              nativeReadsProjectAgentsMd: true,
+              codexSkillMount: codexMount?.mounts.size ? "mounted" : undefined,
+              supportsMcpTools,
+            })
+          : null;
+
+      const latestTokenUsage: ThreadContextTokenUsage | null = yield* projections
+        .getThreadRecords(threadId, ["providerTurns"])
+        .pipe(
+          Effect.map((records) => {
+            const withUsage = [...records.providerTurns]
+              .reverse()
+              .find((turn) => turn.tokenUsage !== undefined);
+            if (!withUsage?.tokenUsage) return null;
+            const maxTokensVal = withUsage.tokenUsage.maxTokens;
+            const autoCompactVal = withUsage.tokenUsage.autoCompactThreshold;
+            return {
+              usedTokens: NonNegativeInt.make(
+                Math.max(0, Math.floor(withUsage.tokenUsage.usedTokens)),
+              ),
+              maxTokens:
+                typeof maxTokensVal === "number" && maxTokensVal > 0
+                  ? PositiveInt.make(Math.floor(maxTokensVal))
+                  : null,
+              autoCompactThreshold:
+                typeof autoCompactVal === "number" && autoCompactVal > 0
+                  ? PositiveInt.make(Math.floor(autoCompactVal))
+                  : null,
+            } satisfies ThreadContextTokenUsage;
+          }),
+          Effect.orElseSucceed(() => null),
+        );
+
+      const approvalRulesCount = Option.isSome(approvalAuditStore)
+        ? yield* approvalAuditStore.value.list({ threadId, includeRevoked: false }).pipe(
+            Effect.map((rules) => NonNegativeInt.make(rules.length)),
+            Effect.orElseSucceed(() => NonNegativeInt.make(0)),
+          )
+        : NonNegativeInt.make(0);
 
       const planModeSource: HarnessPlanModeKind = emitsProposedPlan
         ? "native"
@@ -86,6 +189,18 @@ const make = Effect.gen(function* () {
 
       const mcpServers: Array<ThreadContextMcpItem> = [];
       const degradedItems: Array<ThreadContextDegradedItem> = [];
+      if (codexMount?.fallbackReason && !codexMount.mounts.size) {
+        const explanations = {
+          unsupported: "This Codex version does not support portable skill mounts.",
+          shared_session_conflict: "Threads sharing this Codex session use different skill sets.",
+          mount_failed: "Codex could not load the portable skill mount.",
+        };
+        degradedItems.push({
+          kind: "skill",
+          id: "codex-portable-skills",
+          reason: `${explanations[codexMount.fallbackReason]} Skills are available through the Harness gateway.`,
+        });
+      }
 
       let activeGatewayCount = 0;
 
@@ -113,6 +228,9 @@ const make = Effect.gen(function* () {
           reason = server.overriddenByProject
             ? "Overridden by project t3.json."
             : "Disabled in Harness settings.";
+        } else if (!isMcpServerAllowedByMode(server.id, activeMode)) {
+          channel = "disabled";
+          reason = `Filtered out by active mode "${activeMode?.id ?? ""}".`;
         } else if (
           McpGateway.resolveServerChannel(server.config, harnessCapabilities) === "native"
         ) {
@@ -126,7 +244,7 @@ const make = Effect.gen(function* () {
               : "Provider does not support native passthrough for this transport; routed via T3 Gateway.";
             degradedItems.push({ kind: "mcp", id: server.id, reason });
           }
-          if (server.state === "error" && server.lastError) {
+          if ((server.state === "error" || server.state === "auth_required") && server.lastError) {
             reason = server.lastError;
             degradedItems.push({ kind: "mcp", id: server.id, reason });
           }
@@ -152,19 +270,56 @@ const make = Effect.gen(function* () {
         });
       }
 
+      if (projected !== null) {
+        degradedItems.push(...projected.degradedItems);
+      }
+
       const now = yield* DateTime.now;
+      const commandsCount =
+        librarySnapshot !== null
+          ? NonNegativeInt.make(librarySnapshot.commands.filter((c) => c.effectiveEnabled).length)
+          : NonNegativeInt.make(0);
+
       return {
         threadId,
         generatedAt: IsoDateTime.make(DateTime.formatIso(now)),
         providerInstanceId: thread.providerInstanceId,
         interactionMode: thread.interactionMode,
+        ...(activeMode !== null
+          ? {
+              modeId: activeMode.id,
+              modeName: activeMode.name,
+              modeDigest: activeMode.contentDigest,
+              modeReadOnly: activeMode.readonly,
+            }
+          : {
+              ...(thread.modeId !== undefined ? { modeId: thread.modeId } : {}),
+              ...(thread.modeDigest !== undefined ? { modeDigest: thread.modeDigest } : {}),
+              modeReadOnly: thread.interactionMode === "plan",
+            }),
         planModeSource,
         planModeReadOnlyEnforcement,
         harnessGatewayActive:
           snapshot.managedPolicyAllowsHarness &&
           (activeGatewayCount > 0 ||
-            (thread.interactionMode === "plan" && planModeSource === "harness-propose-plan")),
+            (supportsMcpTools &&
+              (projected?.needsGatewayTools === true ||
+                Option.isSome(memoryStore) ||
+                (activeMode?.id === "creator" &&
+                  thread.interactionMode !== "plan" &&
+                  !activeMode.readonly) ||
+                (Option.isSome(pluginHost) && pluginHost.value.listActiveSdkTools().length > 0))) ||
+            ((thread.interactionMode === "plan" || activeMode?.proposePlan === true) &&
+              planModeSource === "harness-propose-plan")),
         mcpServers,
+        skills: projected?.skills ?? [],
+        rules: projected?.rules ?? [],
+        commandsCount,
+        contextBudgetBytes: projected?.contextBudgetBytes ?? NonNegativeInt.make(0),
+        contextUsedBytes: projected?.contextUsedBytes ?? NonNegativeInt.make(0),
+        scaffoldBytes: projected?.scaffoldBytes ?? NonNegativeInt.make(0),
+        tokenUsage: latestTokenUsage,
+        approvalRulesCount,
         degradedItems,
       };
     });

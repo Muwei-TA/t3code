@@ -22,6 +22,8 @@ import {
   HarnessMcpServerId,
   type HarnessMcpServerView,
   type HarnessMcpSnapshot,
+  isValidHarnessHttpUrl,
+  supportsHarnessMcpOAuth,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
@@ -41,6 +43,8 @@ import {
 import { useState } from "react";
 
 import type { EnvironmentPresentation } from "../../state/environments";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { ensureLocalApi } from "../../localApi";
 import { harnessEnvironment } from "../../state/harness";
 import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -74,6 +78,9 @@ import { toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { useSearchableSetting } from "./settingsSearch";
+import { HarnessLibraryPanels, type HarnessPanelTab } from "./HarnessLibraryTabs";
+import { HarnessMemoryTab, HarnessSyncTab } from "./HarnessMemoryAndSyncTabs";
+import { HarnessHooksTab, HarnessPluginsTab } from "./HarnessPluginsAndHooksTabs";
 
 const decodeServerId = Schema.decodeUnknownOption(HarnessMcpServerId);
 
@@ -214,8 +221,10 @@ function formatErrorMessage(error: unknown, fallback: string): string {
 }
 
 export function HarnessSettingsPanel() {
+  const gt = useGT();
   const setting = useSearchableSetting();
   const { scope, environment } = useSettingsScope();
+  const [activeTab, setActiveTab] = useState<HarnessPanelTab>("mcp");
   const connected = environment?.connection.phase === "connected";
   const workspaceRoot =
     scope.kind === "project" || scope.kind === "checkout"
@@ -223,14 +232,71 @@ export function HarnessSettingsPanel() {
           ?.workspaceRoot
       : undefined;
 
+  const tabs: ReadonlyArray<{ readonly id: HarnessPanelTab; readonly label: string }> = [
+    { id: "mcp", label: gt("MCP Servers") },
+    { id: "modes", label: gt("Modes") },
+    { id: "skills", label: gt("Skills") },
+    { id: "rules", label: gt("Rules & AGENTS.md") },
+    { id: "commands", label: gt("Commands") },
+    { id: "plugins", label: gt("Plugins") },
+    { id: "hooks", label: gt("Hooks") },
+    { id: "memory", label: gt("Memory") },
+    { id: "sync", label: gt("Git Sync") },
+    { id: "approvals", label: gt("Approvals") },
+    { id: "transfer", label: gt("Import / Export") },
+  ];
+
   return (
     <SettingsPageContainer>
       {connected && environment ? (
-        <EnvironmentHarnessMcpSection
-          key={`${environment.environmentId}:${workspaceRoot ?? ""}`}
-          environment={environment}
-          workspaceRoot={workspaceRoot}
-        />
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {tabs.map((tab) => (
+              <Button
+                key={tab.id}
+                size="sm"
+                variant={activeTab === tab.id ? "default" : "outline"}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                {tab.label}
+              </Button>
+            ))}
+          </div>
+          {activeTab === "mcp" ? (
+            <EnvironmentHarnessMcpSection
+              key={`${environment.environmentId}:${workspaceRoot ?? ""}`}
+              environment={environment}
+              workspaceRoot={workspaceRoot}
+            />
+          ) : activeTab === "plugins" ? (
+            <HarnessPluginsTab
+              key={`${environment.environmentId}:plugins`}
+              environmentId={environment.environmentId}
+            />
+          ) : activeTab === "hooks" ? (
+            <HarnessHooksTab
+              key={`${environment.environmentId}:hooks`}
+              environmentId={environment.environmentId}
+            />
+          ) : activeTab === "memory" ? (
+            <HarnessMemoryTab
+              key={`${environment.environmentId}:memory`}
+              environmentId={environment.environmentId}
+            />
+          ) : activeTab === "sync" ? (
+            <HarnessSyncTab
+              key={`${environment.environmentId}:sync`}
+              environmentId={environment.environmentId}
+            />
+          ) : (
+            <HarnessLibraryPanels
+              key={`${environment.environmentId}:${workspaceRoot ?? ""}:${activeTab}`}
+              activeTab={activeTab}
+              environmentId={environment.environmentId}
+              workspaceRoot={workspaceRoot}
+            />
+          )}
+        </div>
       ) : (
         <SettingsSection {...setting("harness-mcp")}>
           <p className="px-4 py-3 text-sm text-muted-foreground">
@@ -257,6 +323,7 @@ function EnvironmentHarnessMcpSection({
   const canOperate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canReadDiagnostics = useEnvironmentScope(environmentId, AuthDiagnosticsReadScope);
   const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
+  const { copyToClipboard, isCopied } = useCopyToClipboard();
 
   const queryAtom = harnessEnvironment.listMcpQuery({
     environmentId,
@@ -278,11 +345,26 @@ function EnvironmentHarnessMcpSection({
     reportFailure: false,
   });
   const restartMcp = useAtomCommand(harnessEnvironment.restartMcp, { reportFailure: false });
+  const startMcpOAuth = useAtomCommand(harnessEnvironment.startMcpOAuth, { reportFailure: false });
+  const completeMcpOAuth = useAtomCommand(harnessEnvironment.completeMcpOAuth, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const disconnectMcpOAuth = useAtomCommand(harnessEnvironment.disconnectMcpOAuth, {
+    reportFailure: false,
+  });
   const logsMcp = useAtomCommand(harnessEnvironment.logsMcp, { reportFailure: false });
   const scanImports = useAtomCommand(harnessEnvironment.scanImports, { reportFailure: false });
   const applyImports = useAtomCommand(harnessEnvironment.applyImports, { reportFailure: false });
 
   const [busyServerId, setBusyServerId] = useState<string | null>(null);
+  const [signIn, setSignIn] = useState<{
+    readonly server: HarnessMcpServerView;
+    readonly url: string;
+  } | null>(null);
+  const [callbackUrl, setCallbackUrl] = useState("");
+  const [finishingOAuth, setFinishingOAuth] = useState(false);
+  const [oauthError, setOAuthError] = useState<string | null>(null);
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<string>>(new Set());
   const [editorState, setEditorState] = useState<
     | null
@@ -309,6 +391,67 @@ function EnvironmentHarnessMcpSection({
     if (result._tag === "Success") {
       setOverrideSnapshot(result.value);
     }
+  };
+
+  const handleOAuth = async (server: HarnessMcpServerView, disconnect: boolean) => {
+    const input = { serverId: server.id, ...(workspaceRoot ? { workspaceRoot } : {}) };
+    setBusyServerId(server.id);
+    if (disconnect) {
+      const result = await disconnectMcpOAuth({ environmentId, input });
+      if (result._tag === "Success") setOverrideSnapshot(result.value);
+      else if (!isAtomCommandInterrupted(result))
+        toastManager.add({ type: "error", title: gt("Couldn't disconnect MCP sign-in.") });
+    } else {
+      const result = await startMcpOAuth({ environmentId, input });
+      if (result._tag === "Success") {
+        setCallbackUrl("");
+        setOAuthError(null);
+        setSignIn({ server, url: result.value.authorizationUrl });
+      } else if (!isAtomCommandInterrupted(result)) {
+        const failure = squashAtomCommandFailure(result);
+        toastManager.add({
+          type: "error",
+          title: failure instanceof Error ? failure.message : gt("Couldn't start MCP sign-in."),
+        });
+      }
+    }
+    setBusyServerId(null);
+  };
+
+  const finishOAuth = async () => {
+    if (!signIn || finishingOAuth) return;
+    setFinishingOAuth(true);
+    setOAuthError(null);
+    const address = callbackUrl.trim();
+    const result =
+      address.length > 0
+        ? await completeMcpOAuth({
+            environmentId,
+            input: {
+              serverId: signIn.server.id,
+              callbackUrl: address,
+              ...(workspaceRoot ? { workspaceRoot } : {}),
+            },
+          })
+        : await listMcp({ environmentId, input: workspaceRoot ? { workspaceRoot } : {} });
+    setFinishingOAuth(false);
+    if (result._tag === "Success") {
+      setOverrideSnapshot(result.value);
+      if (
+        address ||
+        result.value.servers.some(
+          (entry) =>
+            entry.id === signIn.server.id &&
+            entry.scope === signIn.server.scope &&
+            entry.oauthStatus === "connected" &&
+            entry.state !== "auth_required",
+        )
+      ) {
+        setSignIn(null);
+        return;
+      }
+    } else if (isAtomCommandInterrupted(result)) return;
+    setOAuthError(gt("Sign-in is incomplete. Approve access or paste the callback address."));
   };
 
   const handleToggleEnabled = async (server: HarnessMcpServerView, nextEnabled: boolean) => {
@@ -763,6 +906,30 @@ function EnvironmentHarnessMcpSection({
                 }
               >
                 <div className="flex items-center gap-1.5">
+                  {canManageProviders &&
+                  server.effectiveEnabled &&
+                  supportsHarnessMcpOAuth(server.config) ? (
+                    <>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={isBusy}
+                        onClick={() => void handleOAuth(server, false)}
+                      >
+                        {server.oauthStatus === "connected" ? <T>Sign in again</T> : <T>Sign in</T>}
+                      </Button>
+                      {server.oauthStatus === "connected" || server.oauthStatus === "expired" ? (
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          disabled={isBusy}
+                          onClick={() => void handleOAuth(server, true)}
+                        >
+                          <T>Disconnect sign-in</T>
+                        </Button>
+                      ) : null}
+                    </>
+                  ) : null}
                   {server.scope === "user" && canWriteSettings ? (
                     <Switch
                       size="sm"
@@ -824,6 +991,70 @@ function EnvironmentHarnessMcpSection({
           })
         )}
       </SettingsSection>
+
+      <Dialog
+        open={signIn !== null}
+        onOpenChange={(open) => {
+          if (!open && !finishingOAuth) setSignIn(null);
+        }}
+      >
+        <DialogPopup>
+          <DialogHeader>
+            <DialogTitle>
+              {gt("Sign in to {server}", { server: signIn?.server.id ?? "" })}
+            </DialogTitle>
+            <DialogDescription>
+              <T>
+                Approve access in your browser. If the callback page cannot open, paste its address
+                here.
+              </T>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel>
+            <div className="grid gap-3">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (signIn) void ensureLocalApi().shell.openExternal(signIn.url);
+                  }}
+                >
+                  <T>Open sign-in page</T>
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    if (signIn) copyToClipboard(signIn.url);
+                  }}
+                >
+                  {isCopied ? <T>Copied</T> : <T>Copy link</T>}
+                </Button>
+              </div>
+              <Input
+                aria-label={gt("OAuth callback address")}
+                value={callbackUrl}
+                onChange={(event) => setCallbackUrl(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                disabled={finishingOAuth}
+              />
+              {oauthError ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {oauthError}
+                </p>
+              ) : null}
+            </div>
+          </DialogPanel>
+          <DialogFooter>
+            <Button
+              disabled={!canManageProviders || finishingOAuth}
+              onClick={() => void finishOAuth()}
+            >
+              <T>Finish sign-in</T>
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
 
       <Dialog
         open={editorState !== null}
@@ -1047,6 +1278,16 @@ function EnvironmentHarnessMcpSection({
 }
 
 function renderStateBadge(server: HarnessMcpServerView, gt: ReturnType<typeof useGT>) {
+  if (
+    server.state === "auth_required" ||
+    server.oauthStatus === "required" ||
+    server.oauthStatus === "expired"
+  ) {
+    return <Badge variant="warning">{gt("Sign-in required")}</Badge>;
+  }
+  if (server.oauthStatus === "connected" && server.state === "idle") {
+    return <Badge variant="success">{gt("Signed in")}</Badge>;
+  }
   switch (server.state) {
     case "connected":
       return (
@@ -1120,6 +1361,11 @@ function McpServerEditorForm({
       ? formatKeyValueLines(initial?.config.transport.headers)
       : "",
   );
+  const initialOAuth =
+    initial?.config.transport.type === "stdio" ? undefined : initial?.config.transport.oauth;
+  const [oauthClientId, setOAuthClientId] = useState(initialOAuth?.clientId ?? "");
+  const [oauthScopes, setOAuthScopes] = useState(initialOAuth?.scopes?.join(", ") ?? "");
+  const [oauthIssuer, setOAuthIssuer] = useState(initialOAuth?.authorizationServerUrl ?? "");
   const [injectionMode, setInjectionMode] = useState<HarnessMcpInjectionMode>(
     initial?.config.injectionMode ?? "gateway",
   );
@@ -1167,15 +1413,28 @@ function McpServerEditorForm({
       };
     } else {
       const trimmedUrl = url.trim();
-      if (!/^https?:\/\/[^\s/]+/i.test(trimmedUrl)) {
+      if (!isValidHarnessHttpUrl(trimmedUrl)) {
         setValidationError(gt("Enter a valid http:// or https:// MCP endpoint URL."));
         return;
       }
+      const issuer = oauthIssuer.trim();
+      if (issuer && !isValidHarnessHttpUrl(issuer)) {
+        setValidationError(gt("Enter a valid http:// or https:// OAuth authorization server URL."));
+        return;
+      }
       const parsedHeaders = parseKeyValueLines(headersText);
+      const scopes = parseCommaList(oauthScopes);
+      const oauth = {
+        ...(initialOAuth?.enabled === undefined ? {} : { enabled: initialOAuth.enabled }),
+        ...(oauthClientId.trim() ? { clientId: oauthClientId.trim() } : {}),
+        ...(scopes.length > 0 ? { scopes } : {}),
+        ...(issuer ? { authorizationServerUrl: issuer } : {}),
+      };
       transport = {
         type: transportType,
         url: trimmedUrl,
         ...(Object.keys(parsedHeaders).length > 0 ? { headers: parsedHeaders } : {}),
+        ...(Object.keys(oauth).length > 0 ? { oauth } : {}),
       };
     }
 
@@ -1377,6 +1636,39 @@ function McpServerEditorForm({
                   onChange={(event) => setHeadersText(event.target.value)}
                 />
               </label>
+              {injectionMode === "gateway" ? (
+                <details>
+                  <summary className="cursor-pointer text-xs font-medium text-foreground">
+                    <T>OAuth settings</T>
+                  </summary>
+                  <div className="mt-2 grid gap-2">
+                    <label className="grid gap-1 text-xs">
+                      <T>OAuth client ID</T>
+                      <Input
+                        value={oauthClientId}
+                        onChange={(event) => setOAuthClientId(event.target.value)}
+                        disabled={saving}
+                      />
+                    </label>
+                    <label className="grid gap-1 text-xs">
+                      <T>OAuth scopes (comma-separated)</T>
+                      <Input
+                        value={oauthScopes}
+                        onChange={(event) => setOAuthScopes(event.target.value)}
+                        disabled={saving}
+                      />
+                    </label>
+                    <label className="grid gap-1 text-xs">
+                      <T>OAuth authorization server URL</T>
+                      <Input
+                        value={oauthIssuer}
+                        onChange={(event) => setOAuthIssuer(event.target.value)}
+                        disabled={saving}
+                      />
+                    </label>
+                  </div>
+                </details>
+              ) : null}
             </>
           )}
 
@@ -1427,7 +1719,7 @@ function McpServerEditorForm({
                 disabled={saving}
                 onClick={() => setApprovalPolicy("always-ask")}
               >
-                <T>Strict</T>
+                <T>Always ask</T>
               </Button>
               <Button
                 type="button"

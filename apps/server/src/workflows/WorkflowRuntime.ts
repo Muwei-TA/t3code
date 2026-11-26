@@ -2,6 +2,7 @@
 // change while the server runs. A file that loads replaces what it defined before; one that does
 // not keeps its last good version running. With no definitions there is no engine, unless runs
 // from before are kept: then one with nothing registered serves their history.
+import * as PluginHost from "../harness/PluginHost.ts";
 import * as NodeAsyncHooks from "node:async_hooks";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the CommonJS cache is cleared in the same tick as the import.
 import * as NodeFS from "node:fs";
@@ -32,8 +33,12 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { compileDeclarativeWorkflowToDefinition } from "../harness/DeclarativeWorkflowCompiler.ts";
 import { engineTag, text, type WorkflowDefinition } from "./workflow.ts";
 import type * as WorkflowEngine from "./WorkflowEngine.ts";
+import { CommandId, workflowHostLaunchCommandId } from "@t3tools/contracts";
+import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as WorkflowAgentThreads from "./WorkflowAgentThreads.ts";
 import * as WorkflowForge from "./WorkflowForge.ts";
 import * as Workflows from "./Workflows.ts";
@@ -49,9 +54,9 @@ const HELD_RETRY = "15 seconds";
 const LIST_RETRY = "30 seconds";
 // A leading dot is how a file is kept out: a draft being checked, an editor's swap file.
 // One name in the folder, never a path: the name is also the key a save and a removal go by.
-const DEFINITION_FILE = /^[A-Za-z0-9_][\w.-]*\.(ts|mts|js|mjs)$/;
+const DEFINITION_FILE = /^[A-Za-z0-9_][\w.-]*\.(ts|mts|js|mjs|yaml|yml)$/;
 const NAMING =
-  "Name the file with letters, digits, dashes, underscores and dots, ending in .ts: for example release.ts.";
+  "Name the file with letters, digits, dashes, underscores and dots, ending in .ts or .yaml: for example release.ts or release.yaml.";
 
 export class WorkflowDefinitionsLoadError extends Schema.TaggedError<WorkflowDefinitionsLoadError>()(
   "WorkflowDefinitionsLoadError",
@@ -178,6 +183,23 @@ const evaluate = async (url: string, evaluation: Evaluation): Promise<ReadonlyAr
   return [...new Set([...evaluation.registered, ...listed])];
 };
 
+function loadDeclarativeDefinition(
+  module: string,
+  source: string,
+  kind: "yaml" | "plugin" = "yaml",
+): Effect.Effect<ReadonlyArray<WorkflowDefinition>, WorkflowDefinitionsLoadError> {
+  const compiled = compileDeclarativeWorkflowToDefinition(source);
+  if (compiled.ok) return Effect.succeed([{ ...compiled.definition, source: kind }]);
+  return Effect.fail(
+    new WorkflowDefinitionsLoadError({
+      module,
+      cause:
+        compiled.validation.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ") ||
+        "Declarative YAML workflow validation failed.",
+    }),
+  );
+}
+
 /**
  * The workflows a file defines: every `T3.workflow(…)` it calls, and any list it exports.
  * `load` tells one loading of a file from the next: Node keeps a module by its address, so the
@@ -190,6 +212,13 @@ export const loadDefinitions = Effect.fn("WorkflowRuntime.loadDefinitions")(func
 ) {
   const path = yield* Path.Path;
   const file = path.resolve(module);
+  if (file.endsWith(".yaml") || file.endsWith(".yml")) {
+    const yamlText = yield* Effect.tryPromise({
+      try: () => NodeFS.promises.readFile(file, "utf8"),
+      catch: (cause) => new WorkflowDefinitionsLoadError({ module, cause }),
+    });
+    return yield* loadDeclarativeDefinition(module, yamlText);
+  }
   const url = NodeURL.pathToFileURL(file).href + (load === 0 ? "" : `?${load}`);
   const definitions = yield* Effect.tryPromise({
     try: () => {
@@ -297,6 +326,7 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const pluginHost = yield* Effect.serviceOption(PluginHost.PluginHost);
   const target = path.resolve(where);
   const single = DEFINITION_FILE.test(path.basename(target));
   const directory = single ? path.dirname(target) : target;
@@ -411,8 +441,14 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
       ? Effect.succeed([])
       : Effect.flatMap(Deferred.await(ready), (service) => service.unfinished),
   );
+  type LoadedDefinition =
+    | { readonly definitions: ReadonlyArray<WorkflowDefinition>; readonly problem?: never }
+    | { readonly problem: WorkflowDefinitionProblem; readonly definitions?: never };
   /** The workflows the file at `from` defines, or what is wrong with it as the file `name`. */
-  const load = Effect.fn("WorkflowRuntime.load")(function* (from: string, name: string) {
+  const load = Effect.fn("WorkflowRuntime.load")(function* (
+    from: string,
+    name: string,
+  ): Effect.fn.Return<LoadedDefinition> {
     const definitions = yield* loadDefinitions(from, ++loads).pipe(
       Effect.provideContext(services),
       Effect.result,
@@ -430,7 +466,7 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
   // Set once `reload` exists, which it schedules again; the indirection keeps its type inferred.
   let retryLater: Effect.Effect<void> = Effect.void;
   /** Take in what changed in the folder, and run the result unless something is wrong with it. */
-  const reload = Effect.fn("WorkflowRuntime.reload")(function* () {
+  const reload = Effect.fn("WorkflowRuntime.reload")(function* (): Effect.fn.Return<boolean> {
     const listed = yield* Effect.option(entries);
     if (Option.isNone(listed)) {
       yield* Effect.logWarning(
@@ -439,7 +475,17 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
       yield* retryLater;
       return false;
     }
-    const present = definitionNames(listed.value);
+    const pluginSources = new Map<string, string>(
+      Option.getOrUndefined(pluginHost)
+        ?.getActiveContributions()
+        .flatMap((plugin) =>
+          plugin.workflows.map(
+            (workflow) =>
+              [`plugins/${plugin.pluginId}/${workflow.relativePath}`, workflow.source] as const,
+          ),
+        ) ?? [],
+    );
+    const present = [...definitionNames(listed.value), ...pluginSources.keys()];
     // A leading dot keeps a file out on purpose; any other code file left out is a surprise.
     const wasMisnamed = misnamed;
     misnamed = listed.value
@@ -459,11 +505,25 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
     }
     for (const name of present) {
       const file = path.join(directory, name);
-      const source = yield* fileSystem.readFileString(file).pipe(Effect.option);
+      const pluginSource = pluginSources.get(name);
+      const source =
+        pluginSource === undefined
+          ? yield* fileSystem.readFileString(file).pipe(Effect.option)
+          : Option.some(pluginSource);
       if (Option.isNone(source) || seen.get(name) === source.value) continue;
       seen.set(name, source.value);
       changed = true;
-      const loaded = yield* load(file, name);
+      const loaded =
+        pluginSource === undefined
+          ? yield* load(file, name)
+          : yield* loadDeclarativeDefinition(name, pluginSource, "plugin").pipe(
+              Effect.match({
+                onSuccess: (definitions): LoadedDefinition => ({ definitions }),
+                onFailure: (error): LoadedDefinition => ({
+                  problem: loadProblem(error, name, name),
+                }),
+              }),
+            );
       if (loaded.definitions === undefined) {
         broken.set(name, loaded.problem);
         pending.delete(name);
@@ -576,6 +636,22 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
     Effect.forkIn(outer),
   );
 
+  if (Option.isSome(pluginHost)) {
+    yield* pluginHost.value.activeContributionChanges.pipe(
+      Stream.debounce(RELOAD_SETTLE),
+      Stream.runForEach(() =>
+        lock
+          .withPermits(1)(reload())
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Reloading plugin workflows failed", Cause.pretty(cause)),
+            ),
+          ),
+      ),
+      Effect.forkIn(outer),
+    );
+  }
+
   yield* Effect.sleep(HELD_RETRY).pipe(
     Effect.andThen(
       Effect.suspend(() => (held.size > 0 ? lock.withPermits(1)(reload()) : Effect.void)),
@@ -604,6 +680,9 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
     }),
     answer: Effect.fn("Workflows.answer")(function* (...input) {
       return yield* (yield* current).answer(...input);
+    }),
+    pause: Effect.fn("Workflows.pause")(function* (...input) {
+      return yield* (yield* current).pause(...input);
     }),
     resume: Effect.fn("Workflows.resume")(function* (...input) {
       return yield* (yield* current).resume(...input);
@@ -651,6 +730,13 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
     watch: followed((live) => live.watch).pipe(
       Stream.map(([snapshot, at]) => ({ ...snapshot, definition: at })),
     ),
+    startFromChat: Effect.fn("Workflows.startFromChat")(function* (...input) {
+      return yield* (yield* current).startFromChat(...input);
+    }),
+    watchChat: (threadId) =>
+      followed((live) => live.watchChat(threadId)).pipe(
+        Stream.map(([snapshot, at]) => ({ ...snapshot, definition: at })),
+      ),
     counts: followed((live) => live.counts).pipe(Stream.map(([counts]) => counts)),
     sweep: Effect.flatMap(current, (live) => live.sweep),
   });
@@ -772,7 +858,7 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
 });
 
 /**
- * Workflows behind the Labs switch. While off, `runtime` is not run: no definition file loads and
+ * Workflows behind the server setting. While off, `runtime` is not run: no definition file loads and
  * no engine runs, and every request is refused. Turning on runs it in a scope of its own, which
  * turning off closes; runs stay stored and go on once it is on again. `where` is as for `make`.
  */
@@ -866,6 +952,9 @@ export const gate = Effect.fn("WorkflowRuntime.gate")(function* <E, R>(
     answer: Effect.fn("Workflows.answer")(function* (...input) {
       return yield* (yield* current).answer(...input);
     }),
+    pause: Effect.fn("Workflows.pause")(function* (...input) {
+      return yield* (yield* current).pause(...input);
+    }),
     resume: Effect.fn("Workflows.resume")(function* (...input) {
       return yield* (yield* current).resume(...input);
     }),
@@ -909,6 +998,10 @@ export const gate = Effect.fn("WorkflowRuntime.gate")(function* <E, R>(
       return yield* (yield* current).storeDelete(...input);
     }),
     watch: followed((service) => service.watch),
+    startFromChat: Effect.fn("Workflows.startFromChat")(function* (...input) {
+      return yield* (yield* current).startFromChat(...input);
+    }),
+    watchChat: (threadId) => followed((live) => live.watchChat(threadId)),
     counts: followed((service) => service.counts),
     sweep: Effect.flatMap(current, (service) => service.sweep),
   });
@@ -944,6 +1037,8 @@ export const layer = Layer.effectContext(
     const forge = Layer.succeed(WorkflowForge.WorkflowForge, yield* WorkflowForge.WorkflowForge);
     const sql = yield* SqlClient.SqlClient;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
     const where = Option.getOrElse(override, () => config.workflowsDir);
     const changes = yield* settings.subscribeChanges;
     const gated = yield* gate(
@@ -965,7 +1060,7 @@ export const layer = Layer.effectContext(
     );
     const enabled = yield* settings.getSettings.pipe(
       Effect.map((current) => current.workflowsEnabled),
-      Effect.orElseSucceed(() => false),
+      Effect.orElseSucceed(() => true),
     );
     yield* gated.turn(enabled);
     yield* changes.pipe(
@@ -973,6 +1068,63 @@ export const layer = Layer.effectContext(
       Stream.runForEach(gated.turn),
       Effect.forkScoped,
     );
-    return gated.context;
+    const live = Context.get(gated.context, Workflows.Workflows);
+    return gated.context.pipe(
+      Context.add(
+        Workflows.Workflows,
+        Workflows.Workflows.of({
+          ...live,
+          startFromChat: Effect.fn("Workflows.startFromChat")(function* (input) {
+            const thread = yield* threads.getThreadShell(input.threadId).pipe(
+              Effect.mapError(
+                () =>
+                  new Workflows.WorkflowInputError({
+                    problem: "Could not read the chat thread.",
+                  }),
+              ),
+            );
+            if (
+              thread === null ||
+              thread.deletedAt !== null ||
+              thread.archivedAt !== null ||
+              thread.projectId !== input.projectId
+            ) {
+              return yield* new Workflows.WorkflowInputError({
+                problem: "Select an active chat thread in this project to run a workflow.",
+              });
+            }
+            const launch = workflowHostLaunchCommandId(input.threadId);
+            const readReceipt = (commandId: CommandId) =>
+              receipts.getByCommandId(commandId).pipe(
+                Effect.mapError(
+                  () =>
+                    new Workflows.WorkflowInputError({
+                      problem: "Could not verify the workflow's workspace preparation.",
+                    }),
+                ),
+              );
+            const claimed = yield* readReceipt(launch);
+            if (
+              Option.isSome(claimed) &&
+              claimed.value.threadId === input.threadId &&
+              claimed.value.status === "accepted"
+            ) {
+              const prepared = yield* readReceipt(CommandId.make(`${launch}:workspace-ready`));
+              if (
+                Option.isNone(prepared) ||
+                prepared.value.status !== "accepted" ||
+                prepared.value.threadId !== input.threadId
+              ) {
+                return yield* new Workflows.WorkflowInputError({
+                  problem:
+                    "The chat workspace has not finished preparing. Retry the workspace setup before starting a workflow.",
+                });
+              }
+            }
+            return yield* live.startFromChat(input, thread);
+          }),
+        }),
+      ),
+    );
   }),
 );

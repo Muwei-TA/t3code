@@ -116,8 +116,35 @@ export function ThreadContextInspectorButton({
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <Badge variant={manifest.interactionMode === "plan" ? "default" : "secondary"}>
-                    {manifest.interactionMode === "plan" ? gt("Plan mode") : gt("Default mode")}
+                    {manifest.modeName
+                      ? gt("Mode: {mode}", { mode: manifest.modeName })
+                      : manifest.interactionMode === "plan"
+                        ? gt("Plan mode")
+                        : gt("Default mode")}
                   </Badge>
+                  {manifest.modeReadOnly ? (
+                    <Badge variant="outline">{gt("Read-only mode")}</Badge>
+                  ) : null}
+                  {manifest.tokenUsage !== null ? (
+                    <Badge variant="outline">
+                      {manifest.tokenUsage.maxTokens !== null
+                        ? gt("Tokens: {used} / {max}", {
+                            used: manifest.tokenUsage.usedTokens.toLocaleString(),
+                            max: manifest.tokenUsage.maxTokens.toLocaleString(),
+                          })
+                        : gt("Tokens: {used}", {
+                            used: manifest.tokenUsage.usedTokens.toLocaleString(),
+                          })}
+                    </Badge>
+                  ) : null}
+                  {manifest.approvalRulesCount > 0 ? (
+                    <Badge variant="outline">
+                      {gt(
+                        "{count, plural, one {{count} approval grant} other {{count} approval grants}}",
+                        { count: manifest.approvalRulesCount },
+                      )}
+                    </Badge>
+                  ) : null}
                   <Badge variant="outline">
                     {manifest.planModeSource === "native"
                       ? gt("Plan cards: Native")
@@ -139,7 +166,123 @@ export function ThreadContextInspectorButton({
                       ? gt("T3 Gateway active")
                       : gt("T3 Gateway idle")}
                   </Badge>
+                  {manifest.commandsCount > 0 ? (
+                    <Badge variant="outline">
+                      {gt("{count, plural, one {{count} command} other {{count} commands}}", {
+                        count: manifest.commandsCount,
+                      })}
+                    </Badge>
+                  ) : null}
+                  {manifest.contextBudgetBytes > 0 ? (
+                    <Badge variant="outline">
+                      {gt("Context: {used} / {budget} B", {
+                        used: manifest.contextUsedBytes,
+                        budget: manifest.contextBudgetBytes,
+                      })}
+                    </Badge>
+                  ) : null}
                 </div>
+
+                {manifest.rules.length > 0 ? (
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-medium text-foreground">
+                      <T>Portable Rules</T>
+                    </div>
+                    <div className="space-y-1.5">
+                      {manifest.rules.map((rule) => (
+                        <div
+                          key={`${rule.scope}:${rule.id}`}
+                          className="rounded-lg border border-border/70 p-2 text-xs"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono font-medium text-foreground">
+                                {rule.id}
+                              </span>
+                              <Badge variant="outline">{rule.apply}</Badge>
+                              {rule.lockedByPolicy ? (
+                                <Badge variant="secondary">
+                                  <T>Locked by organization</T>
+                                </Badge>
+                              ) : null}
+                              <Badge
+                                variant={
+                                  rule.status === "inlined"
+                                    ? "success"
+                                    : rule.status === "degraded"
+                                      ? "warning"
+                                      : "secondary"
+                                }
+                              >
+                                {rule.status === "inlined"
+                                  ? gt("Inlined")
+                                  : rule.status === "on-demand"
+                                    ? gt("On demand")
+                                    : rule.status === "degraded"
+                                      ? gt("Degraded")
+                                      : rule.status === "deduplicated"
+                                        ? gt("Native")
+                                        : gt("Disabled")}
+                              </Badge>
+                            </div>
+                            <span className="text-muted-foreground">
+                              {gt("{bytes} B", { bytes: rule.bytes })}
+                            </span>
+                          </div>
+                          {rule.reason ? (
+                            <p className="mt-1 text-muted-foreground">{rule.reason}</p>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {manifest.skills.length > 0 ? (
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-medium text-foreground">
+                      <T>Portable Skills</T>
+                    </div>
+                    <div className="space-y-1.5">
+                      {manifest.skills.map((skill) => (
+                        <div
+                          key={`${skill.scope}:${skill.id}`}
+                          className="rounded-lg border border-border/70 p-2 text-xs"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono font-medium text-foreground">
+                                {skill.name}
+                              </span>
+                              <Badge variant="outline">{skill.scope}</Badge>
+                              <Badge
+                                variant={
+                                  skill.channel === "native-mount" || skill.channel === "gateway"
+                                    ? "success"
+                                    : "secondary"
+                                }
+                              >
+                                {skill.channel === "native-mount"
+                                  ? gt("Native mount")
+                                  : skill.channel === "gateway"
+                                    ? gt("T3 Gateway")
+                                    : skill.channel === "deduplicated"
+                                      ? gt("Deduplicated")
+                                      : gt("Disabled")}
+                              </Badge>
+                            </div>
+                            <span className="text-muted-foreground">
+                              {gt("{bytes} B", { bytes: skill.bytes })}
+                            </span>
+                          </div>
+                          {skill.reason ? (
+                            <p className="mt-1 text-muted-foreground">{skill.reason}</p>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="space-y-1.5">
                   <div className="text-xs font-medium text-foreground">
@@ -177,6 +320,9 @@ export function ThreadContextInspectorButton({
                                       ? gt("Blocked")
                                       : gt("Disabled")}
                               </Badge>
+                              {item.state === "auth_required" ? (
+                                <Badge variant="warning">{gt("Sign-in required")}</Badge>
+                              ) : null}
                             </div>
                             <span className="text-muted-foreground">
                               {gt("{count, plural, one {{count} tool} other {{count} tools}}", {

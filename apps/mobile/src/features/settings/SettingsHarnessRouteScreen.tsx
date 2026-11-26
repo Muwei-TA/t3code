@@ -1,3 +1,4 @@
+import { confirmTwoStepRemoteAction } from "./confirmTwoStepRemoteAction";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import {
   isAtomCommandInterrupted,
@@ -8,13 +9,17 @@ import {
   AuthOrchestrationOperateScope,
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
+  AuthSourceControlWriteScope,
   AuthTerminalOperateScope,
   HarnessMcpServerId,
   type HarnessMcpImportCandidate,
+  type HarnessMcpApprovalPolicy,
   type HarnessMcpImportSource,
   type HarnessMcpServerConfig,
   type HarnessMcpServerView,
   type HarnessMcpTransport,
+  isValidHarnessHttpUrl,
+  supportsHarnessMcpOAuth,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { T, useGT, Var } from "gt-react-native";
@@ -28,6 +33,7 @@ import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { m } from "../../i18n/messages";
+import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { useProjects } from "../../state/entities";
 import { harnessEnvironment } from "../../state/harness";
 import { useEnvironmentQuery } from "../../state/query";
@@ -38,6 +44,9 @@ import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
 import { formatMobileTargetHost, formatMobileTransportBreakdown } from "./harness-confirmation";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
+import { type MobileHarnessTab, SettingsHarnessLibraryPanel } from "./SettingsHarnessLibraryPanel";
+import { SettingsHarnessMemorySyncPanel } from "./SettingsHarnessMemorySyncPanel";
+import { SettingsHarnessPluginsHooksPanel } from "./SettingsHarnessPluginsHooksPanel";
 
 const decodeServerId = Schema.decodeUnknownSync(HarnessMcpServerId);
 
@@ -69,32 +78,6 @@ function splitArgs(raw: string): string[] {
   });
 }
 
-function confirmTwoStepRemoteAction(input: {
-  readonly reviewTitle: string;
-  readonly reviewMessage: string;
-  readonly reviewConfirmText: string;
-  readonly finalTitle: string;
-  readonly finalMessage: string;
-  readonly finalConfirmText: string;
-  readonly destructive?: boolean;
-  readonly onConfirmed: () => void;
-}) {
-  Dialog.confirm({
-    title: input.reviewTitle,
-    message: input.reviewMessage,
-    confirmText: input.reviewConfirmText,
-    onConfirm: () => {
-      Dialog.confirm({
-        title: input.finalTitle,
-        message: input.finalMessage,
-        confirmText: input.finalConfirmText,
-        ...(input.destructive ? { destructive: true } : {}),
-        onConfirm: input.onConfirmed,
-      });
-    },
-  });
-}
-
 export function SettingsHarnessRouteScreen() {
   const gt = useGT();
   const environmentMenu = useSettingsEnvironmentMenu();
@@ -107,6 +90,10 @@ export function SettingsHarnessRouteScreen() {
   );
   const diagnosticsReadEnvs = useEnvironmentsWithScope(selectedTargets, AuthDiagnosticsReadScope);
   const providersManageEnvs = useEnvironmentsWithScope(selectedTargets, AuthProvidersManageScope);
+  const sourceControlWriteEnvs = useEnvironmentsWithScope(
+    selectedTargets,
+    AuthSourceControlWriteScope,
+  );
   const insets = useSafeAreaInsets();
 
   return (
@@ -131,6 +118,7 @@ export function SettingsHarnessRouteScreen() {
               canOperateOrchestration={orchestrationOperateEnvs.has(environment.environmentId)}
               canReadDiagnostics={diagnosticsReadEnvs.has(environment.environmentId)}
               canManageProviders={providersManageEnvs.has(environment.environmentId)}
+              canWriteSourceControl={sourceControlWriteEnvs.has(environment.environmentId)}
             />
           ))
         )}
@@ -146,6 +134,7 @@ function EnvironmentHarnessSection({
   canOperateOrchestration,
   canReadDiagnostics,
   canManageProviders,
+  canWriteSourceControl,
 }: {
   readonly environment: SettingsTarget;
   readonly canWriteSettings: boolean;
@@ -153,6 +142,7 @@ function EnvironmentHarnessSection({
   readonly canOperateOrchestration: boolean;
   readonly canReadDiagnostics: boolean;
   readonly canManageProviders: boolean;
+  readonly canWriteSourceControl: boolean;
 }) {
   const gt = useGT();
   const environmentId = environment.environmentId;
@@ -181,6 +171,15 @@ function EnvironmentHarnessSection({
   const removeMcp = useAtomCommand(harnessEnvironment.removeMcp, { reportFailure: false });
   const setMcpEnabled = useAtomCommand(harnessEnvironment.setMcpEnabled, { reportFailure: false });
   const restartMcp = useAtomCommand(harnessEnvironment.restartMcp, { reportFailure: false });
+  const listMcp = useAtomCommand(harnessEnvironment.listMcp, { reportFailure: false });
+  const startMcpOAuth = useAtomCommand(harnessEnvironment.startMcpOAuth, { reportFailure: false });
+  const completeMcpOAuth = useAtomCommand(harnessEnvironment.completeMcpOAuth, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const disconnectMcpOAuth = useAtomCommand(harnessEnvironment.disconnectMcpOAuth, {
+    reportFailure: false,
+  });
   const logsMcp = useAtomCommand(harnessEnvironment.logsMcp, { reportFailure: false });
   const scanImports = useAtomCommand(harnessEnvironment.scanImports, { reportFailure: false });
   const applyImports = useAtomCommand(harnessEnvironment.applyImports, { reportFailure: false });
@@ -192,10 +191,22 @@ function EnvironmentHarnessSection({
   });
 
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [signIn, setSignIn] = useState<{
+    readonly server: HarnessMcpServerView;
+    readonly url: string;
+  } | null>(null);
+  const [callbackUrl, setCallbackUrl] = useState("");
+  const [finishingOAuth, setFinishingOAuth] = useState(false);
+  const [oauthError, setOAuthError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<MobileHarnessTab>("mcp");
   const [addOpen, setAddOpen] = useState(false);
   const [newId, setNewId] = useState("");
   const [newTransportType, setNewTransportType] = useState<"http" | "sse" | "stdio">("http");
   const [newUrl, setNewUrl] = useState("");
+  const [newOAuthClientId, setNewOAuthClientId] = useState("");
+  const [newOAuthScopes, setNewOAuthScopes] = useState("");
+  const [newOAuthIssuer, setNewOAuthIssuer] = useState("");
+  const [approvalPolicy, setApprovalPolicy] = useState<HarnessMcpApprovalPolicy>("auto-read");
   const [newCommand, setNewCommand] = useState("");
   const [newArgs, setNewArgs] = useState("");
   const [logsModal, setLogsModal] = useState<{
@@ -205,6 +216,62 @@ function EnvironmentHarnessSection({
   const [importCandidates, setImportCandidates] =
     useState<ReadonlyArray<FlattenedImportCandidate> | null>(null);
   const [selectedImportKeys, setSelectedImportKeys] = useState<ReadonlySet<string>>(new Set());
+
+  const handleOAuth = async (server: HarnessMcpServerView, disconnect: boolean) => {
+    const input = {
+      serverId: server.id,
+      ...(activeWorkspaceRoot ? { workspaceRoot: activeWorkspaceRoot } : {}),
+    };
+    setBusyId(server.id);
+    if (disconnect) {
+      const result = await disconnectMcpOAuth({ environmentId, input });
+      if (result._tag === "Success") listQuery.refresh();
+      else if (!isAtomCommandInterrupted(result))
+        Dialog.alert(gt("Couldn't disconnect MCP sign-in."));
+    } else {
+      const result = await startMcpOAuth({ environmentId, input });
+      if (result._tag === "Success") {
+        setCallbackUrl("");
+        setOAuthError(null);
+        setSignIn({ server, url: result.value.authorizationUrl });
+      } else if (!isAtomCommandInterrupted(result)) {
+        Dialog.alert(gt("Couldn't start MCP sign-in."));
+      }
+    }
+    setBusyId(null);
+  };
+
+  const finishOAuth = async () => {
+    if (!signIn || finishingOAuth) return;
+    setFinishingOAuth(true);
+    setOAuthError(null);
+    const address = callbackUrl.trim();
+    const workspace = activeWorkspaceRoot ? { workspaceRoot: activeWorkspaceRoot } : {};
+    const result = address
+      ? await completeMcpOAuth({
+          environmentId,
+          input: { serverId: signIn.server.id, callbackUrl: address, ...workspace },
+        })
+      : await listMcp({ environmentId, input: workspace });
+    setFinishingOAuth(false);
+    if (result._tag === "Success") {
+      listQuery.refresh();
+      if (
+        address ||
+        result.value.servers.some(
+          (entry) =>
+            entry.id === signIn.server.id &&
+            entry.scope === signIn.server.scope &&
+            entry.oauthStatus === "connected" &&
+            entry.state !== "auth_required",
+        )
+      ) {
+        setSignIn(null);
+        return;
+      }
+    } else if (isAtomCommandInterrupted(result)) return;
+    setOAuthError(gt("Sign-in is incomplete. Approve access or paste the callback address."));
+  };
 
   const servers = listQuery.data?.servers ?? [];
   const invalidEntries = listQuery.data?.invalidEntries ?? [];
@@ -445,6 +512,10 @@ function EnvironmentHarnessSection({
       setAddOpen(false);
       setNewId("");
       setNewUrl("");
+      setNewOAuthClientId("");
+      setNewOAuthScopes("");
+      setNewOAuthIssuer("");
+      setApprovalPolicy("auto-read");
       setNewCommand("");
       setNewArgs("");
       listQuery.refresh();
@@ -493,7 +564,7 @@ function EnvironmentHarnessSection({
           ...(args.length > 0 ? { args } : {}),
         },
         injectionMode: "gateway",
-        approvalPolicy: "auto-read",
+        approvalPolicy,
       };
       const breakdown = formatMobileTransportBreakdown(config);
       confirmTwoStepRemoteAction({
@@ -524,18 +595,33 @@ function EnvironmentHarnessSection({
     }
 
     const trimmedUrl = newUrl.trim();
-    if (!/^https?:\/\/[^\s/]+/i.test(trimmedUrl)) {
+    if (!isValidHarnessHttpUrl(trimmedUrl)) {
       Dialog.alert(gt("Enter a valid http:// or https:// endpoint URL"));
       return;
     }
+    const issuer = newOAuthIssuer.trim();
+    if (issuer && !isValidHarnessHttpUrl(issuer)) {
+      Dialog.alert(gt("Enter a valid http:// or https:// OAuth authorization server URL."));
+      return;
+    }
+    const scopes = newOAuthScopes
+      .split(",")
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+    const oauth = {
+      ...(newOAuthClientId.trim() ? { clientId: newOAuthClientId.trim() } : {}),
+      ...(scopes.length > 0 ? { scopes } : {}),
+      ...(issuer ? { authorizationServerUrl: issuer } : {}),
+    };
     void commitAddServer(parsedId, {
       enabled: true,
       transport: {
         type: newTransportType,
         url: trimmedUrl,
+        ...(Object.keys(oauth).length > 0 ? { oauth } : {}),
       },
       injectionMode: "gateway",
-      approvalPolicy: "auto-read",
+      approvalPolicy,
     });
   };
 
@@ -717,140 +803,295 @@ function EnvironmentHarnessSection({
               </View>
             ) : null}
 
-            <View className="flex-row flex-wrap gap-2">
-              <Button
-                label={gt("Add server")}
-                tone="primary"
-                disabled={!canWriteSettings}
-                onPress={() => setAddOpen(true)}
-              />
-              <Button
-                label={busyId === "__scan__" ? gt("Scanning...") : gt("Import from CLIs")}
-                tone="secondary"
-                disabled={!canWriteSettings || busyId === "__scan__"}
-                onPress={() => void handleScanImports()}
-              />
-              <Button label={gt("Refresh")} tone="secondary" onPress={() => listQuery.refresh()} />
-            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerClassName="flex-row gap-2"
+            >
+              {(
+                [
+                  ["mcp", gt("MCP")],
+                  ["modes", gt("Modes")],
+                  ["skills", gt("Skills")],
+                  ["rules", gt("Rules")],
+                  ["commands", gt("Commands")],
+                  ["plugins", gt("Plugins")],
+                  ["hooks", gt("Hooks")],
+                  ["memory", gt("Memory")],
+                  ["sync", gt("Git Sync")],
+                  ["permissions", gt("Permissions")],
+                  ["transfer", gt("Import / Export")],
+                ] as const
+              ).map(([tabKey, tabLabel]) => (
+                <Button
+                  key={tabKey}
+                  label={tabLabel}
+                  tone={activeTab === tabKey ? "primary" : "secondary"}
+                  onPress={() => setActiveTab(tabKey)}
+                />
+              ))}
+            </ScrollView>
 
-            {invalidEntries.length > 0 ? (
-              <Text className="text-xs text-destructive">
-                {gt("{count} invalid harness entry skipped in harness.json.", {
-                  count: invalidEntries.length,
-                })}
-              </Text>
-            ) : null}
-
-            {listQuery.isPending && servers.length === 0 ? (
-              <View className="py-4">
-                <AppActivityIndicator />
-              </View>
-            ) : servers.length === 0 ? (
-              <Text className="text-sm text-foreground-muted">
-                <T>
-                  No MCP servers configured yet. Add one or import from Codex, Claude, Cursor, or
-                  Antigravity.
-                </T>
-              </Text>
+            {activeTab === "plugins" || activeTab === "hooks" ? (
+              <SettingsHarnessPluginsHooksPanel
+                activeTab={activeTab}
+                environmentId={environmentId}
+                targetHost={targetHost}
+                canWriteSettings={canWriteSettings}
+                canOperateTerminal={canOperateTerminal}
+              />
+            ) : activeTab === "memory" || activeTab === "sync" ? (
+              <SettingsHarnessMemorySyncPanel
+                activeTab={activeTab}
+                environmentId={environmentId}
+                targetHost={targetHost}
+                canWriteSettings={canWriteSettings}
+                canWriteSourceControl={canWriteSourceControl}
+              />
+            ) : activeTab !== "mcp" ? (
+              <SettingsHarnessLibraryPanel
+                activeTab={activeTab}
+                environmentId={environmentId}
+                workspaceRoot={activeWorkspaceRoot}
+                targetHost={targetHost}
+                canWriteSettings={canWriteSettings}
+                canManageProviders={canManageProviders}
+                canOperateOrchestration={canOperateOrchestration}
+              />
             ) : (
-              <View className="gap-3">
-                {servers.map((server) => {
-                  const canTrustServer =
-                    canWriteSettings &&
-                    (server.config.transport.type !== "stdio" ||
-                      (canOperateTerminal && !stdioDisabledByPolicy)) &&
-                    (!server.requiresSecretAccess || canManageProviders);
-                  const canRestartServer =
-                    canOperateOrchestration &&
-                    server.effectiveEnabled &&
-                    (server.config.transport.type !== "stdio" || canOperateTerminal) &&
-                    (!server.requiresSecretAccess || canManageProviders);
-                  return (
-                    <View
-                      key={`${server.scope}:${server.id}`}
-                      className="gap-2 rounded-xl border border-border bg-card-alt p-3"
-                    >
-                      <View className="flex-row items-center justify-between gap-2">
-                        <View className="flex-1">
-                          <Text className="font-t3-semibold text-base text-foreground">
-                            {server.id}
+              <>
+                <View className="flex-row flex-wrap gap-2">
+                  <Button
+                    label={gt("Add server")}
+                    tone="primary"
+                    disabled={!canWriteSettings}
+                    onPress={() => setAddOpen(true)}
+                  />
+                  <Button
+                    label={busyId === "__scan__" ? gt("Scanning...") : gt("Import from CLIs")}
+                    tone="secondary"
+                    disabled={!canWriteSettings || busyId === "__scan__"}
+                    onPress={() => void handleScanImports()}
+                  />
+                  <Button
+                    label={gt("Refresh")}
+                    tone="secondary"
+                    onPress={() => listQuery.refresh()}
+                  />
+                </View>
+
+                {invalidEntries.length > 0 ? (
+                  <Text className="text-xs text-destructive">
+                    {gt("{count} invalid harness entry skipped in harness.json.", {
+                      count: invalidEntries.length,
+                    })}
+                  </Text>
+                ) : null}
+
+                {listQuery.isPending && servers.length === 0 ? (
+                  <View className="py-4">
+                    <AppActivityIndicator />
+                  </View>
+                ) : servers.length === 0 ? (
+                  <Text className="text-sm text-foreground-muted">
+                    <T>
+                      No MCP servers configured yet. Add one or import from Codex, Claude, Cursor,
+                      or Antigravity.
+                    </T>
+                  </Text>
+                ) : (
+                  <View className="gap-3">
+                    {servers.map((server) => {
+                      const canTrustServer =
+                        canWriteSettings &&
+                        (server.config.transport.type !== "stdio" ||
+                          (canOperateTerminal && !stdioDisabledByPolicy)) &&
+                        (!server.requiresSecretAccess || canManageProviders);
+                      const canRestartServer =
+                        canOperateOrchestration &&
+                        server.effectiveEnabled &&
+                        (server.config.transport.type !== "stdio" || canOperateTerminal) &&
+                        (!server.requiresSecretAccess || canManageProviders);
+                      return (
+                        <View
+                          key={`${server.scope}:${server.id}`}
+                          className="gap-2 rounded-xl border border-border bg-card-alt p-3"
+                        >
+                          <View className="flex-row items-center justify-between gap-2">
+                            <View className="flex-1">
+                              <Text className="font-t3-semibold text-base text-foreground">
+                                {server.id}
+                              </Text>
+                              <Text className="text-xs text-foreground-muted">
+                                {server.config.transport.type.toUpperCase()} · {server.scope} ·{" "}
+                                {server.state} · {gt("{count} tools", { count: server.toolCount })}
+                              </Text>
+                              {server.state === "auth_required" ||
+                              server.oauthStatus === "required" ||
+                              server.oauthStatus === "expired" ? (
+                                <Text className="text-xs text-foreground-muted">
+                                  <T>Sign-in required</T>
+                                </Text>
+                              ) : server.oauthStatus === "connected" ? (
+                                <Text className="text-xs text-foreground-muted">
+                                  <T>Signed in</T>
+                                </Text>
+                              ) : null}
+                            </View>
+                            {server.scope === "user" ? (
+                              <Switch
+                                value={server.config.enabled}
+                                disabled={
+                                  !canWriteSettings ||
+                                  busyId === server.id ||
+                                  server.state === "blocked_by_policy"
+                                }
+                                onValueChange={() => handleToggleEnabled(server)}
+                              />
+                            ) : null}
+                          </View>
+
+                          <Text
+                            className="font-mono text-xs text-foreground-muted"
+                            numberOfLines={3}
+                          >
+                            {describeTransport(server.config.transport)}
                           </Text>
-                          <Text className="text-xs text-foreground-muted">
-                            {server.config.transport.type.toUpperCase()} · {server.scope} ·{" "}
-                            {server.state} · {gt("{count} tools", { count: server.toolCount })}
-                          </Text>
+
+                          {server.lastError ? (
+                            <Text className="text-xs text-destructive">{server.lastError}</Text>
+                          ) : null}
+
+                          <View className="flex-row flex-wrap gap-2 pt-1">
+                            {canManageProviders &&
+                            server.effectiveEnabled &&
+                            supportsHarnessMcpOAuth(server.config) ? (
+                              <>
+                                <Button
+                                  label={
+                                    server.oauthStatus === "connected"
+                                      ? gt("Sign in again")
+                                      : gt("Sign in")
+                                  }
+                                  tone="secondary"
+                                  disabled={busyId === server.id}
+                                  onPress={() => void handleOAuth(server, false)}
+                                />
+                                {server.oauthStatus === "connected" ||
+                                server.oauthStatus === "expired" ? (
+                                  <Button
+                                    label={gt("Disconnect sign-in")}
+                                    tone="secondary"
+                                    disabled={busyId === server.id}
+                                    onPress={() => void handleOAuth(server, true)}
+                                  />
+                                ) : null}
+                              </>
+                            ) : null}
+                            {server.needsTrustConfirmation ? (
+                              <Button
+                                label={gt("Review & trust")}
+                                tone="primary"
+                                disabled={!canTrustServer || busyId === server.id}
+                                onPress={() => handleTrust(server)}
+                              />
+                            ) : null}
+                            {server.scope === "project" &&
+                            server.trustDigest !== null &&
+                            !server.needsTrustConfirmation ? (
+                              <Button
+                                label={gt("Revoke trust")}
+                                tone="secondary"
+                                disabled={!canWriteSettings || busyId === server.id}
+                                onPress={() => void handleRevokeTrust(server)}
+                              />
+                            ) : null}
+                            <Button
+                              label={gt("Restart")}
+                              tone="secondary"
+                              disabled={!canRestartServer || busyId === server.id}
+                              onPress={() => void handleRestart(server)}
+                            />
+                            {canReadDiagnostics ? (
+                              <Button
+                                label={gt("Logs")}
+                                tone="secondary"
+                                disabled={busyId === server.id}
+                                onPress={() => void handleOpenLogs(server)}
+                              />
+                            ) : null}
+                            {server.scope === "user" ? (
+                              <Button
+                                label={gt("Remove")}
+                                tone="secondary"
+                                disabled={!canWriteSettings || busyId === server.id}
+                                onPress={() => handleRemove(server)}
+                              />
+                            ) : null}
+                          </View>
                         </View>
-                        {server.scope === "user" ? (
-                          <Switch
-                            value={server.config.enabled}
-                            disabled={
-                              !canWriteSettings ||
-                              busyId === server.id ||
-                              server.state === "blocked_by_policy"
-                            }
-                            onValueChange={() => handleToggleEnabled(server)}
-                          />
-                        ) : null}
-                      </View>
-
-                      <Text className="font-mono text-xs text-foreground-muted" numberOfLines={3}>
-                        {describeTransport(server.config.transport)}
-                      </Text>
-
-                      {server.lastError ? (
-                        <Text className="text-xs text-destructive">{server.lastError}</Text>
-                      ) : null}
-
-                      <View className="flex-row flex-wrap gap-2 pt-1">
-                        {server.needsTrustConfirmation ? (
-                          <Button
-                            label={gt("Review & trust")}
-                            tone="primary"
-                            disabled={!canTrustServer || busyId === server.id}
-                            onPress={() => handleTrust(server)}
-                          />
-                        ) : null}
-                        {server.scope === "project" &&
-                        server.trustDigest !== null &&
-                        !server.needsTrustConfirmation ? (
-                          <Button
-                            label={gt("Revoke trust")}
-                            tone="secondary"
-                            disabled={!canWriteSettings || busyId === server.id}
-                            onPress={() => void handleRevokeTrust(server)}
-                          />
-                        ) : null}
-                        <Button
-                          label={gt("Restart")}
-                          tone="secondary"
-                          disabled={!canRestartServer || busyId === server.id}
-                          onPress={() => void handleRestart(server)}
-                        />
-                        {canReadDiagnostics ? (
-                          <Button
-                            label={gt("Logs")}
-                            tone="secondary"
-                            disabled={busyId === server.id}
-                            onPress={() => void handleOpenLogs(server)}
-                          />
-                        ) : null}
-                        {server.scope === "user" ? (
-                          <Button
-                            label={gt("Remove")}
-                            tone="secondary"
-                            disabled={!canWriteSettings || busyId === server.id}
-                            onPress={() => handleRemove(server)}
-                          />
-                        ) : null}
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
+                      );
+                    })}
+                  </View>
+                )}
+              </>
             )}
           </>
         )}
       </View>
+
+      <Modal
+        visible={signIn !== null}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => {
+          if (!finishingOAuth) setSignIn(null);
+        }}
+      >
+        <ScrollView
+          className="flex-1 bg-sheet-solid"
+          contentContainerClassName="gap-4 p-5"
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text className="font-t3-semibold text-xl text-foreground">
+            {gt("Sign in to {server}", { server: signIn?.server.id ?? "" })}
+          </Text>
+          <Text className="text-sm text-foreground-muted">
+            <T>
+              Approve access in your browser. If the callback page cannot open, paste its address
+              here.
+            </T>
+          </Text>
+          <Button
+            label={gt("Open sign-in page")}
+            tone="secondary"
+            onPress={() => {
+              if (signIn) void tryOpenExternalUrl(signIn.url, "provider-auth");
+            }}
+          />
+          <TextInput
+            className="rounded-lg border border-border px-3 py-2 text-foreground"
+            accessibilityLabel={gt("OAuth callback address")}
+            value={callbackUrl}
+            onChangeText={setCallbackUrl}
+            autoCorrect={false}
+            autoCapitalize="none"
+            editable={!finishingOAuth}
+          />
+          {oauthError ? <Text className="text-sm text-destructive">{oauthError}</Text> : null}
+          <Button
+            label={gt("Finish sign-in")}
+            disabled={!canManageProviders || finishingOAuth}
+            onPress={() => void finishOAuth()}
+          />
+          <Button
+            label={gt("Close")}
+            tone="secondary"
+            disabled={finishingOAuth}
+            onPress={() => setSignIn(null)}
+          />
+        </ScrollView>
+      </Modal>
 
       <Modal
         visible={addOpen}
@@ -935,9 +1176,60 @@ function EnvironmentHarnessSection({
                 autoCorrect={false}
                 className="rounded-xl border border-border bg-card px-3 py-2.5 text-foreground"
               />
+              <Text className="text-sm font-t3-medium text-foreground">
+                <T>OAuth settings (optional)</T>
+              </Text>
+              <TextInput
+                accessibilityLabel={gt("OAuth client ID")}
+                placeholder={gt("OAuth client ID")}
+                value={newOAuthClientId}
+                onChangeText={setNewOAuthClientId}
+                autoCapitalize="none"
+                autoCorrect={false}
+                className="rounded-xl border border-border bg-card px-3 py-2.5 text-foreground"
+              />
+              <TextInput
+                accessibilityLabel={gt("OAuth scopes (comma-separated)")}
+                placeholder={gt("OAuth scopes (comma-separated)")}
+                value={newOAuthScopes}
+                onChangeText={setNewOAuthScopes}
+                autoCapitalize="none"
+                autoCorrect={false}
+                className="rounded-xl border border-border bg-card px-3 py-2.5 text-foreground"
+              />
+              <TextInput
+                accessibilityLabel={gt("OAuth authorization server URL")}
+                placeholder={gt("OAuth authorization server URL")}
+                value={newOAuthIssuer}
+                onChangeText={setNewOAuthIssuer}
+                autoCapitalize="none"
+                autoCorrect={false}
+                className="rounded-xl border border-border bg-card px-3 py-2.5 text-foreground"
+              />
             </View>
           )}
 
+          <View className="gap-1.5">
+            <Text className="text-sm font-t3-medium text-foreground">
+              <T>Gateway tool policy</T>
+            </Text>
+            <View className="flex-row flex-wrap gap-2">
+              {(
+                [
+                  ["auto-read", gt("Auto-allow read-only")],
+                  ["always-ask", gt("Always ask")],
+                  ["auto-all", gt("Auto-allow all")],
+                ] as const
+              ).map(([policy, label]) => (
+                <Button
+                  key={policy}
+                  label={label}
+                  tone={approvalPolicy === policy ? "primary" : "secondary"}
+                  onPress={() => setApprovalPolicy(policy)}
+                />
+              ))}
+            </View>
+          </View>
           <View className="flex-row gap-2 pt-2">
             <Button
               label={busyId === "__add__" ? gt("Saving...") : gt("Save")}

@@ -1,3 +1,4 @@
+import { resolveRunHarnessMode, runInteractionMode } from "../harness/HarnessTurnPreprocess.ts";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import type { HarnessNativeMcpServer } from "@t3tools/provider-core/server/mcpSession";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -58,7 +59,12 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import * as HarnessLibraryStore from "../harness/HarnessLibraryStore.ts";
+import * as HarnessMemoryStore from "../harness/HarnessMemoryStore.ts";
+import { type NativeDiscoveredSkill, projectHarnessContext } from "../harness/HarnessProjector.ts";
 import * as McpGateway from "../harness/McpGateway.ts";
+import * as PluginHost from "../harness/PluginHost.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
@@ -265,7 +271,10 @@ export interface ProviderSessionManagerV2Shape {
     Option.Option<ProviderAdapter.ProviderAdapterV2SessionRuntime>,
     ProviderSessionManagerV2Error
   >;
-  readonly isLive: (providerSessionId: ProviderSessionId) => Effect.Effect<boolean>;
+  readonly isLive: (
+    providerSessionId: ProviderSessionId,
+    threadId?: ThreadId,
+  ) => Effect.Effect<boolean>;
   readonly close: (
     providerSessionId: ProviderSessionId,
   ) => Effect.Effect<void, ProviderSessionManagerV2Error>;
@@ -485,6 +494,12 @@ export const layerWithOptions = (
       const mcpSessionRegistry = yield* McpSessionRegistry.McpSessionRegistry;
       const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
       const mcpGateway = yield* Effect.serviceOption(McpGateway.McpGateway);
+      const harnessLibraryStore = yield* Effect.serviceOption(
+        HarnessLibraryStore.HarnessLibraryStore,
+      );
+      const harnessMemoryStore = yield* Effect.serviceOption(HarnessMemoryStore.HarnessMemoryStore);
+      const pluginHost = yield* Effect.serviceOption(PluginHost.PluginHost);
+      const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
       const projectStore = yield* Effect.serviceOption(ProjectStore.ProjectStoreV2);
       /** Unreadable settings must preserve explicit browser-access opt-outs. */
       const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
@@ -660,17 +675,125 @@ export const layerWithOptions = (
                   )
                 : undefined))
             : undefined;
+          const librarySnapshot = Option.isSome(harnessLibraryStore)
+            ? yield* harnessLibraryStore.value
+                .getSnapshot(workspaceRoot)
+                .pipe(Effect.orElseSucceed(() => null))
+            : null;
+          const nativeSkills: ReadonlyArray<NativeDiscoveredSkill> =
+            librarySnapshot !== null && Option.isSome(providerRegistry)
+              ? yield* providerRegistry.value.getProviders.pipe(
+                  Effect.map((providers) => {
+                    const matched = providers.find(
+                      (provider) => provider.instanceId === providerInstanceId,
+                    );
+                    if (!matched) return [];
+                    const ws =
+                      workspaceRoot !== undefined
+                        ? matched.workspaceSnapshots?.find((snap) => snap.cwd === workspaceRoot)
+                        : undefined;
+                    return (ws?.skills ?? matched.skills).map((skill) => ({
+                      name: skill.name,
+                      path: skill.path,
+                    }));
+                  }),
+                  Effect.orElseSucceed(() => [] as ReadonlyArray<NativeDiscoveredSkill>),
+                )
+              : [];
+          const threadShell =
+            Option.isSome(harnessLibraryStore) && Option.isSome(threadRecord)
+              ? yield* projectionStore
+                  .getThreadShell(threadId)
+                  .pipe(Effect.orElseSucceed(() => null))
+              : null;
+          const activeRunId = threadShell?.activeRunId;
+          const runMode = activeRunId
+            ? (yield* projectionStore
+                .getRun(threadId, activeRunId)
+                .pipe(Effect.orElseSucceed(() => undefined)))?.harnessMode
+            : undefined;
+          const threadInteractionMode = Option.isSome(threadRecord)
+            ? threadRecord.value.interactionMode
+            : "default";
+          const activeMode =
+            Option.isSome(harnessLibraryStore) && Option.isSome(threadRecord)
+              ? yield* resolveRunHarnessMode(harnessLibraryStore.value, {
+                  modeId: threadRecord.value.modeId,
+                  interactionMode: threadInteractionMode,
+                  workspaceRoot,
+                  override: runMode,
+                })
+              : null;
+          const projectedLibrary =
+            librarySnapshot !== null && Option.isSome(adapterCapabilities)
+              ? projectHarnessContext({
+                  library: librarySnapshot,
+                  harnessCapabilities: adapterCapabilities.value.harness,
+                  activeMode,
+                  nativeSkills,
+                  nativeReadsProjectAgentsMd: true,
+                  codexSkillMount: "prepare",
+                  supportsMcpTools: adapterCapabilities.value.tools.supportsMcpTools,
+                })
+              : null;
+          const skillMount = Option.isSome(adapterCapabilities)
+            ? adapterCapabilities.value.harness.skillMount
+            : undefined;
+          const harnessSkillPluginDir =
+            skillMount === "plugin-dir" &&
+            Option.isSome(harnessLibraryStore) &&
+            projectedLibrary !== null &&
+            projectedLibrary.nativeMountSkills.length > 0
+              ? yield* harnessLibraryStore.value
+                  .materializeClaudePluginDir({ skills: projectedLibrary.nativeMountSkills })
+                  .pipe(Effect.orElseSucceed(() => undefined))
+              : undefined;
+          const harnessCodexSkillRootDir =
+            skillMount === "managed-home" &&
+            Option.isSome(harnessLibraryStore) &&
+            projectedLibrary !== null
+              ? yield* harnessLibraryStore.value.materializeCodexSkillRoot({
+                  skills: projectedLibrary.nativeMountSkills,
+                })
+              : undefined;
+          const libraryDigest =
+            librarySnapshot !== null
+              ? `${activeMode ? `${activeMode.id}@${activeMode.contentDigest}:` : ""}${librarySnapshot.userAgentsMd.contentDigest}:${librarySnapshot.skills
+                  .filter((s) => s.effectiveEnabled)
+                  .map((s) => `${s.id}@${s.contentDigest}`)
+                  .join(",")}:${librarySnapshot.rules
+                  .filter((r) => r.effectiveEnabled)
+                  .map((r) => `${r.id}@${r.contentDigest}`)
+                  .join(",")}`
+              : "";
+          const sdkToolsDigest = Option.isSome(pluginHost)
+            ? pluginHost.value
+                .listActiveSdkTools()
+                .map((tool) => `${tool.exposedName}:${tool.readOnly ? "ro" : "rw"}`)
+                .toSorted()
+                .join(",")
+            : "";
+          const effectiveInteractionMode = runInteractionMode(threadInteractionMode, runMode);
+          const hasCreatorTools =
+            effectiveInteractionMode !== "plan" &&
+            activeMode?.readonly !== true &&
+            (activeMode?.id ?? runMode?.id ?? Option.getOrUndefined(threadRecord)?.modeId) ===
+              "creator";
           const harnessInjection =
             Option.isSome(mcpGateway) && Option.isSome(adapterCapabilities)
               ? yield* mcpGateway.value
                   .resolveSessionInjection({
                     workspaceRoot,
-                    interactionMode: Option.isSome(threadRecord)
-                      ? threadRecord.value.interactionMode
-                      : "default",
+                    interactionMode: effectiveInteractionMode,
+                    activeMode,
                     emitsProposedPlan: adapterCapabilities.value.planning.emitsProposedPlan,
                     supportsMcpTools: adapterCapabilities.value.tools.supportsMcpTools,
                     harnessCapabilities: adapterCapabilities.value.harness,
+                    hasLibraryGatewayTools: projectedLibrary?.needsGatewayTools === true,
+                    hasCreatorTools,
+                    hasMemoryTools: Option.isSome(harnessMemoryStore),
+                    sdkToolsDigest,
+                    libraryDigest,
                   })
                   .pipe(
                     Effect.orElseSucceed(() => ({
@@ -682,11 +805,13 @@ export const layerWithOptions = (
               : { harnessActive: false, gatewayServersDigest: "", nativeMcpServers: [] };
           const nativeServerKeys = nativeServerKeysFor(harnessInjection.nativeMcpServers);
           const nativeServersKey = nativeServerKeys.join("\u001d");
-          const fingerprint = `${harnessInjection.harnessActive ? "1" : "0"}\u0000${harnessInjection.gatewayServersDigest}\u0000${nativeServersKey}`;
+          const fingerprint = `${harnessInjection.harnessActive ? "1" : "0"}\u0000${harnessInjection.gatewayServersDigest}\u0000${nativeServersKey}\u0000${harnessSkillPluginDir ?? ""}\u0000${harnessCodexSkillRootDir ?? ""}`;
           return {
             adapterCapabilities,
             threadRecord,
             harnessInjection,
+            harnessSkillPluginDir,
+            harnessCodexSkillRootDir,
             nativeServersKey,
             harnessSnapshot: { fingerprint, nativeServerKeys },
           };
@@ -720,6 +845,8 @@ export const layerWithOptions = (
                   adapterCapabilities,
                   threadRecord,
                   harnessInjection,
+                  harnessSkillPluginDir,
+                  harnessCodexSkillRootDir,
                   nativeServersKey,
                   harnessSnapshot,
                 } = yield* computeHarnessInjection(threadId, providerInstanceId);
@@ -772,6 +899,8 @@ export const layerWithOptions = (
                     // A credential issued while the lineage read failed is replaced once it works.
                     (resolved.thread.subagent === true) === subagent &&
                     existing.harnessEndpoint === expectedHarnessEndpoint &&
+                    existing.harnessSkillPluginDir === harnessSkillPluginDir &&
+                    existing.harnessCodexSkillRoot?.path === harnessCodexSkillRootDir &&
                     existingNativeKey === nativeServersKey
                   ) {
                     return {
@@ -794,6 +923,15 @@ export const layerWithOptions = (
                 yield* mcpSessions.set({
                   ...credential.config,
                   ...(harnessEndpoint !== undefined ? { harnessEndpoint } : {}),
+                  ...(harnessSkillPluginDir !== undefined ? { harnessSkillPluginDir } : {}),
+                  ...(harnessCodexSkillRootDir !== undefined
+                    ? {
+                        harnessCodexSkillRoot: {
+                          path: harnessCodexSkillRootDir,
+                          mounts: new Set(),
+                        },
+                      }
+                    : {}),
                   ...(harnessInjection.nativeMcpServers.length > 0
                     ? { nativeMcpServers: harnessInjection.nativeMcpServers }
                     : {}),
@@ -1000,8 +1138,11 @@ export const layerWithOptions = (
           const releasedRequests = projection.runtimeRequests.filter(
             (request) =>
               request.status === "pending" &&
-              request.responseCapability.type === "live" &&
-              request.responseCapability.providerSessionId === providerSessionId &&
+              ((request.responseCapability.type === "live" &&
+                request.responseCapability.providerSessionId === providerSessionId) ||
+                (request.responseCapability.type === "harness_gateway" &&
+                  input.reason !== "server_shutdown" &&
+                  request.responseCapability.thread?.providerSessionId === providerSessionId)) &&
               DateTime.isLessThanOrEqualTo(request.createdAt, input.releasedAt) &&
               // Shutdown reconciliation decides which questions can survive the lost callback.
               !(input.reason === "server_shutdown" && request.kind === "user_input"),
@@ -3614,9 +3755,15 @@ export const layerWithOptions = (
               return exposedRuntime;
             }),
           ),
-        isLive: (providerSessionId) =>
+        isLive: (providerSessionId, threadId) =>
           Ref.get(sessions).pipe(
-            Effect.map((current) => current.has(sessionKey(providerSessionId))),
+            Effect.map((current) => {
+              const entry = current.get(sessionKey(providerSessionId));
+              return (
+                entry !== undefined &&
+                (threadId === undefined || entry.attachedThreadIds.has(threadId))
+              );
+            }),
           ),
         get: Effect.fn("ProviderSessionManager.get")(
           function* (providerSessionId) {

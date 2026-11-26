@@ -3,6 +3,7 @@ import { msg } from "gt-react-native";
 import { m } from "../i18n/messages";
 import {
   EnvironmentId as EnvironmentIdSchema,
+  HarnessModeId as HarnessModeIdSchema,
   ModelSelection as ModelSelectionSchema,
   ComposerContextId,
   ComposerContextRecord,
@@ -15,6 +16,7 @@ import {
   ProviderOptionSelection as ProviderOptionSelectionSchema,
   RuntimeMode as RuntimeModeSchema,
   type EnvironmentId,
+  type HarnessModeId,
   type ModelSelection,
   type ProjectId,
   type ProviderInteractionMode,
@@ -448,6 +450,7 @@ export interface ComposerDraft {
   readonly modelSelection?: ModelSelection;
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly modeId?: HarnessModeId;
   /** `/clear` armed this draft: its next message starts a fresh provider session. */
   readonly freshContext?: boolean;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
@@ -491,6 +494,7 @@ export type ComposerDraftSettingsUpdate = Pick<
   | "modelSelection"
   | "runtimeMode"
   | "interactionMode"
+  | "modeId"
   | "freshContext"
   | "workspaceSelection"
   | "project"
@@ -526,6 +530,7 @@ const ComposerDraftSchema = Schema.Struct({
   modelSelection: Schema.optional(ModelSelectionSchema),
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
+  modeId: Schema.optional(HarnessModeIdSchema),
   freshContext: Schema.optional(Schema.Boolean),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
   project: Schema.optional(ComposerDraftProjectSchema),
@@ -706,6 +711,7 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
     draft.modelSelection === undefined &&
     draft.runtimeMode === undefined &&
     draft.interactionMode === undefined &&
+    draft.modeId === undefined &&
     draft.freshContext !== true &&
     draft.workspaceSelection === undefined
   );
@@ -773,6 +779,7 @@ export function decodePersistedComposerState(value: unknown): {
               draft.attachments.length === 0 &&
               draft.runtimeMode === undefined &&
               draft.interactionMode === undefined &&
+              draft.modeId === undefined &&
               draft.workspaceSelection === undefined
               ? { ...draft, modelSelection: undefined }
               : draft,
@@ -1890,6 +1897,7 @@ export function sameComposerDraftState(a: ComposerDraft, b: ComposerDraft): bool
     a.modelSelection === b.modelSelection &&
     a.runtimeMode === b.runtimeMode &&
     a.interactionMode === b.interactionMode &&
+    a.modeId === b.modeId &&
     a.freshContext === b.freshContext &&
     a.workspaceSelection === b.workspaceSelection
   );
@@ -1920,6 +1928,7 @@ export function undoComposerDraftMergeState(
       | "modelSelection"
       | "runtimeMode"
       | "interactionMode"
+      | "modeId"
       | "freshContext"
       | "workspaceSelection",
   >(
@@ -1941,6 +1950,7 @@ export function undoComposerDraftMergeState(
     modelSelection: undoSetting("modelSelection"),
     runtimeMode: undoSetting("runtimeMode"),
     interactionMode: undoSetting("interactionMode"),
+    modeId: undoSetting("modeId"),
     freshContext: undoSetting("freshContext"),
     workspaceSelection: undoSetting("workspaceSelection"),
   };
@@ -2194,7 +2204,7 @@ export const composerDraftUploadSourcesAtom = Atom.make((get): ComposerDraftUplo
 
 type ComposerDraftSettings = Pick<
   ComposerDraft,
-  "modelSelection" | "runtimeMode" | "interactionMode" | "freshContext"
+  "modelSelection" | "runtimeMode" | "interactionMode" | "modeId" | "freshContext"
 >;
 const EMPTY_DRAFT_SETTINGS: ComposerDraftSettings = {};
 const composerDraftSettingsAtom = Atom.family((draftKey: string) =>
@@ -2204,6 +2214,7 @@ const composerDraftSettingsAtom = Atom.family((draftKey: string) =>
       modelSelection: draft.modelSelection,
       runtimeMode: draft.runtimeMode,
       interactionMode: draft.interactionMode,
+      modeId: draft.modeId,
       freshContext: draft.freshContext,
     };
   }).pipe(
@@ -2212,6 +2223,7 @@ const composerDraftSettingsAtom = Atom.family((draftKey: string) =>
         a.modelSelection === b.modelSelection &&
         a.runtimeMode === b.runtimeMode &&
         a.interactionMode === b.interactionMode &&
+        a.modeId === b.modeId &&
         a.freshContext === b.freshContext,
     ),
   ),

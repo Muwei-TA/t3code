@@ -2,8 +2,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
   DEFAULT_HARNESS_CAPABILITIES,
+  HarnessCommandId,
   HarnessError,
   HarnessMcpServerId,
+  HarnessRuleId,
+  HarnessSkillId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -23,6 +26,7 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as HarnessContextService from "./HarnessContextService.ts";
+import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 import * as McpGateway from "./McpGateway.ts";
 
@@ -127,6 +131,7 @@ describe("HarnessContextService", () => {
               ? Effect.succeed(thread)
               : Effect.fail(new HarnessError({ code: "not_found", detail: "not found" }));
           },
+          getThreadRecords: () => Effect.succeed({ providerTurns: [] }),
         } as unknown as ProjectionStore.ProjectionStoreV2["Service"]);
 
         const mockProjectLayer = Layer.succeed(ProjectStore.ProjectStoreV2, {
@@ -184,8 +189,11 @@ describe("HarnessContextService", () => {
           } as unknown as ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"],
         );
 
+        const libraryLayer = HarnessLibraryStore.layer.pipe(Layer.provideMerge(storeLayer));
+
         const serviceLayer = HarnessContextService.layer.pipe(
           Layer.provideMerge(gatewayLayer),
+          Layer.provideMerge(libraryLayer),
           Layer.provide(mockProjectionLayer),
           Layer.provide(mockProjectLayer),
           Layer.provide(mockAdapterRegistryLayer),
@@ -233,6 +241,37 @@ describe("HarnessContextService", () => {
             "native",
           );
           expect(openCodeManifest.degradedItems.some((item) => item.kind === "plan")).toBe(false);
+
+          // Add portable skill, rule, and custom command and confirm v1 manifest fields populate.
+          const libStore = yield* HarnessLibraryStore.HarnessLibraryStore;
+          yield* libStore.upsertUserSkill({
+            id: HarnessSkillId.make("review-helper"),
+            description: "Code review checklist",
+            body: "Verify edge cases.",
+          });
+          yield* libStore.upsertUserRule({
+            id: HarnessRuleId.make("always-short"),
+            apply: "always",
+            body: "Keep PR diffs focused.",
+          });
+          yield* libStore.upsertUserCommand({
+            id: HarnessCommandId.make("ship"),
+            body: "Check status and run tests.",
+          });
+
+          const codexWithLibrary = yield* contextService.getThreadContextManifest(codexThreadId);
+          expect(codexWithLibrary.modeId).toBe("build");
+          expect(codexWithLibrary.modeName).toBe("Build");
+          expect(codexWithLibrary.modeReadOnly).toBe(false);
+          expect(codexWithLibrary.approvalRulesCount).toBe(0);
+          expect(codexWithLibrary.skills.some((s) => s.id === "review-helper")).toBe(true);
+          expect(codexWithLibrary.rules.find((r) => r.id === "always-short")?.status).toBe(
+            "inlined",
+          );
+          expect(codexWithLibrary.commandsCount).toBe(1);
+          expect(codexWithLibrary.contextBudgetBytes).toBeGreaterThan(0);
+          expect(codexWithLibrary.contextUsedBytes).toBeGreaterThan(0);
+          expect(codexWithLibrary.scaffoldBytes).toBeGreaterThan(0);
         }).pipe(Effect.provide(serviceLayer));
       }).pipe(Effect.provide(NodeServices.layer)),
   );

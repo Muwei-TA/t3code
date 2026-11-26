@@ -1,7 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
 import { AuthOrchestrationOperateScope, type ScopedThreadRef } from "@t3tools/contracts";
 import type { ChildThreadApproval } from "@t3tools/client-runtime/state/thread-requests";
-import { fullAccessOverrideExplanation } from "@t3tools/client-runtime/state/thread-requests";
+import {
+  approvalOptionsForDisplay,
+  fullAccessOverrideExplanation,
+} from "@t3tools/client-runtime/state/thread-requests";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -53,7 +56,7 @@ function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
           isResponding={responding}
           canRespond={approval.responseCapability === "live"}
           disabled={!canRespond}
-          options={approval.options}
+          options={approvalOptionsForDisplay(approval, messages)}
           onRespondToApproval={async (requestId, decision) => {
             if (!canRespond || responding) return;
             setResponding(true);

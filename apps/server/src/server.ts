@@ -95,10 +95,23 @@ import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrid
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as HarnessStore from "./harness/HarnessStore.ts";
+import * as HarnessApprovalAuditStore from "./harness/HarnessApprovalAuditStore.ts";
+import * as HarnessApprovalBroker from "./harness/HarnessApprovalBroker.ts";
+import * as HarnessHooksService from "./harness/HarnessHooksService.ts";
+import * as HarnessMemoryStore from "./harness/HarnessMemoryStore.ts";
+import * as HarnessSyncService from "./harness/HarnessSyncService.ts";
+import * as PluginHost from "./harness/PluginHost.ts";
+import * as HarnessLibraryStore from "./harness/HarnessLibraryStore.ts";
 import * as HarnessImporter from "./harness/HarnessImporter.ts";
+import * as HarnessLibraryImporter from "./harness/HarnessLibraryImporter.ts";
+import * as HarnessExporter from "./harness/HarnessExporter.ts";
 import * as McpGateway from "./harness/McpGateway.ts";
 import * as HarnessContextService from "./harness/HarnessContextService.ts";
 import * as HarnessMcpHttpServer from "./harness/HarnessMcpHttpServer.ts";
+import * as HarnessMcpOAuthNotice from "./harness/HarnessMcpOAuthNotice.ts";
+import * as GatewayMcpAppCapture from "./mcpApps/GatewayMcpAppCapture.ts";
+import * as HarnessMcpOAuthHttp from "./harness/harnessMcpOAuthHttp.ts";
+import * as HarnessMcpOAuthService from "./harness/HarnessMcpOAuthService.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
 import * as PeerClientPairing from "./peer/PeerClientPairing.ts";
@@ -243,6 +256,8 @@ import * as ThreadIssueService from "./orchestration-v2/ThreadIssueService.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
+import * as TurnItemPositionStore from "./orchestration-v2/TurnItemPositionStore.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
 import { closeNonPrivateNetworkConnections, loopbackUrlHostForAddress } from "./startupAccess.ts";
 import * as OrchestrationHttp from "./orchestration-v2/http.ts";
@@ -644,6 +659,35 @@ const layerTaskFolders = TaskFolders.layer.pipe(
   Layer.provide(layerGitWorkflow),
 );
 
+const layerHarness = Layer.mergeAll(HarnessLibraryImporter.layer, HarnessExporter.layer).pipe(
+  Layer.provideMerge(HarnessLibraryStore.layer),
+  Layer.provideMerge(PluginHost.layer),
+  Layer.provideMerge(
+    HarnessSyncService.layer.pipe(
+      Layer.provide(SecretResolver.layer.pipe(Layer.provide(layerServerSettings))),
+      Layer.provide(ServerSecretStore.layer),
+    ),
+  ),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      HarnessApprovalAuditStore.layer,
+      HarnessHooksService.layer,
+      HarnessMemoryStore.layer,
+      HarnessImporter.layer,
+      McpGateway.layer.pipe(
+        Layer.provide(SecretResolver.layer.pipe(Layer.provide(layerServerSettings))),
+        Layer.provide(HarnessMcpOAuthService.layer),
+        Layer.provide(HarnessApprovalAuditStore.layer),
+        Layer.provide(ServerSecretStore.layer),
+      ),
+    ),
+  ),
+  Layer.provideMerge(HarnessStore.layer),
+  Layer.provide(ManagedPolicy.layer),
+  Layer.provide(T3ProjectFileLoader.layer),
+  Layer.provide(layerWorkspace),
+);
+
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   Layer.provide(
     WorkflowForge.layer.pipe(
@@ -780,7 +824,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
 ).pipe(
-  Layer.provideMerge(layerOrchestrationApplication),
+  Layer.provideMerge(
+    layerOrchestrationApplication.pipe(
+      Layer.provideMerge(layerHarness),
+      Layer.provideMerge(HarnessApprovalBroker.layer),
+    ),
+  ),
   // One hub, which the feeders above and the workflow store inside the runtime publish to.
   Layer.provideMerge(MilestoneHub.layer),
   Layer.provideMerge(layerTaskFolders),
@@ -854,21 +903,6 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(ServerSecretStore.layer),
   Layer.provideMerge(
     Layer.mergeAll(
-      HarnessStore.layer,
-      HarnessImporter.layer.pipe(Layer.provide(HarnessStore.layer)),
-      McpGateway.layer.pipe(
-        Layer.provide(HarnessStore.layer),
-        Layer.provide(SecretResolver.layer.pipe(Layer.provide(layerServerSettings))),
-        Layer.provide(ServerSecretStore.layer),
-      ),
-    ).pipe(
-      Layer.provide(ManagedPolicy.layer),
-      Layer.provide(T3ProjectFileLoader.layer),
-      Layer.provide(layerWorkspace),
-    ),
-  ),
-  Layer.provideMerge(
-    Layer.mergeAll(
       CloudCliTokenManager.layer.pipe(
         Layer.provide(ServerSecretStore.layer),
         Layer.provide(ExternalLauncher.layer),
@@ -930,6 +964,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerOtlpTracesProxyRoute,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
+    HarnessMcpOAuthHttp.layer,
     GuestHttp.layer,
     LinkThreadHttp.layer,
     DeviceHubProxy.layer,
@@ -945,6 +980,18 @@ const layerMakeRoutes = Layer.mergeAll(
     Layer.provide(ProjectionStoreV2.layer),
   ),
   HarnessMcpHttpServer.layer.pipe(
+    Layer.provide(
+      Layer.merge(HarnessMcpOAuthNotice.layer, GatewayMcpAppCapture.layer).pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            ProjectionStoreV2.layer,
+            RuntimeLayer.layerEventSink,
+            IdAllocator.layer,
+            TurnItemPositionStore.layer,
+          ),
+        ),
+      ),
+    ),
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
     Layer.provide(ProjectionStoreV2.layer),
   ),
@@ -1012,6 +1059,7 @@ const layerMakeServer = Layer.unwrap(
     const tailscaleParked = yield* Deferred.make<void>();
     const cloudLinkParked = yield* Deferred.make<void>();
     const routesReady = yield* Deferred.make<void>();
+    const harnessOAuthOrigin = yield* Deferred.make<Effect.Effect<string | null>>();
     const layerLauncher = ServiceLauncherClient.layer;
 
     // fixPath rewrites PATH, so pin the launcher the shell chose before it does.
@@ -1426,7 +1474,16 @@ const layerMakeServer = Layer.unwrap(
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.asVoid),
-    }).pipe(Layer.provideMerge(layerRuntimeDependencies), Layer.provide(layerLauncher));
+    }).pipe(
+      Layer.provideMerge(layerRuntimeDependencies),
+      Layer.provide(
+        Layer.succeed(
+          HarnessMcpOAuthService.PublicOrigin,
+          Deferred.await(harnessOAuthOrigin).pipe(Effect.flatten),
+        ),
+      ),
+      Layer.provide(layerLauncher),
+    );
 
     const layerRoutes = HttpRouter.serve(layerMakeRoutes.pipe(Layer.provide(layerLauncher)), {
       disableLogger: !config.logWebSocketEvents,
@@ -1443,6 +1500,22 @@ const layerMakeServer = Layer.unwrap(
       layerRuntimeState.pipe(Layer.provide(layerLauncher)),
       layerTailscaleServe,
       layerCloudDesiredLinkReconcile,
+      Layer.effectDiscard(
+        Effect.gen(function* () {
+          const cloud = yield* CloudLink.CloudLink;
+          yield* Deferred.succeed(
+            harnessOAuthOrigin,
+            cloud.linkState().pipe(
+              Effect.map((state) =>
+                state.linked && !state.linkRevoked && state.tunnelHostname
+                  ? `https://${state.tunnelHostname}`
+                  : null,
+              ),
+              Effect.orElseSucceed(() => null),
+            ),
+          );
+        }),
+      ),
       HeapSnapshot.layer,
     );
 

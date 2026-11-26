@@ -1,6 +1,7 @@
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import {
   EnvironmentContextRecord,
+  McpResourceContextRecord,
   type OrchestrationMessageContext,
   ThreadContextRecord,
 } from "@t3tools/contracts";
@@ -28,6 +29,7 @@ type ComposerPromptHistoryMessage = Parameters<typeof resolveUserMessagePresenta
 export interface ComposerPromptHistoryMentions {
   readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
   readonly environmentContexts: ReadonlyArray<EnvironmentContextRecord>;
+  readonly mcpResourceContexts?: ReadonlyArray<McpResourceContextRecord>;
 }
 
 const NO_MENTIONS: ComposerPromptHistoryMentions = { threadContexts: [], environmentContexts: [] };
@@ -148,9 +150,12 @@ export function recallComposerMessage(
   const records = message.context?.records ?? [];
   const threadRecords = records.filter(isThreadContextRecord);
   const environmentRecords = records.filter(isEnvironmentContextRecord);
+  const resources = records.filter(Schema.is(McpResourceContextRecord));
   const prompt = recallableComposerPrompt(
     message.text,
-    new Set([...threadRecords, ...environmentRecords].map((record) => record.contextId)),
+    new Set(
+      [...threadRecords, ...environmentRecords, ...resources].map((record) => record.contextId),
+    ),
   );
   // A record whose chip is gone from the text would put the chip back when written to the draft.
   const referenced = new Set<string>(
@@ -161,6 +166,11 @@ export function recallComposerMessage(
     mentions: {
       threadContexts: threadRecords.filter((record) => referenced.has(record.contextId)),
       environmentContexts: environmentRecords.filter((record) => referenced.has(record.contextId)),
+      ...(resources.length === 0
+        ? {}
+        : {
+            mcpResourceContexts: resources.filter((record) => referenced.has(record.contextId)),
+          }),
     },
   };
 }

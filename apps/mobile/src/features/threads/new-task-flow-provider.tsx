@@ -175,6 +175,7 @@ type NewTaskFlowContextValue = {
   readonly currentCheckoutBranchName: string | null;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
+  readonly modeId: import("@t3tools/contracts").HarnessModeId | undefined;
   readonly expandedProvider: string | null;
   readonly environments: ReadonlyArray<{
     readonly environmentId: EnvironmentId;
@@ -230,6 +231,10 @@ type NewTaskFlowContextValue = {
   readonly loadBranches: () => void;
   readonly setRuntimeMode: (value: RuntimeMode) => void;
   readonly setInteractionMode: (value: ProviderInteractionMode) => void;
+  readonly setMode: (
+    modeId: import("@t3tools/contracts").HarnessModeId | undefined,
+    interactionMode: ProviderInteractionMode,
+  ) => void;
   readonly setSelectedModelOptions: (
     value: ReadonlyArray<ProviderOptionSelection> | undefined,
   ) => void;
@@ -459,6 +464,7 @@ export function NewTaskFlowProvider(
   );
   const interactionMode: ProviderInteractionMode =
     selectedProjectDraft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE;
+  const modeId = selectedProjectDraft.modeId;
 
   // Antigravity keeps unavailable selections so sign-out or a catalog change
   // cannot switch the user's model.
@@ -776,7 +782,21 @@ export function NewTaskFlowProvider(
   };
   const setInteractionMode = (value: ProviderInteractionMode) => {
     if (selectedProjectDraftKey) {
-      updateComposerDraftSettings(selectedProjectDraftKey, { interactionMode: value });
+      updateComposerDraftSettings(selectedProjectDraftKey, {
+        interactionMode: value,
+        modeId: (value === "plan" ? "plan" : "build") as import("@t3tools/contracts").HarnessModeId,
+      });
+    }
+  };
+  const setMode = (
+    nextModeId: import("@t3tools/contracts").HarnessModeId | undefined,
+    nextInteractionMode: ProviderInteractionMode,
+  ) => {
+    if (selectedProjectDraftKey) {
+      updateComposerDraftSettings(selectedProjectDraftKey, {
+        modeId: nextModeId,
+        interactionMode: nextInteractionMode,
+      });
     }
   };
 
@@ -838,6 +858,7 @@ export function NewTaskFlowProvider(
         managedPolicy,
       ),
       interactionMode: draft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
+      ...(draft.modeId !== undefined ? { modeId: draft.modeId } : {}),
       creation: {
         projectId: selectedProject.id,
         projectTitle: selectedProject.title,
@@ -952,6 +973,7 @@ export function NewTaskFlowProvider(
     currentCheckoutBranchName,
     runtimeMode,
     interactionMode,
+    modeId,
     expandedProvider,
     environments,
     selectedProject,
@@ -993,6 +1015,7 @@ export function NewTaskFlowProvider(
     loadBranches,
     setRuntimeMode,
     setInteractionMode,
+    setMode,
     setSelectedModelOptions,
     setExpandedProvider: (value: string | null) => updateFlow({ expandedProvider: value }),
   } satisfies NewTaskFlowContextValue;

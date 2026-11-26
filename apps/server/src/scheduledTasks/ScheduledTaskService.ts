@@ -231,6 +231,7 @@ interface ScheduledTaskRow {
   readonly model_selection_json: string;
   readonly runtime_mode: string;
   readonly interaction_mode: string;
+  readonly mode_id: string | null;
   readonly created_by: string;
   readonly creation_source: string;
   readonly created_at: string;
@@ -422,6 +423,7 @@ const decodeRow = Effect.fnUntraced(
       modelSelection,
       runtimeMode: row.runtime_mode,
       interactionMode: row.interaction_mode,
+      ...(row.mode_id === null || row.mode_id === undefined ? {} : { modeId: row.mode_id }),
       createdBy: row.created_by,
       creationSource: row.creation_source,
       createdAt: row.created_at,
@@ -668,6 +670,7 @@ export const layer = Layer.effect(
           model_selection_json,
           runtime_mode,
           interaction_mode,
+          mode_id,
           created_by,
           creation_source,
           created_at,
@@ -693,6 +696,7 @@ export const layer = Layer.effect(
           ${JSON.stringify(task.modelSelection)},
           ${task.runtimeMode},
           ${task.interactionMode},
+          ${task.modeId ?? null},
           ${task.createdBy},
           ${task.creationSource},
           ${task.createdAt},
@@ -725,6 +729,7 @@ export const layer = Layer.effect(
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
           interaction_mode = excluded.interaction_mode,
+          mode_id = excluded.mode_id,
           creation_source = excluded.creation_source,
           updated_at = excluded.updated_at,
           -- Keep a next_run_at that a finishing run moved during this save, unless
@@ -1127,6 +1132,7 @@ export const layer = Layer.effect(
                     modelSelection: active.modelSelection,
                     runtimeMode: active.runtimeMode,
                     interactionMode: active.interactionMode,
+                    ...(active.modeId === undefined ? {} : { modeId: active.modeId }),
                     workspaceStrategy: active.workspaceStrategy,
                     initialMessage: {
                       messageId,
@@ -1605,6 +1611,13 @@ export const layer = Layer.effect(
         modelSelection: input.modelSelection,
         runtimeMode: input.runtimeMode,
         interactionMode: input.interactionMode,
+        ...(input.modeId === undefined
+          ? existingTask?.modeId !== undefined
+            ? { modeId: existingTask.modeId }
+            : {}
+          : input.modeId === null
+            ? {}
+            : { modeId: input.modeId }),
         createdBy: existingTask?.createdBy ?? input.createdBy ?? "user",
         creationSource: input.creationSource ?? "web",
         createdAt: existingTask?.createdAt ?? iso(now),

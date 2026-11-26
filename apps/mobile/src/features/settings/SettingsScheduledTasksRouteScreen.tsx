@@ -5,6 +5,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   AuthOrchestrationOperateScope,
   clampManagedRuntimeMode,
+  HarnessModeId,
   resolveProjectProviderInstanceEnabled,
 } from "@t3tools/contracts";
 import { readEnvironmentScope } from "../../state/session";
@@ -899,7 +900,9 @@ function TaskForm({
       // Tasks have no mode picker; a mode above the administrator's ceiling is refused.
       runtimeMode:
         clampManagedRuntimeMode(config?.managedPolicy, draft.runtimeMode) ?? draft.runtimeMode,
-      interactionMode: draft.task?.interactionMode ?? "default",
+      interactionMode:
+        draft.modeId === "plan" ? "plan" : (draft.task?.interactionMode ?? "default"),
+      ...(draft.modeId ? { modeId: HarnessModeId.make(draft.modeId) } : {}),
       creationSource: draft.task?.creationSource ?? "mobile",
     };
     submissionPending.current = true;
@@ -1085,6 +1088,51 @@ function TaskForm({
 
         <SettingsSection title={gt("Workspace")}>
           <SelectRow
+            label={gt("Mode")}
+            value={
+              draft.modeId === "build"
+                ? gt("Build")
+                : draft.modeId === "plan"
+                  ? gt("Plan")
+                  : draft.modeId === "review"
+                    ? gt("Review")
+                    : draft.modeId === "creator"
+                      ? gt("Creator")
+                      : draft.modeId || gt("Default")
+            }
+            actions={[
+              {
+                id: "__default__",
+                title: gt("Default"),
+                state: draft.modeId === "" ? "on" : undefined,
+              },
+              {
+                id: "build",
+                title: gt("Build"),
+                state: draft.modeId === "build" ? "on" : undefined,
+              },
+              {
+                id: "plan",
+                title: gt("Plan"),
+                state: draft.modeId === "plan" ? "on" : undefined,
+              },
+              {
+                id: "review",
+                title: gt("Review"),
+                state: draft.modeId === "review" ? "on" : undefined,
+              },
+              {
+                id: "creator",
+                title: gt("Creator"),
+                state: draft.modeId === "creator" ? "on" : undefined,
+              },
+            ]}
+            onSelect={(id) => {
+              setDraft((current) => ({ ...current, modeId: id === "__default__" ? "" : id }));
+            }}
+          />
+          <SelectRow
+            borderTop
             label={gt("Run in")}
             value={
               draft.workspace === "worktree"

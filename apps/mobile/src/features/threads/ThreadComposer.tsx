@@ -133,6 +133,8 @@ export const THREAD_COMPOSER_BOTTOM_GUTTER = COMPOSER_BOTTOM_GUTTER;
 
 const NO_MACHINES: ReadonlyArray<ComposerEnvironmentCandidate> = [];
 
+import { useChatWorkflowMode } from "../../state/chat-workflows";
+
 export interface ThreadComposerProps {
   readonly isDraft?: boolean;
   readonly canOperateThread: boolean;
@@ -432,6 +434,8 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       : NO_MACHINES,
     linkedEnvironments: useLinkedEnvironments(props.environmentId),
     currentThreadId: props.selectedThread.id,
+    projectId: props.selectedThread.projectId,
+    supportsMcpResources: props.serverConfig?.environment.capabilities.harnessMcpResources === true,
     projectCwd: props.projectCwd,
     pullRequestProjectId: props.serverConfig ? (project?.id ?? null) : null,
     pullRequestRepository: project?.repositoryIdentity?.displayName ?? null,
@@ -684,22 +688,32 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     </>
   ) : null;
 
-  const modelControl = (
-    // Only the expanded label can truncate; shrinking the icon-only control clips the icon.
-    <View className={compactEditor.isExpanded ? "min-w-0 shrink" : "shrink-0"}>
-      <ComposerModelControl
+  const selectedWorkflow = useChatWorkflowMode(props.draftKey ?? null, props.environmentId);
+  const modelControl =
+    selectedWorkflow !== null && queuedEdit === null ? (
+      <ComposerInlineControl
         size={usesLargeControls ? "large" : "regular"}
-        modelOption={currentModelOption}
-        selection={currentModelSelection}
-        provider={selectedProviderStatus?.driver}
-        reportedSelection={props.reportedModelSelection}
-        prompt={draftMessage}
-        surfaceColor={composerPanel}
-        iconOnly={!compactEditor.isExpanded}
+        icon="point.3.connected.trianglepath.dotted"
+        label={selectedWorkflow.name}
+        selected
         onPress={openSettings}
       />
-    </View>
-  );
+    ) : (
+      // Only the expanded label can truncate; shrinking the icon-only control clips the icon.
+      <View className={compactEditor.isExpanded ? "min-w-0 shrink" : "shrink-0"}>
+        <ComposerModelControl
+          size={usesLargeControls ? "large" : "regular"}
+          modelOption={currentModelOption}
+          selection={currentModelSelection}
+          provider={selectedProviderStatus?.driver}
+          reportedSelection={props.reportedModelSelection}
+          prompt={draftMessage}
+          surfaceColor={composerPanel}
+          iconOnly={!compactEditor.isExpanded}
+          onPress={openSettings}
+        />
+      </View>
+    );
 
   const compactBeforeSend =
     props.compactBeforeSend && !showResumeAction && queuedEdit === null
@@ -873,6 +887,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                   hidden={props.hidden}
                   draftKey={composerDraftKey}
                   environmentId={props.environmentId}
+                  projectId={props.selectedThread.projectId}
                   onOpenMention={(path) => {
                     Keyboard.dismiss();
                     if (props.isDraft) {

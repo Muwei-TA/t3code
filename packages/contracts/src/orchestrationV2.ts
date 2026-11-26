@@ -12,6 +12,7 @@ import {
   AgentFeedbackRequestStatus,
   AgentFeedbackTrace,
 } from "./agentFeedback.ts";
+import { HarnessModeId } from "./harness.ts";
 import {
   GitRefName,
   CheckpointId,
@@ -532,6 +533,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  modeId: Schema.optional(HarnessModeId),
+  modeDigest: Schema.optional(Schema.String),
   branch: Schema.NullOr(GitRefName),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -842,10 +845,17 @@ export const OrchestrationV2RunOutput = Schema.Struct({
 });
 export type OrchestrationV2RunOutput = typeof OrchestrationV2RunOutput.Type;
 
+const OrchestrationV2RunHarnessMode = Schema.Struct({
+  id: HarnessModeId,
+  interactionMode: ProviderInteractionMode,
+});
+export type OrchestrationV2RunHarnessMode = typeof OrchestrationV2RunHarnessMode.Type;
+
 export const OrchestrationV2Run = Schema.Struct({
   id: RunId,
   threadId: ThreadId,
   ordinal: PositiveInt,
+  harnessMode: Schema.optional(OrchestrationV2RunHarnessMode),
   providerInstanceId: ProviderInstanceId,
   modelSelection: ModelSelection,
   providerThreadId: Schema.NullOr(ProviderThreadId),
@@ -1432,6 +1442,13 @@ export function isQueuedProviderThreadPlaceholder(
   );
 }
 
+const HarnessGatewayApprovalThread = Schema.Struct({
+  providerSessionId: Schema.optionalKey(ProviderSessionId),
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  modeId: Schema.optionalKey(HarnessModeId),
+});
+
 export const OrchestrationV2RuntimeRequest = Schema.Struct({
   id: RuntimeRequestId,
   nodeId: NodeId,
@@ -1447,6 +1464,11 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
       type: Schema.Literal("live"),
       providerSessionId: ProviderSessionId,
       supportsFeedback: Schema.optional(Schema.Boolean),
+    }),
+    Schema.Struct({
+      type: Schema.Literal("harness_gateway"),
+      supportsFeedback: Schema.optional(Schema.Boolean),
+      thread: Schema.optionalKey(HarnessGatewayApprovalThread),
     }),
     Schema.Struct({ type: Schema.Literal("message") }),
     Schema.Struct({ type: Schema.Literal("not_resumable"), reason: Schema.String }),
@@ -2427,6 +2449,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  modeId: Schema.optional(HarnessModeId),
+  modeDigest: Schema.optional(Schema.String),
   branch: Schema.NullOr(GitRefName),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -3337,6 +3361,8 @@ export const OrchestrationV2Command = Schema.Union([
     modelSelection: ModelSelection,
     runtimeMode: RuntimeMode,
     interactionMode: ProviderInteractionMode,
+    modeId: Schema.optional(HarnessModeId),
+    modeDigest: Schema.optional(Schema.String),
     branch: Schema.NullOr(GitRefName),
     worktreePath: Schema.NullOr(TrimmedNonEmptyString),
     /** Only the server sets this; a client's thread.create never carries one. */
@@ -3598,6 +3624,8 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     interactionMode: ProviderInteractionMode,
+    modeId: Schema.optional(HarnessModeId),
+    modeDigest: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.model-selection.set"),
@@ -3804,6 +3832,8 @@ export const OrchestrationV2Command = Schema.Union([
     modelSelection: ModelSelection,
     runtimeMode: RuntimeMode,
     interactionMode: ProviderInteractionMode,
+    modeId: Schema.optional(HarnessModeId),
+    modeDigest: Schema.optional(Schema.String),
     workspaceStrategy: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
     // Defaults to settled_only; fire-and-forget wakes require always.
     completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
@@ -4062,6 +4092,24 @@ const OrchestrationV2InternalCommand = Schema.Union([
     fields: Schema.optional(Schema.Array(OrchestrationV2SecretRequestField)),
     secretStatus: OrchestrationV2SecretRequestStatus,
   }),
+  Schema.Struct({
+    type: Schema.Literal("harness_approval.open"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    rootNodeId: NodeId,
+    attemptId: RunAttemptId,
+    requestId: RuntimeRequestId,
+    approvalThread: HarnessGatewayApprovalThread,
+    title: Schema.String,
+    prompt: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("harness_approval.cancel"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    requestId: RuntimeRequestId,
+  }),
   /** Internal so no client can mark a report sent without it being stored and sent. */
   Schema.Struct({
     type: Schema.Literal("feedback_request.record"),
@@ -4197,7 +4245,9 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  modeId: Schema.optional(HarnessModeId),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  awaitWorkspacePreparation: Schema.optionalKey(Schema.Boolean),
   initialMessage: Schema.optional(
     Schema.Struct({
       messageId: Schema.optional(MessageId),

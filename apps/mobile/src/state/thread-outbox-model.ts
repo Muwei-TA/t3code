@@ -11,6 +11,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EnvironmentId,
+  HarnessModeId,
   IsoDateTime,
   MessageId,
   ModelSelection,
@@ -19,6 +20,7 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
+  type HarnessModeId as HarnessModeIdType,
   type ModelSelection as ModelSelectionType,
   type ProjectId as ProjectIdType,
   type ProviderInteractionMode as ProviderInteractionModeType,
@@ -67,6 +69,7 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   freshContext: Schema.optional(Schema.Boolean),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  modeId: Schema.optional(HarnessModeId),
   creation: Schema.optional(QueuedThreadCreationSchema),
   createdAt: IsoDateTime,
 });
@@ -101,6 +104,7 @@ export interface QueuedThreadMessage {
   readonly modelSelection?: ModelSelectionType;
   readonly runtimeMode?: RuntimeModeType;
   readonly interactionMode?: ProviderInteractionModeType;
+  readonly modeId?: HarnessModeIdType;
   /** Captured at enqueue because draining may occur long after the tap. */
   readonly dispatchMode?: ComposerDispatchMode;
   /** Sends "When you return"'s `/compact` ahead of the message, which queues behind it. */
@@ -115,6 +119,7 @@ export interface ThreadSettingsSnapshot {
   readonly modelSelection: ModelSelectionType;
   readonly runtimeMode: RuntimeModeType;
   readonly interactionMode: ProviderInteractionModeType;
+  readonly modeId?: HarnessModeIdType;
 }
 
 // Providers without a Build/Plan toggle (and without harness Plan fallback) always run in build mode.
@@ -145,13 +150,16 @@ export function resolveQueuedThreadSettings(
   const provider = providers.find(
     (candidate) => candidate.instanceId === modelSelection.instanceId,
   );
+  const effectiveInteractionMode = resolveProviderInteractionMode(
+    provider,
+    message.interactionMode ?? thread.interactionMode,
+  );
+  const candidateModeId = message.modeId ?? thread.modeId;
   return {
     modelSelection,
     runtimeMode: message.runtimeMode ?? thread.runtimeMode,
-    interactionMode: resolveProviderInteractionMode(
-      provider,
-      message.interactionMode ?? thread.interactionMode,
-    ),
+    interactionMode: effectiveInteractionMode,
+    ...(candidateModeId !== undefined ? { modeId: candidateModeId } : {}),
   };
 }
 

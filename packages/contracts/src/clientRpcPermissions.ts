@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./git.ts";
-import { HarnessMcpUpsertInput } from "./harness.ts";
+import { HarnessHookUpsertInput, HarnessMcpUpsertInput } from "./harness.ts";
 import {
   AuthAccessWriteScope,
   AuthDiagnosticsReadScope,
@@ -85,7 +85,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.scheduledTasksRotateWebhookToken]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,
   // An answer, a resume and a cancel each decide what a run's agents do next.
+  [WS_METHODS.workflowsStart]: AuthOrchestrationOperateScope,
   [WS_METHODS.workflowsAnswer]: AuthOrchestrationOperateScope,
+  [WS_METHODS.workflowsPause]: AuthOrchestrationOperateScope,
   [WS_METHODS.workflowsResume]: AuthOrchestrationOperateScope,
   [WS_METHODS.workflowsCancel]: AuthOrchestrationOperateScope,
   // The server runs this file: saving it is running code there, as a terminal does.
@@ -103,7 +105,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.peerLinksPairLink]: AuthAccessWriteScope,
   // Send stores and sends a report from a thread's turn: the bar of running that thread.
   [WS_METHODS.agentFeedbackAnswerRequest]: AuthOrchestrationOperateScope,
-  // Portable harness MCP mutations & diagnostics: stdio/secret actions also enforce scopes server-side.
+  // Portable harness MCP, library & export mutations: stdio/secret/export actions also enforce scopes server-side.
   [WS_METHODS.harnessMcpLogs]: AuthDiagnosticsReadScope,
   [WS_METHODS.harnessMcpScanImports]: AuthSettingsWriteScope,
   [WS_METHODS.harnessMcpUpsert]: AuthSettingsWriteScope,
@@ -112,13 +114,55 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.harnessMcpTrustProjectServer]: AuthSettingsWriteScope,
   [WS_METHODS.harnessMcpRevokeProjectTrust]: AuthSettingsWriteScope,
   [WS_METHODS.harnessMcpRestart]: AuthOrchestrationOperateScope,
+  [WS_METHODS.harnessMcpOAuthStart]: AuthProvidersManageScope,
+  [WS_METHODS.harnessMcpOAuthComplete]: AuthProvidersManageScope,
+  [WS_METHODS.harnessMcpOAuthDisconnect]: AuthProvidersManageScope,
   [WS_METHODS.harnessMcpApplyImports]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessAgentsMdSave]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSkillUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSkillRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSkillSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessRuleUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessRuleRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessRuleSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessCommandUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessCommandRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessCommandSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSettingsUpdate]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessLibraryScanImports]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessLibraryApplyImports]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessExportPreview]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessExportApply]: AuthProvidersManageScope,
+  [WS_METHODS.harnessModeUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessModeRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessModeSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessApprovalRuleRevoke]: AuthOrchestrationOperateScope,
+  [WS_METHODS.harnessPluginInstall]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessPluginTrust]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessPluginSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessPluginRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessPluginReload]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessHookUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessHookRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessHookSetEnabled]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessHookTest]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessWorkflowValidate]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessMemoryUpsert]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessMemoryRemove]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSyncConfigure]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSyncExportBundle]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessSyncPreviewReceive]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSyncApplyReceive]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSyncPreviewPush]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessSyncPush]: AuthSourceControlWriteScope,
+  [WS_METHODS.harnessSyncPull]: AuthSourceControlWriteScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 
 const decodePrepareThread = Schema.decodeUnknownSync(GitPreparePullRequestThreadInput);
 const decodeStackedAction = Schema.decodeUnknownSync(GitRunStackedActionInput);
 const decodeHarnessUpsert = Schema.decodeUnknownOption(HarnessMcpUpsertInput);
+const decodeHookUpsert = Schema.decodeUnknownOption(HarnessHookUpsertInput);
 
 const HARNESS_SECRET_PLACEHOLDER = /\$\{secret:/;
 
@@ -160,6 +204,30 @@ export function clientRpcRequiredScopes(
       }
       return scopes;
     }
+  }
+  if (method === WS_METHODS.harnessExportApply) {
+    return [AuthSettingsWriteScope, AuthProvidersManageScope];
+  }
+  if (method === WS_METHODS.harnessHookUpsert) {
+    const parsed = decodeHookUpsert(input);
+    if (parsed._tag === "Some" && parsed.value.target.type === "command") {
+      return [AuthSettingsWriteScope, AuthTerminalOperateScope];
+    }
+  }
+  if (method === WS_METHODS.harnessHookTest) {
+    return [AuthSettingsWriteScope, AuthTerminalOperateScope];
+  }
+  if (
+    method === WS_METHODS.harnessSyncExportBundle &&
+    typeof input === "object" &&
+    input !== null &&
+    "includeMcpServers" in input &&
+    input.includeMcpServers === true
+  ) {
+    return [AuthOrchestrationReadScope, AuthSettingsWriteScope];
+  }
+  if (method === WS_METHODS.harnessSyncPush || method === WS_METHODS.harnessSyncPull) {
+    return [AuthSettingsWriteScope, AuthSourceControlWriteScope];
   }
   return Object.hasOwn(CLIENT_GUARDED_RPC_SCOPES, method)
     ? [CLIENT_GUARDED_RPC_SCOPES[method as ClientGuardedRpcTag]]

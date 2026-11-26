@@ -422,6 +422,8 @@ import {
 } from "./settings.ts";
 import {
   WorkflowAnswerInput,
+  WorkflowStartInput,
+  WorkflowStartResult,
   WorkflowRequestError,
   WorkflowDefinitionChangeResult,
   WorkflowDefinitionDeleteInput,
@@ -431,6 +433,7 @@ import {
   WorkflowRunCancelInput,
   WorkflowRunDetail,
   WorkflowRunGetInput,
+  WorkflowRunPauseInput,
   WorkflowRunResumeInput,
   WorkflowCounts,
   WorkflowRunsSnapshot,
@@ -483,21 +486,85 @@ import {
 import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 import {
+  HarnessAgentsMdSaveInput,
+  HarnessCommandRemoveInput,
+  HarnessCommandSetEnabledInput,
+  HarnessCommandUpsertInput,
   HarnessError,
+  HarnessExportApplyInput,
+  HarnessExportApplyResult,
+  HarnessExportPreviewInput,
+  HarnessExportPreviewResult,
+  HarnessLibraryApplyImportsInput,
+  HarnessLibraryApplyImportsResult,
+  HarnessLibraryScanImportsInput,
+  HarnessLibraryScanImportsResult,
+  HarnessLibrarySnapshot,
+  HarnessLibrarySnapshotInput,
   HarnessMcpApplyImportsInput,
   HarnessMcpApplyImportsResult,
   HarnessMcpListInput,
+  HarnessMcpResourceListInput,
+  HarnessMcpResourceListResult,
+  HarnessMcpResourceReadInput,
+  HarnessMcpResourceReadResult,
   HarnessMcpLogsInput,
   HarnessMcpLogsResult,
   HarnessMcpRemoveInput,
   HarnessMcpRestartInput,
+  HarnessMcpOAuthStartResult,
+  HarnessMcpOAuthCompleteInput,
   HarnessMcpRevokeProjectTrustInput,
   HarnessMcpScanImportsResult,
   HarnessMcpSetEnabledInput,
   HarnessMcpSnapshot,
   HarnessMcpTrustProjectServerInput,
   HarnessMcpUpsertInput,
+  HarnessRuleRemoveInput,
+  HarnessRuleSetEnabledInput,
+  HarnessRuleUpsertInput,
+  HarnessSettingsUpdateInput,
+  HarnessApprovalRuleRevokeInput,
+  HarnessApprovalRuleRevokeResult,
+  HarnessApprovalRulesListInput,
+  HarnessApprovalRulesListResult,
+  HarnessHookExecutionResult,
+  HarnessHookRemoveInput,
+  HarnessHookSetEnabledInput,
+  HarnessHooksSnapshot,
+  HarnessHookTestInput,
+  HarnessHookUpsertInput,
+  HarnessModeRemoveInput,
+  HarnessModeSetEnabledInput,
+  HarnessModeUpsertInput,
+  HarnessMemoryRemoveInput,
+  HarnessMemorySnapshot,
+  HarnessMemoryUpsertInput,
+  HarnessPluginInstallInput,
+  HarnessPluginReloadInput,
+  HarnessPluginRemoveInput,
+  HarnessPluginSetEnabledInput,
+  HarnessPluginsSnapshot,
+  HarnessPluginTrustInput,
+  HarnessSkillRemoveInput,
+  HarnessSkillSetEnabledInput,
+  HarnessSkillUpsertInput,
+  HarnessSyncConfigureInput,
+  HarnessSyncExportBundleInput,
+  HarnessSyncExportBundleResult,
+  HarnessSyncPreviewReceiveInput,
+  HarnessSyncPreviewReceiveResult,
+  HarnessSyncApplyReceiveInput,
+  HarnessSyncApplyReceiveResult,
+  HarnessSyncPreviewPushResult,
+  HarnessSyncPullInput,
+  HarnessSyncPullResult,
+  HarnessSyncPushInput,
+  HarnessSyncPushResult,
+  HarnessSyncStatus,
   HarnessThreadContextManifestInput,
+  HarnessWorkflowValidateInput,
+  HarnessWorkflowValidateResult,
   ThreadContextManifest,
 } from "./harness.ts";
 
@@ -654,7 +721,9 @@ export const WS_METHODS = {
   workflowsSubscribe: "workflows.subscribe",
   workflowsCounts: "workflows.counts",
   workflowsGet: "workflows.get",
+  workflowsStart: "workflows.start",
   workflowsAnswer: "workflows.answer",
+  workflowsPause: "workflows.pause",
   workflowsResume: "workflows.resume",
   workflowsCancel: "workflows.cancel",
   workflowsGetDefinition: "workflows.getDefinition",
@@ -757,16 +826,65 @@ export const WS_METHODS = {
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
 
   harnessMcpList: "harness.mcp.list",
+  harnessMcpListResources: "harness.mcp.resources.list",
+  harnessMcpReadResource: "harness.mcp.resources.read",
   harnessMcpUpsert: "harness.mcp.upsert",
   harnessMcpRemove: "harness.mcp.remove",
   harnessMcpSetEnabled: "harness.mcp.setEnabled",
   harnessMcpTrustProjectServer: "harness.mcp.trustProjectServer",
   harnessMcpRevokeProjectTrust: "harness.mcp.revokeProjectTrust",
   harnessMcpRestart: "harness.mcp.restart",
+  harnessMcpOAuthStart: "harness.mcp.oauth.start",
+  harnessMcpOAuthComplete: "harness.mcp.oauth.complete",
+  harnessMcpOAuthDisconnect: "harness.mcp.oauth.disconnect",
   harnessMcpLogs: "harness.mcp.logs",
   harnessMcpScanImports: "harness.mcp.scanImports",
   harnessMcpApplyImports: "harness.mcp.applyImports",
   harnessThreadContextManifest: "harness.thread.contextManifest",
+  harnessLibrarySnapshot: "harness.library.snapshot",
+  harnessAgentsMdSave: "harness.agentsMd.save",
+  harnessSkillUpsert: "harness.skill.upsert",
+  harnessSkillRemove: "harness.skill.remove",
+  harnessSkillSetEnabled: "harness.skill.setEnabled",
+  harnessRuleUpsert: "harness.rule.upsert",
+  harnessRuleRemove: "harness.rule.remove",
+  harnessRuleSetEnabled: "harness.rule.setEnabled",
+  harnessCommandUpsert: "harness.command.upsert",
+  harnessCommandRemove: "harness.command.remove",
+  harnessCommandSetEnabled: "harness.command.setEnabled",
+  harnessSettingsUpdate: "harness.settings.update",
+  harnessLibraryScanImports: "harness.library.scanImports",
+  harnessLibraryApplyImports: "harness.library.applyImports",
+  harnessExportPreview: "harness.export.preview",
+  harnessExportApply: "harness.export.apply",
+  harnessModeUpsert: "harness.mode.upsert",
+  harnessModeRemove: "harness.mode.remove",
+  harnessModeSetEnabled: "harness.mode.setEnabled",
+  harnessApprovalRulesList: "harness.approvalRules.list",
+  harnessApprovalRuleRevoke: "harness.approvalRules.revoke",
+  harnessPluginsList: "harness.plugins.list",
+  harnessPluginInstall: "harness.plugins.install",
+  harnessPluginTrust: "harness.plugins.trust",
+  harnessPluginSetEnabled: "harness.plugins.setEnabled",
+  harnessPluginRemove: "harness.plugins.remove",
+  harnessPluginReload: "harness.plugins.reload",
+  harnessHooksList: "harness.hooks.list",
+  harnessHookUpsert: "harness.hooks.upsert",
+  harnessHookRemove: "harness.hooks.remove",
+  harnessHookSetEnabled: "harness.hooks.setEnabled",
+  harnessHookTest: "harness.hooks.test",
+  harnessWorkflowValidate: "harness.workflow.validate",
+  harnessMemoryList: "harness.memory.list",
+  harnessMemoryUpsert: "harness.memory.upsert",
+  harnessMemoryRemove: "harness.memory.remove",
+  harnessSyncStatus: "harness.sync.status",
+  harnessSyncExportBundle: "harness.sync.exportBundle",
+  harnessSyncPreviewReceive: "harness.sync.previewReceive",
+  harnessSyncApplyReceive: "harness.sync.applyReceive",
+  harnessSyncConfigure: "harness.sync.configure",
+  harnessSyncPreviewPush: "harness.sync.previewPush",
+  harnessSyncPush: "harness.sync.push",
+  harnessSyncPull: "harness.sync.pull",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -2362,8 +2480,19 @@ const WsWorkflowsGetRpc = Rpc.make(WS_METHODS.workflowsGet, {
   error: Schema.Union([WorkflowRequestError, EnvironmentAuthorizationError]),
 });
 
+const WsWorkflowsStartRpc = Rpc.make(WS_METHODS.workflowsStart, {
+  payload: WorkflowStartInput,
+  success: WorkflowStartResult,
+  error: Schema.Union([WorkflowRequestError, EnvironmentAuthorizationError]),
+});
+
 const WsWorkflowsAnswerRpc = Rpc.make(WS_METHODS.workflowsAnswer, {
   payload: WorkflowAnswerInput,
+  error: Schema.Union([WorkflowRequestError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkflowsPauseRpc = Rpc.make(WS_METHODS.workflowsPause, {
+  payload: WorkflowRunPauseInput,
   error: Schema.Union([WorkflowRequestError, EnvironmentAuthorizationError]),
 });
 
@@ -2489,6 +2618,18 @@ const WsHarnessMcpListRpc = Rpc.make(WS_METHODS.harnessMcpList, {
   error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
 });
 
+const WsHarnessMcpListResourcesRpc = Rpc.make(WS_METHODS.harnessMcpListResources, {
+  payload: HarnessMcpResourceListInput,
+  success: HarnessMcpResourceListResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpReadResourceRpc = Rpc.make(WS_METHODS.harnessMcpReadResource, {
+  payload: HarnessMcpResourceReadInput,
+  success: HarnessMcpResourceReadResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
 const WsHarnessMcpUpsertRpc = Rpc.make(WS_METHODS.harnessMcpUpsert, {
   payload: HarnessMcpUpsertInput,
   success: HarnessMcpSnapshot,
@@ -2525,6 +2666,24 @@ const WsHarnessMcpRestartRpc = Rpc.make(WS_METHODS.harnessMcpRestart, {
   error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
 });
 
+const WsHarnessMcpOAuthStartRpc = Rpc.make(WS_METHODS.harnessMcpOAuthStart, {
+  payload: HarnessMcpRestartInput,
+  success: HarnessMcpOAuthStartResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpOAuthCompleteRpc = Rpc.make(WS_METHODS.harnessMcpOAuthComplete, {
+  payload: HarnessMcpOAuthCompleteInput,
+  success: HarnessMcpSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpOAuthDisconnectRpc = Rpc.make(WS_METHODS.harnessMcpOAuthDisconnect, {
+  payload: HarnessMcpRestartInput,
+  success: HarnessMcpSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
 const WsHarnessMcpLogsRpc = Rpc.make(WS_METHODS.harnessMcpLogs, {
   payload: HarnessMcpLogsInput,
   success: HarnessMcpLogsResult,
@@ -2546,6 +2705,270 @@ const WsHarnessMcpApplyImportsRpc = Rpc.make(WS_METHODS.harnessMcpApplyImports, 
 const WsHarnessThreadContextManifestRpc = Rpc.make(WS_METHODS.harnessThreadContextManifest, {
   payload: HarnessThreadContextManifestInput,
   success: ThreadContextManifest,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessLibrarySnapshotRpc = Rpc.make(WS_METHODS.harnessLibrarySnapshot, {
+  payload: HarnessLibrarySnapshotInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessAgentsMdSaveRpc = Rpc.make(WS_METHODS.harnessAgentsMdSave, {
+  payload: HarnessAgentsMdSaveInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSkillUpsertRpc = Rpc.make(WS_METHODS.harnessSkillUpsert, {
+  payload: HarnessSkillUpsertInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSkillRemoveRpc = Rpc.make(WS_METHODS.harnessSkillRemove, {
+  payload: HarnessSkillRemoveInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSkillSetEnabledRpc = Rpc.make(WS_METHODS.harnessSkillSetEnabled, {
+  payload: HarnessSkillSetEnabledInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessRuleUpsertRpc = Rpc.make(WS_METHODS.harnessRuleUpsert, {
+  payload: HarnessRuleUpsertInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessRuleRemoveRpc = Rpc.make(WS_METHODS.harnessRuleRemove, {
+  payload: HarnessRuleRemoveInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessRuleSetEnabledRpc = Rpc.make(WS_METHODS.harnessRuleSetEnabled, {
+  payload: HarnessRuleSetEnabledInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessCommandUpsertRpc = Rpc.make(WS_METHODS.harnessCommandUpsert, {
+  payload: HarnessCommandUpsertInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessCommandRemoveRpc = Rpc.make(WS_METHODS.harnessCommandRemove, {
+  payload: HarnessCommandRemoveInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessCommandSetEnabledRpc = Rpc.make(WS_METHODS.harnessCommandSetEnabled, {
+  payload: HarnessCommandSetEnabledInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSettingsUpdateRpc = Rpc.make(WS_METHODS.harnessSettingsUpdate, {
+  payload: HarnessSettingsUpdateInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessLibraryScanImportsRpc = Rpc.make(WS_METHODS.harnessLibraryScanImports, {
+  payload: HarnessLibraryScanImportsInput,
+  success: HarnessLibraryScanImportsResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessLibraryApplyImportsRpc = Rpc.make(WS_METHODS.harnessLibraryApplyImports, {
+  payload: HarnessLibraryApplyImportsInput,
+  success: HarnessLibraryApplyImportsResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessExportPreviewRpc = Rpc.make(WS_METHODS.harnessExportPreview, {
+  payload: HarnessExportPreviewInput,
+  success: HarnessExportPreviewResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessExportApplyRpc = Rpc.make(WS_METHODS.harnessExportApply, {
+  payload: HarnessExportApplyInput,
+  success: HarnessExportApplyResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessModeUpsertRpc = Rpc.make(WS_METHODS.harnessModeUpsert, {
+  payload: HarnessModeUpsertInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessModeRemoveRpc = Rpc.make(WS_METHODS.harnessModeRemove, {
+  payload: HarnessModeRemoveInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessModeSetEnabledRpc = Rpc.make(WS_METHODS.harnessModeSetEnabled, {
+  payload: HarnessModeSetEnabledInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessApprovalRulesListRpc = Rpc.make(WS_METHODS.harnessApprovalRulesList, {
+  payload: HarnessApprovalRulesListInput,
+  success: HarnessApprovalRulesListResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessApprovalRuleRevokeRpc = Rpc.make(WS_METHODS.harnessApprovalRuleRevoke, {
+  payload: HarnessApprovalRuleRevokeInput,
+  success: HarnessApprovalRuleRevokeResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessPluginsListRpc = Rpc.make(WS_METHODS.harnessPluginsList, {
+  payload: Schema.Struct({}),
+  success: HarnessPluginsSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessPluginInstallRpc = Rpc.make(WS_METHODS.harnessPluginInstall, {
+  payload: HarnessPluginInstallInput,
+  success: HarnessPluginsSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessPluginTrustRpc = Rpc.make(WS_METHODS.harnessPluginTrust, {
+  payload: HarnessPluginTrustInput,
+  success: HarnessPluginsSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessPluginSetEnabledRpc = Rpc.make(WS_METHODS.harnessPluginSetEnabled, {
+  payload: HarnessPluginSetEnabledInput,
+  success: HarnessPluginsSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessPluginRemoveRpc = Rpc.make(WS_METHODS.harnessPluginRemove, {
+  payload: HarnessPluginRemoveInput,
+  success: HarnessPluginsSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessPluginReloadRpc = Rpc.make(WS_METHODS.harnessPluginReload, {
+  payload: HarnessPluginReloadInput,
+  success: HarnessPluginsSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessHooksListRpc = Rpc.make(WS_METHODS.harnessHooksList, {
+  payload: Schema.Struct({}),
+  success: HarnessHooksSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessHookUpsertRpc = Rpc.make(WS_METHODS.harnessHookUpsert, {
+  payload: HarnessHookUpsertInput,
+  success: HarnessHooksSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessHookRemoveRpc = Rpc.make(WS_METHODS.harnessHookRemove, {
+  payload: HarnessHookRemoveInput,
+  success: HarnessHooksSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessHookSetEnabledRpc = Rpc.make(WS_METHODS.harnessHookSetEnabled, {
+  payload: HarnessHookSetEnabledInput,
+  success: HarnessHooksSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessHookTestRpc = Rpc.make(WS_METHODS.harnessHookTest, {
+  payload: HarnessHookTestInput,
+  success: HarnessHookExecutionResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessWorkflowValidateRpc = Rpc.make(WS_METHODS.harnessWorkflowValidate, {
+  payload: HarnessWorkflowValidateInput,
+  success: HarnessWorkflowValidateResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMemoryListRpc = Rpc.make(WS_METHODS.harnessMemoryList, {
+  payload: Schema.Struct({}),
+  success: HarnessMemorySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMemoryUpsertRpc = Rpc.make(WS_METHODS.harnessMemoryUpsert, {
+  payload: HarnessMemoryUpsertInput,
+  success: HarnessMemorySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMemoryRemoveRpc = Rpc.make(WS_METHODS.harnessMemoryRemove, {
+  payload: HarnessMemoryRemoveInput,
+  success: HarnessMemorySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncStatusRpc = Rpc.make(WS_METHODS.harnessSyncStatus, {
+  payload: Schema.Struct({}),
+  success: HarnessSyncStatus,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncConfigureRpc = Rpc.make(WS_METHODS.harnessSyncConfigure, {
+  payload: HarnessSyncConfigureInput,
+  success: HarnessSyncStatus,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncPreviewPushRpc = Rpc.make(WS_METHODS.harnessSyncPreviewPush, {
+  payload: Schema.Struct({}),
+  success: HarnessSyncPreviewPushResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncPushRpc = Rpc.make(WS_METHODS.harnessSyncPush, {
+  payload: HarnessSyncPushInput,
+  success: HarnessSyncPushResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncPullRpc = Rpc.make(WS_METHODS.harnessSyncPull, {
+  payload: HarnessSyncPullInput,
+  success: HarnessSyncPullResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncExportBundleRpc = Rpc.make(WS_METHODS.harnessSyncExportBundle, {
+  payload: HarnessSyncExportBundleInput,
+  success: HarnessSyncExportBundleResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncPreviewReceiveRpc = Rpc.make(WS_METHODS.harnessSyncPreviewReceive, {
+  payload: HarnessSyncPreviewReceiveInput,
+  success: HarnessSyncPreviewReceiveResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncApplyReceiveRpc = Rpc.make(WS_METHODS.harnessSyncApplyReceive, {
+  payload: HarnessSyncApplyReceiveInput,
+  success: HarnessSyncApplyReceiveResult,
   error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
 });
 
@@ -2639,7 +3062,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsWorkflowsSubscribeRpc,
   WsWorkflowsCountsRpc,
   WsWorkflowsGetRpc,
+  WsWorkflowsStartRpc,
   WsWorkflowsAnswerRpc,
+  WsWorkflowsPauseRpc,
   WsWorkflowsResumeRpc,
   WsWorkflowsCancelRpc,
   WsWorkflowsGetDefinitionRpc,
@@ -2813,14 +3238,63 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeCommandOutputRpc,
   WsOrchestrationV2SubscribePromptSuggestionRpc,
   WsHarnessMcpListRpc,
+  WsHarnessMcpListResourcesRpc,
+  WsHarnessMcpReadResourceRpc,
   WsHarnessMcpUpsertRpc,
   WsHarnessMcpRemoveRpc,
   WsHarnessMcpSetEnabledRpc,
   WsHarnessMcpTrustProjectServerRpc,
   WsHarnessMcpRevokeProjectTrustRpc,
   WsHarnessMcpRestartRpc,
+  WsHarnessMcpOAuthStartRpc,
+  WsHarnessMcpOAuthCompleteRpc,
+  WsHarnessMcpOAuthDisconnectRpc,
   WsHarnessMcpLogsRpc,
   WsHarnessMcpScanImportsRpc,
   WsHarnessMcpApplyImportsRpc,
   WsHarnessThreadContextManifestRpc,
+  WsHarnessLibrarySnapshotRpc,
+  WsHarnessAgentsMdSaveRpc,
+  WsHarnessSkillUpsertRpc,
+  WsHarnessSkillRemoveRpc,
+  WsHarnessSkillSetEnabledRpc,
+  WsHarnessRuleUpsertRpc,
+  WsHarnessRuleRemoveRpc,
+  WsHarnessRuleSetEnabledRpc,
+  WsHarnessCommandUpsertRpc,
+  WsHarnessCommandRemoveRpc,
+  WsHarnessCommandSetEnabledRpc,
+  WsHarnessSettingsUpdateRpc,
+  WsHarnessLibraryScanImportsRpc,
+  WsHarnessLibraryApplyImportsRpc,
+  WsHarnessExportPreviewRpc,
+  WsHarnessExportApplyRpc,
+  WsHarnessModeUpsertRpc,
+  WsHarnessModeRemoveRpc,
+  WsHarnessModeSetEnabledRpc,
+  WsHarnessApprovalRulesListRpc,
+  WsHarnessApprovalRuleRevokeRpc,
+  WsHarnessPluginsListRpc,
+  WsHarnessPluginInstallRpc,
+  WsHarnessPluginTrustRpc,
+  WsHarnessPluginSetEnabledRpc,
+  WsHarnessPluginRemoveRpc,
+  WsHarnessPluginReloadRpc,
+  WsHarnessHooksListRpc,
+  WsHarnessHookUpsertRpc,
+  WsHarnessHookRemoveRpc,
+  WsHarnessHookSetEnabledRpc,
+  WsHarnessHookTestRpc,
+  WsHarnessWorkflowValidateRpc,
+  WsHarnessMemoryListRpc,
+  WsHarnessMemoryUpsertRpc,
+  WsHarnessMemoryRemoveRpc,
+  WsHarnessSyncStatusRpc,
+  WsHarnessSyncExportBundleRpc,
+  WsHarnessSyncPreviewReceiveRpc,
+  WsHarnessSyncApplyReceiveRpc,
+  WsHarnessSyncConfigureRpc,
+  WsHarnessSyncPreviewPushRpc,
+  WsHarnessSyncPushRpc,
+  WsHarnessSyncPullRpc,
 ).middleware(RpcScopeAuthorization);

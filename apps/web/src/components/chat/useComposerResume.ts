@@ -3,6 +3,7 @@ import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m } from "~/i18n/messages";
 import {
   type EnvironmentId,
+  type HarnessModeId,
   type ProviderInteractionMode,
   type RunId,
   type RuntimeMode,
@@ -37,6 +38,7 @@ interface ComposerResumeInput {
   readonly activeEnvironmentUnavailable: boolean;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
+  readonly modeId?: HarnessModeId | undefined;
   readonly localCheckoutBranchMismatch: { readonly currentBranch: string } | null;
   readonly composerRef: ComposerHandleRef;
   readonly persistThreadSettingsForNextTurn: (input: {
@@ -45,6 +47,7 @@ interface ComposerResumeInput {
     branch?: string;
     runtimeMode: RuntimeMode;
     interactionMode: ProviderInteractionMode;
+    modeId?: HarnessModeId | undefined;
   }) => Promise<AtomCommandResult<void, unknown>>;
   readonly clearUsageLimitsFor: ReturnType<typeof useUsageLimitsPanel>["clearFor"];
   readonly scrollToEnd: ReturnType<typeof useTimelineFollow>["scrollToEnd"];
@@ -70,6 +73,7 @@ export function useComposerResume(input: ComposerResumeInput) {
     activeEnvironmentUnavailable,
     runtimeMode,
     interactionMode,
+    modeId,
     localCheckoutBranchMismatch,
     composerRef,
     persistThreadSettingsForNextTurn,
@@ -123,6 +127,7 @@ export function useComposerResume(input: ComposerResumeInput) {
           : {}),
         runtimeMode,
         interactionMode,
+        ...(modeId !== undefined ? { modeId } : {}),
       });
       if (settingsResult._tag === "Failure") return settingsResult;
       const turnResult = await startThreadTurn({
@@ -139,6 +144,7 @@ export function useComposerResume(input: ComposerResumeInput) {
           },
           runtimeMode,
           interactionMode,
+          ...(modeId !== undefined ? { modeId } : {}),
           dispatchMode: "start",
         },
       });
