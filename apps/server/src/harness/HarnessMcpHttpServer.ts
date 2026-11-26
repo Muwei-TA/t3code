@@ -35,6 +35,7 @@ import * as HarnessHooksService from "./HarnessHooksService.ts";
 import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import * as HarnessMemoryStore from "./HarnessMemoryStore.ts";
 import * as HarnessMcpOAuthNotice from "./HarnessMcpOAuthNotice.ts";
+import { isMcpServerAllowedByMode } from "./HarnessProjector.ts";
 import * as McpGateway from "./McpGateway.ts";
 import * as PluginHost from "./PluginHost.ts";
 
@@ -307,7 +308,14 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     ) {
       const snapshot = yield* gateway.getSnapshot(state.context.workspaceRoot);
       yield* Effect.forEach(
-        snapshot.servers.filter((server) => server.state === "auth_required"),
+        snapshot.servers.filter(
+          (server) =>
+            server.state === "auth_required" &&
+            server.effectiveEnabled &&
+            isMcpServerAllowedByMode(server.id, state.context.activeMode) &&
+            McpGateway.resolveServerChannel(server.config, state.context.harnessCapabilities) ===
+              "gateway",
+        ),
         (server) => publishAuthNotice(server.id),
         { discard: true },
       );

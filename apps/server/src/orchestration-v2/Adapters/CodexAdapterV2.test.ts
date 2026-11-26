@@ -67,6 +67,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import packageJson from "../../../package.json" with { type: "json" };
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import type { McpProviderSessionConfig } from "@t3tools/provider-core/server/mcpSession";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as EffectWorker from "../EffectWorker.ts";
@@ -1251,6 +1252,10 @@ describe("CodexAdapterV2 session initialize", () => {
         const secondId = "portable-second";
         const path = "/isolated/t3/harness-mounts/codex-skills";
         const mounts = new Set<symbol>();
+        const skillRoot: NonNullable<McpProviderSessionConfig["harnessCodexSkillRoot"]> = {
+          path,
+          mounts,
+        };
         yield* (yield* McpProviderSessions.McpProviderSessions).set({
           environmentId: EnvironmentId.make("portable-test"),
           threadId: ThreadId.make(firstId),
@@ -1259,7 +1264,7 @@ describe("CodexAdapterV2 session initialize", () => {
           endpoint: "http://127.0.0.1:43123/mcp",
           authorizationHeader: "Bearer fixture-token",
           browserToolsAvailable: false,
-          harnessCodexSkillRoot: { path, mounts },
+          harnessCodexSkillRoot: skillRoot,
         });
 
         const reply = (
@@ -1289,6 +1294,14 @@ describe("CodexAdapterV2 session initialize", () => {
           replayPreamble(thread)
             .slice(3, 5)
             .map((entry) => withReplayRequestId(entry, id));
+        const failedStart: Array<CodexReplay.CodexAppServerReplayEntry> = [
+          nativeStart(7, secondId)[0]!,
+          {
+            type: "emit_inbound",
+            label: "thread/start failed",
+            frame: { id: 7, error: { code: -32000, message: "Thread failed to start" } },
+          },
+        ];
         const session = yield* openReplaySession(
           makeCodexReplayTranscript({
             scenario: "portable-codex-skill-roots",
@@ -1301,9 +1314,13 @@ describe("CodexAdapterV2 session initialize", () => {
               ...(supported
                 ? [
                     ...mount(6, []),
-                    ...nativeStart(7, secondId),
-                    ...reply(8, "thread/archive", { threadId: secondId }, { result: {} }),
-                    ...mount(9, [path]),
+                    ...failedStart,
+                    ...mount(8, [path]),
+                    ...config(9),
+                    ...mount(10, []),
+                    ...nativeStart(11, secondId),
+                    ...reply(12, "thread/archive", { threadId: secondId }, { result: {} }),
+                    ...mount(13, [path]),
                   ]
                 : nativeStart(6, secondId)),
             ],
@@ -1311,8 +1328,17 @@ describe("CodexAdapterV2 session initialize", () => {
         );
         yield* session.ensureThread(firstId);
         assert.equal(mounts.size, supported ? 1 : 0);
+        if (supported) {
+          const error = yield* Effect.flip(session.ensureThread(secondId));
+          assert.instanceOf(error, ProviderAdapter.ProviderAdapterEnsureThreadError);
+          assert.equal(mounts.size, 1);
+        }
         const second = yield* session.ensureThread(secondId);
         assert.equal(mounts.size, 0);
+        assert.equal(
+          skillRoot.fallbackReason,
+          supported ? "shared_session_conflict" : "unsupported",
+        );
         if (supported) {
           yield* session.runtime.unloadThread!({ providerThread: second, archive: true });
           assert.equal(mounts.size, 1);

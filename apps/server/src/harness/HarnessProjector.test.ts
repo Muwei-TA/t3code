@@ -214,7 +214,12 @@ describe("HarnessProjector", () => {
     expect(
       codexNative("mounted").skills.find((skill) => skill.id === "portable-one")?.channel,
     ).toBe("native-mount");
-    expect(codexNative("mounted").needsGatewayTools).toBe(false);
+    expect(codexNative("mounted").needsGatewayTools).toBe(true);
+    expect(
+      codexNative("mounted")
+        .segments.map((entry) => entry.text)
+        .join("\n"),
+    ).toContain("harness_skill_load");
   });
 
   it("never silently truncates rules, degrades overflowing blocks whole-block to on-demand, and enforces Codex <= 3600 B per segment", () => {

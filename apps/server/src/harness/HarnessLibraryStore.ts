@@ -428,6 +428,7 @@ const make = Effect.gen(function* () {
 
   const harnessDir = store.harnessDir;
   const mountsRoot = path.join(serverConfig.stateDir, "harness-mounts");
+  const issuedMounts = new Set<string>();
   const writeLock = yield* Semaphore.make(1);
 
   const snapshots = new Map<
@@ -1331,6 +1332,7 @@ const make = Effect.gen(function* () {
     const sorted = [...skills].sort((a, b) => a.id.localeCompare(b.id));
     const digest = serializePluginSkillsDigest(sorted);
     const mountName = `${kind}-${digest}`;
+    issuedMounts.add(mountName);
     const mountDir = path.join(mountsRoot, mountName);
     const readyPath =
       kind === "claude-plugin"
@@ -1411,19 +1413,36 @@ const make = Effect.gen(function* () {
         );
         if (!promoted) return undefined;
 
-        if (kind === "codex-skills") return target;
-
-        // Prune older staging directories beyond the 6 most recent to avoid stateDir bloat.
+        // Providers may still reference any mount issued in this server lifetime.
         const mountEntries = yield* fs
           .readDirectory(mountsRoot)
           .pipe(Effect.orElseSucceed(() => []));
-        const stale = mountEntries.filter(
-          (name) => name.startsWith("claude-plugin-") && name !== mountName,
+        const inactive = mountEntries.filter(
+          (name) =>
+            name.startsWith(`${kind}-`) &&
+            /^[0-9a-f]{16}$/.test(name.slice(kind.length + 1)) &&
+            !issuedMounts.has(name),
         );
-        if (stale.length > 6) {
-          for (const oldName of stale.slice(0, stale.length - 6)) {
+        if (inactive.length > 6) {
+          const oldMounts = yield* Effect.forEach(
+            inactive,
+            (name) =>
+              fs.stat(path.join(mountsRoot, name)).pipe(
+                Effect.map((stat) => ({
+                  name,
+                  updatedAt: Option.getOrUndefined(stat.mtime)?.getTime() ?? 0,
+                })),
+                Effect.option,
+              ),
+            { concurrency: 4 },
+          );
+          for (const { name } of oldMounts
+            .flatMap(Option.toArray)
+            .sort((a, b) => b.updatedAt - a.updatedAt)
+            .slice(6)) {
+            if (issuedMounts.has(name)) continue;
             yield* fs
-              .remove(path.join(mountsRoot, oldName), { recursive: true, force: true })
+              .remove(path.join(mountsRoot, name), { recursive: true, force: true })
               .pipe(Effect.ignore);
           }
         }

@@ -314,6 +314,9 @@ export function ThreadContextInspectorButton({
                                       ? gt("Blocked")
                                       : gt("Disabled")}
                               </Badge>
+                              {item.state === "auth_required" ? (
+                                <Badge variant="warning">{gt("Sign-in required")}</Badge>
+                              ) : null}
                             </div>
                             <span className="text-muted-foreground">
                               {gt("{count, plural, one {{count} tool} other {{count} tools}}", {

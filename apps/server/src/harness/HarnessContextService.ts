@@ -189,6 +189,18 @@ const make = Effect.gen(function* () {
 
       const mcpServers: Array<ThreadContextMcpItem> = [];
       const degradedItems: Array<ThreadContextDegradedItem> = [];
+      if (codexMount?.fallbackReason && !codexMount.mounts.size) {
+        const explanations = {
+          unsupported: "This Codex version does not support portable skill mounts.",
+          shared_session_conflict: "Threads sharing this Codex session use different skill sets.",
+          mount_failed: "Codex could not load the portable skill mount.",
+        };
+        degradedItems.push({
+          kind: "skill",
+          id: "codex-portable-skills",
+          reason: `${explanations[codexMount.fallbackReason]} Skills are available through the Harness gateway.`,
+        });
+      }
 
       let activeGatewayCount = 0;
 

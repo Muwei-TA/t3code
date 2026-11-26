@@ -16,12 +16,27 @@ import {
   OAuthMetadataSchema,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import {
+  checkResourceAllowed,
+  resourceUrlFromServerUrl,
+} from "@modelcontextprotocol/sdk/shared/auth-utils.js";
+import {
+  InvalidClientError,
+  InvalidGrantError,
+  UnauthorizedClientError,
+} from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import {
   HarnessError,
   IsoDateTime,
   type HarnessMcpRestartInput,
   supportsHarnessMcpOAuth,
 } from "@t3tools/contracts";
-import { isLocalLoopbackHost, isTailnetHost } from "@t3tools/shared/hostClassification";
+import {
+  formatHostForUrl,
+  isLocalLoopbackHost,
+  isTailnetHost,
+  normalizeHostname,
+} from "@t3tools/shared/hostClassification";
+import { oauthCallbackUrl, pastedUrl } from "@t3tools/shared/oauthCallback";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -33,18 +48,20 @@ import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
+import * as HttpServer from "effect/http/HttpServer";
 import * as ByteSize from "effect/ByteSize";
 import { z } from "zod";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import * as CloudLink from "../cloud/CloudLink.ts";
 import * as ServerConfig from "../config.ts";
 import * as McpWebhookTransport from "../mcp/McpWebhookTransport.ts";
+import { loopbackUrlHostForAddress } from "../startupAccess.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 
 export const HARNESS_OAUTH_CALLBACK_PATH = "/oauth/harness/callback";
 const AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
 const MAX_PENDING = 64;
+const COMPLETED_TTL_MS = 2 * 60 * 1000;
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 const Registration = z.object({
@@ -113,7 +130,9 @@ function decodeSavedAuthorization(bytes: Uint8Array): SavedAuthorization | undef
 // The MCP SDK expects fetch. This adapter keeps redirects disabled and pins the address checked by
 // the existing outbound transport when opening the socket. Local metadata stays on the configured origin.
 function sdkFetch(localOrigin: string, signal: AbortSignal) {
-  const localTransport = McpWebhookTransport.make([new URL(localOrigin).hostname]);
+  const localTransport = McpWebhookTransport.make([
+    normalizeHostname(new URL(localOrigin).hostname),
+  ]);
   return async (value: string | URL, init?: RequestInit): Promise<Response> => {
     const url = endpoint(String(value), localOrigin);
     const transport =
@@ -174,10 +193,35 @@ function authError(serverId: string, detail: string) {
   return new HarnessError({ code: "auth_required", serverId, detail });
 }
 
-function tokenKey(server: Server) {
-  const identity = `${server.scope}\0${server.repoRoot ?? ""}\0${server.id}\0${server.configDigest}`;
-  return `harness-oauth-${NodeCrypto.createHash("sha256").update(identity).digest("hex")}`;
+function sameIssuer(left: string, right: string) {
+  return new URL(left).href.replace(/\/$/, "") === new URL(right).href.replace(/\/$/, "");
 }
+
+const digest = (value: string) => NodeCrypto.createHash("sha256").update(value).digest("hex");
+
+export function oauthCredentialKey(server: Server) {
+  const { transport } = server.config;
+  if (transport.type === "stdio") return undefined;
+  const oauth = transport.oauth;
+  const identity = JSON.stringify([
+    server.scope,
+    server.repoRoot,
+    server.id,
+    URL.parse(transport.url)?.href ?? transport.url,
+    oauth?.authorizationServerUrl,
+    oauth?.clientId,
+    [...(oauth?.scopes ?? [])].sort(),
+  ]);
+  return `harness-oauth-${digest(identity)}`;
+}
+
+function tokenKey(server: Server) {
+  return oauthCredentialKey(server)!;
+}
+
+export class PublicOrigin extends Context.Service<PublicOrigin, Effect.Effect<string | null>>()(
+  "t3/harness/HarnessMcpOAuthService/PublicOrigin",
+) {}
 
 export class HarnessMcpOAuthService extends Context.Service<
   HarnessMcpOAuthService,
@@ -186,8 +230,15 @@ export class HarnessMcpOAuthService extends Context.Service<
     readonly start: (
       input: HarnessMcpRestartInput,
     ) => Effect.Effect<{ readonly authorizationUrl: string }, HarnessError>;
-    readonly complete: (callbackUrl: string) => Effect.Effect<HarnessMcpRestartInput, HarnessError>;
+    readonly complete: (
+      callbackUrl: string,
+      expected?: HarnessMcpRestartInput,
+    ) => Effect.Effect<
+      { readonly input: HarnessMcpRestartInput; readonly exchanged: boolean },
+      HarnessError
+    >;
     readonly disconnect: (input: HarnessMcpRestartInput) => Effect.Effect<void, HarnessError>;
+    readonly clear: (server: Server) => Effect.Effect<void, HarnessError>;
     readonly bearer: (server: Server) => Effect.Effect<string | undefined, HarnessError>;
     readonly unauthorized: (
       server: Server,
@@ -205,7 +256,8 @@ const make = Effect.gen(function* () {
   const store = yield* HarnessStore.HarnessStore;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const config = yield* ServerConfig.ServerConfig;
-  const cloud = yield* Effect.serviceOption(CloudLink.CloudLink);
+  const publicOrigin = yield* Effect.serviceOption(PublicOrigin);
+  const httpServer = yield* Effect.serviceOption(HttpServer.HttpServer);
   const locks = yield* KeyedLock.make<string>();
   const credentials = new Map<string, SavedAuthorization | undefined>();
   const challenges = new Map<string, ReturnType<typeof extractWWWAuthenticateParams>>();
@@ -216,6 +268,15 @@ const make = Effect.gen(function* () {
       readonly input: HarnessMcpRestartInput;
       readonly registration: Registration;
       readonly verifier: string;
+      readonly deadline: number;
+    }
+  >();
+  const completed = new Map<
+    string,
+    {
+      readonly redirectUri: string;
+      readonly key: string;
+      readonly codeHash: string;
       readonly deadline: number;
     }
   >();
@@ -288,6 +349,7 @@ const make = Effect.gen(function* () {
       expiresAt: tokens.expires_in === undefined ? undefined : now + tokens.expires_in * 1000,
     };
     yield* write(server, saved);
+    challenges.delete(tokenKey(server));
     return tokens.access_token;
   });
 
@@ -295,13 +357,13 @@ const make = Effect.gen(function* () {
     input: HarnessMcpRestartInput,
   ) {
     const { server, transport } = yield* requireServer(input);
-    const cloudState = Option.isSome(cloud)
-      ? yield* cloud.value.linkState().pipe(Effect.option)
-      : Option.none();
-    const tunnel = Option.filter(cloudState, (state) => state.linked && !state.linkRevoked).pipe(
-      Option.getOrUndefined,
-    )?.tunnelHostname;
-    const redirectUri = `${tunnel ? `https://${tunnel}` : `http://127.0.0.1:${config.port}`}${HARNESS_OAUTH_CALLBACK_PATH}`;
+    const origin = Option.isSome(publicOrigin) ? yield* publicOrigin.value : null;
+    const address = Option.getOrUndefined(httpServer)?.address;
+    const localOrigin =
+      address && "port" in address
+        ? `http://${loopbackUrlHostForAddress(address)}:${address.port}`
+        : `http://${formatHostForUrl(config.host ?? "127.0.0.1")}:${config.port}`;
+    const redirectUri = `${origin ?? localOrigin}${HARNESS_OAUTH_CALLBACK_PATH}`;
     const state = NodeCrypto.randomBytes(24).toString("base64url");
     const challenge = challenges.get(tokenKey(server));
     const previous = yield* read(server);
@@ -310,24 +372,43 @@ const make = Effect.gen(function* () {
         const url = new URL(transport.url);
         endpoint(transport.url, url.origin);
         const fetchFn = sdkFetch(url.origin, signal);
+        const metadataUrl = challenge?.resourceMetadataUrl;
         const protectedResource = await discoverOAuthProtectedResourceMetadata(
           url,
-          challenge?.resourceMetadataUrl
-            ? { resourceMetadataUrl: challenge.resourceMetadataUrl }
-            : {},
+          metadataUrl?.origin === url.origin ? { resourceMetadataUrl: metadataUrl } : {},
           fetchFn,
         ).catch(() => undefined);
-        if (protectedResource && new URL(protectedResource.resource).href !== url.href) {
+        if (
+          protectedResource &&
+          !checkResourceAllowed({
+            requestedResource: resourceUrlFromServerUrl(url),
+            configuredResource: endpoint(protectedResource.resource, url.origin),
+          })
+        ) {
           throw new Error("Protected resource does not match this MCP server.");
         }
         const issuer =
           transport.oauth?.authorizationServerUrl ?? protectedResource?.authorization_servers?.[0];
         if (!issuer) throw new Error("No authorization server was discovered.");
         endpoint(issuer, url.origin);
-        const metadata = await discoverAuthorizationServerMetadata(issuer, { fetchFn });
+        let responseIssuerSupported = false;
+        const metadata = await discoverAuthorizationServerMetadata(issuer, {
+          fetchFn: async (address, init) => {
+            const response = await fetchFn(address, init);
+            if (response.ok) {
+              const body: unknown = await response.clone().json();
+              responseIssuerSupported =
+                !!body &&
+                typeof body === "object" &&
+                "authorization_response_iss_parameter_supported" in body &&
+                body.authorization_response_iss_parameter_supported === true;
+            }
+            return response;
+          },
+        });
         if (
           !metadata ||
-          metadata.issuer !== issuer ||
+          !sameIssuer(metadata.issuer, issuer) ||
           !metadata.code_challenge_methods_supported?.includes("S256")
         ) {
           throw new Error("The authorization server did not advertise S256 PKCE.");
@@ -355,7 +436,7 @@ const make = Effect.gen(function* () {
                   response_types: ["code"],
                 },
               });
-        const resource = protectedResource?.resource ?? transport.url;
+        const resource = protectedResource?.resource ?? resourceUrlFromServerUrl(url).href;
         const authorization = await startAuthorization(issuer, {
           metadata,
           clientInformation: client,
@@ -366,7 +447,16 @@ const make = Effect.gen(function* () {
         });
         return {
           ...authorization,
-          registration: { issuer, resource, metadata, client, redirectUri },
+          registration: {
+            issuer,
+            resource,
+            metadata: {
+              ...metadata,
+              authorization_response_iss_parameter_supported: responseIssuerSupported,
+            },
+            client,
+            redirectUri,
+          },
         };
       },
       catch: () =>
@@ -388,56 +478,65 @@ const make = Effect.gen(function* () {
     return { authorizationUrl: flow.authorizationUrl.href };
   });
 
-  const complete = Effect.fn("HarnessMcpOAuthService.complete")(function* (callbackUrl: string) {
-    const callback = URL.parse(callbackUrl);
-    const state = callback?.searchParams.get("state");
-    const authorization = state ? pending.get(state) : undefined;
-    const now = yield* Clock.currentTimeMillis;
-    if (!state || !authorization || authorization.deadline <= now || !callback) {
-      return yield* new HarnessError({
-        code: "invalid_config",
-        detail: "OAuth sign-in expired or is invalid. Start sign-in again.",
-      });
-    }
-    const expected = new URL(authorization.registration.redirectUri);
-    if (
-      callback.origin !== expected.origin ||
-      callback.pathname !== expected.pathname ||
-      callback.username ||
-      callback.password ||
-      callback.hash ||
-      callback.searchParams.getAll("state").length !== 1
-    ) {
-      return yield* authError(
-        authorization.server.id,
-        "The OAuth callback address does not match this sign-in.",
-      );
-    }
-    pending.delete(state);
-    const code = callback.searchParams.get("code");
-    const issuer = callback.searchParams.get("iss");
-    const registration = authorization.registration;
-    if (
-      !code ||
-      callback.searchParams.getAll("code").length !== 1 ||
-      callback.searchParams.has("error") ||
-      (issuer !== null && issuer !== registration.issuer)
-    ) {
-      return yield* authError(
-        authorization.server.id,
-        "The authorization server did not complete sign-in.",
-      );
-    }
-    yield* locks.withLock(
-      tokenKey(authorization.server),
+  const invalidCallback = new HarnessError({
+    code: "invalid_config",
+    detail: "OAuth sign-in expired or is invalid. Start sign-in again.",
+  });
+  const complete = Effect.fn("HarnessMcpOAuthService.complete")(function* (
+    callbackUrl: string,
+    expected?: HarnessMcpRestartInput,
+  ) {
+    const state = yield* Effect.try({
+      try: () => pastedUrl(callbackUrl).searchParams.get("state"),
+      catch: () => invalidCallback,
+    });
+    if (!state || callbackUrl.includes("#")) return yield* invalidCallback;
+    const request = pending.get(state);
+    const expectedKey = expected && tokenKey((yield* requireServer(expected)).server);
+    const key = request ? tokenKey(request.server) : expectedKey;
+    if (!key || (expectedKey !== undefined && expectedKey !== key)) return yield* invalidCallback;
+    return yield* locks.withLock(
+      key,
       Effect.gen(function* () {
-        const { server, transport } = yield* requireServer(authorization.input);
-        if (tokenKey(server) !== tokenKey(authorization.server)) {
-          return yield* authError(
-            server.id,
-            "The MCP server changed during sign-in. Start sign-in again.",
-          );
+        const now = yield* Clock.currentTimeMillis;
+        const authorization = pending.get(state);
+        const receipt = completed.get(state);
+        const redirectUri = authorization?.registration.redirectUri ?? receipt?.redirectUri;
+        if (!redirectUri) return yield* invalidCallback;
+        const callback = yield* Effect.try({
+          try: () => oauthCallbackUrl(callbackUrl, redirectUri, state),
+          catch: () => invalidCallback,
+        });
+        const code = callback.searchParams.get("code");
+        if (!authorization) {
+          if (
+            !expected ||
+            receipt?.key !== key ||
+            receipt.deadline <= now ||
+            !code ||
+            digest(code) !== receipt.codeHash
+          )
+            return yield* invalidCallback;
+          const { server } = yield* requireServer(expected);
+          if (tokenKey(server) !== key || !(yield* read(server))) return yield* invalidCallback;
+          return { input: expected, exchanged: false };
         }
+        if (authorization.deadline <= now || tokenKey(authorization.server) !== key)
+          return yield* invalidCallback;
+        const registration = authorization.registration;
+        const issuers = callback.searchParams.getAll("iss");
+        if (
+          !code ||
+          issuers.length > 1 ||
+          (issuers.length === 0 &&
+            "authorization_response_iss_parameter_supported" in registration.metadata &&
+            registration.metadata.authorization_response_iss_parameter_supported === true) ||
+          (issuers.length === 1 && issuers[0] !== registration.metadata.issuer)
+        )
+          return yield* invalidCallback;
+        pending.delete(state);
+        const { server, transport } = yield* requireServer(authorization.input);
+        if (tokenKey(server) !== key) return yield* invalidCallback;
         const tokens = yield* Effect.tryPromise({
           try: (signal) =>
             exchangeAuthorization(registration.issuer, {
@@ -452,31 +551,45 @@ const make = Effect.gen(function* () {
           catch: () => authError(server.id, "The authorization server refused the OAuth code."),
         });
         const current = yield* requireServer(authorization.input);
-        if (tokenKey(current.server) !== tokenKey(authorization.server)) {
-          return yield* authError(
-            server.id,
-            "The MCP server changed during sign-in. Start sign-in again.",
-          );
-        }
+        if (tokenKey(current.server) !== key) return yield* invalidCallback;
         yield* saveTokens(server, registration, tokens);
+        if (completed.size >= MAX_PENDING) completed.delete(completed.keys().next().value!);
+        completed.set(state, {
+          redirectUri,
+          key,
+          codeHash: digest(code),
+          deadline: now + COMPLETED_TTL_MS,
+        });
+        return { input: authorization.input, exchanged: true };
       }),
     );
-    return authorization.input;
   });
 
-  const disconnect = Effect.fn("HarnessMcpOAuthService.disconnect")(function* (
-    input: HarnessMcpRestartInput,
-  ) {
-    const { server } = yield* requireServer(input);
-    const key = tokenKey(server);
+  const clear = Effect.fn("HarnessMcpOAuthService.clear")(function* (server: Server) {
+    const key = oauthCredentialKey(server);
+    if (key === undefined) return;
     yield* locks.withLock(
       key,
       Effect.gen(function* () {
         for (const [id, request] of pending)
           if (tokenKey(request.server) === key) pending.delete(id);
+        for (const [id, receipt] of completed) if (receipt.key === key) completed.delete(id);
+        challenges.delete(key);
         yield* write(server, undefined);
       }),
     );
+  });
+
+  const disconnect = Effect.fn("HarnessMcpOAuthService.disconnect")(function* (
+    input: HarnessMcpRestartInput,
+  ) {
+    const workspace = yield* store.resolveWorkspace(input.workspaceRoot);
+    const server =
+      workspace.servers.find((entry) => entry.id === input.serverId && entry.scope === "project") ??
+      workspace.servers.find((entry) => entry.id === input.serverId);
+    if (!workspace.managedPolicyAllowsHarness || !server || !oauthCredentialKey(server))
+      return yield* authError(input.serverId, "MCP OAuth credentials could not be disconnected.");
+    yield* clear(server);
   });
 
   const unauthorized = Effect.fn("HarnessMcpOAuthService.unauthorized")(function* (
@@ -488,13 +601,13 @@ const make = Effect.gen(function* () {
     if (!transport)
       return yield* authError(server.id, "The upstream server requires authorization.");
     const key = tokenKey(server);
-    if (header) {
-      const challenge = extractWWWAuthenticateParams(
-        new Response(null, { headers: { "www-authenticate": header } }),
-      );
-      challenges.set(key, challenge);
-      if (challenges.size > 128) challenges.delete(challenges.keys().next().value!);
-    }
+    const challenge = header
+      ? extractWWWAuthenticateParams(
+          new Response(null, { headers: { "www-authenticate": header } }),
+        )
+      : {};
+    challenges.set(key, challenge);
+    if (challenges.size > 128) challenges.delete(challenges.keys().next().value!);
     return yield* locks.withLock(
       key,
       Effect.gen(function* () {
@@ -513,9 +626,21 @@ const make = Effect.gen(function* () {
               resource: saved.resource,
               fetchFn: sdkFetch(new URL(transport.url).origin, signal),
             }),
-          catch: () =>
-            authError(server.id, "The OAuth session expired. Sign in to this MCP server again."),
-        }).pipe(Effect.tapError(() => write(server, undefined).pipe(Effect.ignore)));
+          catch: (error) =>
+            error instanceof InvalidGrantError ||
+            error instanceof InvalidClientError ||
+            error instanceof UnauthorizedClientError
+              ? authError(server.id, "The OAuth session expired. Sign in to this MCP server again.")
+              : new HarnessError({
+                  code: "upstream_error",
+                  serverId: server.id,
+                  detail: "The authorization server could not refresh the MCP session.",
+                }),
+        }).pipe(
+          Effect.tapError((error) =>
+            error.code === "auth_required" ? write(server, undefined) : Effect.void,
+          ),
+        );
         return yield* saveTokens(server, saved, refreshed, refreshToken);
       }),
     );
@@ -525,6 +650,7 @@ const make = Effect.gen(function* () {
     start,
     complete,
     disconnect,
+    clear,
     unauthorized,
     supports: (server) => oauthTransport(server) !== undefined,
     bearer: Effect.fn("HarnessMcpOAuthService.bearer")(function* (server) {

@@ -498,7 +498,11 @@ export function projectHarnessContext(input: {
   }
 
   // 4. Compact 1-line-per-skill index for gateway skills
-  const indexableGatewaySkills = gatewaySkills.filter((skill) => !skill.userInvocationOnly);
+  const indexableGatewaySkills = [
+    ...gatewaySkills,
+    // A shared Codex process may release its extra root while this turn is running.
+    ...(input.codexSkillMount === "mounted" ? nativeMountSkills : []),
+  ].filter((skill) => !skill.userInvocationOnly);
   if (indexableGatewaySkills.length > 0) {
     const lines = indexableGatewaySkills.map((skill) => {
       const summary = (skill.shortDescription ?? skill.description ?? "")
@@ -523,7 +527,7 @@ export function projectHarnessContext(input: {
     input.supportsMcpTools &&
     (gatewaySkills.length > 0 ||
       hasOnDemandOrDegradedRules ||
-      (input.codexSkillMount === "prepare" && nativeMountSkills.length > 0));
+      (input.codexSkillMount !== undefined && nativeMountSkills.length > 0));
   const scaffoldText = T3_CODE_HARNESS_SCAFFOLD_INSTRUCTIONS;
   const scaffoldByteSize = utf8Bytes(scaffoldText);
 

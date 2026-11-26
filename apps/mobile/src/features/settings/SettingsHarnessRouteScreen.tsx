@@ -16,6 +16,7 @@ import {
   type HarnessMcpServerConfig,
   type HarnessMcpServerView,
   type HarnessMcpTransport,
+  isValidHarnessHttpUrl,
   supportsHarnessMcpOAuth,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -194,6 +195,7 @@ function EnvironmentHarnessSection({
   const removeMcp = useAtomCommand(harnessEnvironment.removeMcp, { reportFailure: false });
   const setMcpEnabled = useAtomCommand(harnessEnvironment.setMcpEnabled, { reportFailure: false });
   const restartMcp = useAtomCommand(harnessEnvironment.restartMcp, { reportFailure: false });
+  const listMcp = useAtomCommand(harnessEnvironment.listMcp, { reportFailure: false });
   const startMcpOAuth = useAtomCommand(harnessEnvironment.startMcpOAuth, { reportFailure: false });
   const completeMcpOAuth = useAtomCommand(harnessEnvironment.completeMcpOAuth, {
     reportFailure: false,
@@ -264,22 +266,34 @@ function EnvironmentHarnessSection({
 
   const finishOAuth = async () => {
     if (!signIn || finishingOAuth) return;
-    const address = callbackUrl.trim();
-    setOAuthError(null);
-    if (address.length === 0) {
-      listQuery.refresh();
-      setSignIn(null);
-      return;
-    }
     setFinishingOAuth(true);
-    const result = await completeMcpOAuth({ environmentId, input: { callbackUrl: address } });
+    setOAuthError(null);
+    const address = callbackUrl.trim();
+    const workspace = activeWorkspaceRoot ? { workspaceRoot: activeWorkspaceRoot } : {};
+    const result = address
+      ? await completeMcpOAuth({
+          environmentId,
+          input: { serverId: signIn.server.id, callbackUrl: address, ...workspace },
+        })
+      : await listMcp({ environmentId, input: workspace });
     setFinishingOAuth(false);
     if (result._tag === "Success") {
       listQuery.refresh();
-      setSignIn(null);
-    } else if (!isAtomCommandInterrupted(result)) {
-      setOAuthError(gt("Sign-in is incomplete. Approve access or paste the callback address."));
-    }
+      if (
+        address ||
+        result.value.servers.some(
+          (entry) =>
+            entry.id === signIn.server.id &&
+            entry.scope === signIn.server.scope &&
+            entry.oauthStatus === "connected" &&
+            entry.state !== "auth_required",
+        )
+      ) {
+        setSignIn(null);
+        return;
+      }
+    } else if (isAtomCommandInterrupted(result)) return;
+    setOAuthError(gt("Sign-in is incomplete. Approve access or paste the callback address."));
   };
 
   const servers = listQuery.data?.servers ?? [];
@@ -603,8 +617,13 @@ function EnvironmentHarnessSection({
     }
 
     const trimmedUrl = newUrl.trim();
-    if (!/^https?:\/\/[^\s/]+/i.test(trimmedUrl)) {
+    if (!isValidHarnessHttpUrl(trimmedUrl)) {
       Dialog.alert(gt("Enter a valid http:// or https:// endpoint URL"));
+      return;
+    }
+    const issuer = newOAuthIssuer.trim();
+    if (issuer && !isValidHarnessHttpUrl(issuer)) {
+      Dialog.alert(gt("Enter a valid http:// or https:// OAuth authorization server URL."));
       return;
     }
     const scopes = newOAuthScopes
@@ -614,7 +633,7 @@ function EnvironmentHarnessSection({
     const oauth = {
       ...(newOAuthClientId.trim() ? { clientId: newOAuthClientId.trim() } : {}),
       ...(scopes.length > 0 ? { scopes } : {}),
-      ...(newOAuthIssuer.trim() ? { authorizationServerUrl: newOAuthIssuer.trim() } : {}),
+      ...(issuer ? { authorizationServerUrl: issuer } : {}),
     };
     void commitAddServer(parsedId, {
       enabled: true,

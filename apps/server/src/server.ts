@@ -1040,6 +1040,7 @@ const layerMakeServer = Layer.unwrap(
     const tailscaleParked = yield* Deferred.make<void>();
     const cloudLinkParked = yield* Deferred.make<void>();
     const routesReady = yield* Deferred.make<void>();
+    const harnessOAuthOrigin = yield* Deferred.make<Effect.Effect<string | null>>();
     const layerLauncher = ServiceLauncherClient.layer;
 
     // fixPath rewrites PATH, so pin the launcher the shell chose before it does.
@@ -1454,7 +1455,16 @@ const layerMakeServer = Layer.unwrap(
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.asVoid),
-    }).pipe(Layer.provideMerge(layerRuntimeDependencies), Layer.provide(layerLauncher));
+    }).pipe(
+      Layer.provideMerge(layerRuntimeDependencies),
+      Layer.provide(
+        Layer.succeed(
+          HarnessMcpOAuthService.PublicOrigin,
+          Deferred.await(harnessOAuthOrigin).pipe(Effect.flatten),
+        ),
+      ),
+      Layer.provide(layerLauncher),
+    );
 
     const layerRoutes = HttpRouter.serve(layerMakeRoutes.pipe(Layer.provide(layerLauncher)), {
       disableLogger: !config.logWebSocketEvents,
@@ -1471,6 +1481,22 @@ const layerMakeServer = Layer.unwrap(
       layerRuntimeState.pipe(Layer.provide(layerLauncher)),
       layerTailscaleServe,
       layerCloudDesiredLinkReconcile,
+      Layer.effectDiscard(
+        Effect.gen(function* () {
+          const cloud = yield* CloudLink.CloudLink;
+          yield* Deferred.succeed(
+            harnessOAuthOrigin,
+            cloud.linkState().pipe(
+              Effect.map((state) =>
+                state.linked && !state.linkRevoked && state.tunnelHostname
+                  ? `https://${state.tunnelHostname}`
+                  : null,
+              ),
+              Effect.orElseSucceed(() => null),
+            ),
+          );
+        }),
+      ),
       HeapSnapshot.layer,
     );
 

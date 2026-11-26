@@ -42,6 +42,7 @@ export interface McpProviderSessionConfig {
     | {
         readonly path: string;
         readonly mounts: Set<symbol>;
+        fallbackReason?: "unsupported" | "shared_session_conflict" | "mount_failed" | undefined;
       }
     | undefined;
   /** Omit preview_* instructions when the user withholds agent browser access. */

@@ -2307,61 +2307,101 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             for (const root of skillRoots.values()) root?.mounts.delete(skillMountOwner);
           }),
         );
-        const syncSkillRoot = Effect.fn("CodexAdapterV2.syncSkillRoot")(function* (
-          threadId: ThreadId | null,
+        const updateSkillRoot = Effect.fn("CodexAdapterV2.updateSkillRoot")(function* (
+          threadId: ThreadId,
           change: { readonly root: SkillRoot } | null,
         ) {
-          if (threadId === null || skillRootsUnsupported) return;
-          yield* skillMountPermit.withPermit(
-            Effect.gen(function* () {
-              yield* rejectIfRetired;
-              if (change === null && !skillRoots.has(threadId)) return;
-              if (
-                change !== null &&
-                skillRoots.has(threadId) &&
-                skillRoots.get(threadId) === change.root
-              )
-                return;
-              const next = new Map(skillRoots);
-              if (change === null) next.delete(threadId);
-              else next.set(threadId, change.root);
+          yield* rejectIfRetired;
+          if (skillRootsUnsupported) {
+            if (change?.root) change.root.fallbackReason = "unsupported";
+            return;
+          }
+          if (change === null && !skillRoots.has(threadId)) return;
+          if (
+            change !== null &&
+            skillRoots.has(threadId) &&
+            skillRoots.get(threadId) === change.root &&
+            change.root?.fallbackReason !== "mount_failed"
+          )
+            return;
 
-              // Extra roots are global to the app-server. A shared process can only see a
-              // mount when every attached thread is entitled to exactly that root.
-              const paths = new Set(Array.from(next.values(), (entry) => entry?.path));
-              const desired = paths.size === 1 ? paths.values().next().value : undefined;
-              if (desired !== appliedSkillRoot) {
-                const supported = yield* client
-                  .request("skills/extraRoots/set", {
-                    extraRoots: desired === undefined ? [] : [desired],
-                  })
-                  .pipe(
-                    Effect.as(true),
-                    Effect.catchTags({
-                      CodexAppServerRequestError: (error) =>
-                        error.code === -32601 && appliedSkillRoot === undefined
-                          ? Effect.succeed(false)
-                          : Effect.fail(error),
-                    }),
-                    withAppServerDeadline("skills/extraRoots/set"),
-                  );
-                if (!supported) {
-                  skillRootsUnsupported = true;
-                  skillRoots.clear();
-                  return;
-                }
-                appliedSkillRoot = desired;
-              }
-              for (const root of skillRoots.values()) root?.mounts.delete(skillMountOwner);
-              skillRoots.clear();
-              for (const [id, root] of next) {
-                skillRoots.set(id, root);
-                if (root !== undefined && root.path === appliedSkillRoot)
-                  root.mounts.add(skillMountOwner);
-              }
-            }).pipe(Effect.uninterruptible),
-          );
+          const next = new Map(skillRoots);
+          if (change === null) next.delete(threadId);
+          else next.set(threadId, change.root);
+
+          // Extra roots are global to the app-server. Every attached thread must approve the root.
+          const paths = new Set(Array.from(next.values(), (entry) => entry?.path));
+          const desired = paths.size === 1 ? paths.values().next().value : undefined;
+          let fallback: NonNullable<SkillRoot>["fallbackReason"] =
+            paths.size > 1 ? "shared_session_conflict" : undefined;
+          if (desired !== appliedSkillRoot) {
+            const applied = yield* client
+              .request("skills/extraRoots/set", {
+                extraRoots: desired === undefined ? [] : [desired],
+              })
+              .pipe(
+                Effect.as(true),
+                Effect.catchTags({
+                  CodexAppServerRequestError: (error) => {
+                    if (appliedSkillRoot !== undefined) return Effect.fail(error);
+                    skillRootsUnsupported = error.code === -32601;
+                    fallback = skillRootsUnsupported ? "unsupported" : "mount_failed";
+                    return Effect.logWarning(
+                      "Codex portable skills are using the Harness gateway.",
+                      {
+                        reason: fallback,
+                      },
+                    ).pipe(Effect.as(false));
+                  },
+                }),
+                withAppServerDeadline("skills/extraRoots/set"),
+              );
+            if (applied) appliedSkillRoot = desired;
+          }
+          for (const root of skillRoots.values()) root?.mounts.delete(skillMountOwner);
+          skillRoots.clear();
+          for (const [id, root] of next) {
+            skillRoots.set(id, root);
+            if (!root) continue;
+            root.fallbackReason = fallback;
+            if (root.path === appliedSkillRoot) root.mounts.add(skillMountOwner);
+          }
         });
+        const syncSkillRoot = (
+          threadId: ThreadId | null,
+          change: { readonly root: SkillRoot } | null,
+        ) =>
+          threadId === null
+            ? Effect.void
+            : skillMountPermit.withPermit(
+                updateSkillRoot(threadId, change).pipe(Effect.uninterruptible),
+              );
+
+        const withSkillRoot = <A, E, R>(
+          threadId: ThreadId | null,
+          root: SkillRoot,
+          attach: Effect.Effect<A, E, R>,
+        ) =>
+          threadId === null
+            ? attach
+            : skillMountPermit.withPermit(
+                Effect.gen(function* () {
+                  const previous = skillRoots.has(threadId)
+                    ? { root: skillRoots.get(threadId) }
+                    : null;
+                  yield* updateSkillRoot(threadId, { root }).pipe(Effect.uninterruptible);
+                  return yield* attach.pipe(
+                    Effect.onError((cause) =>
+                      // An interrupted RPC may already have attached the thread.
+                      Cause.hasInterrupts(cause)
+                        ? Effect.void
+                        : updateSkillRoot(threadId, previous).pipe(
+                            Effect.catch((cause) => retireAppServer(cause)),
+                          ),
+                    ),
+                  );
+                }),
+              );
         // Read per thread: a workspace's project config can add its own servers.
         const readStdioMcpServers = (cwd: string | null | undefined) =>
           ensureInitialized.pipe(
@@ -8139,19 +8179,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 readStdioMcpServers(undefined),
               ]).pipe(
                 Effect.flatMap(([mcpSession, stdioMcpServers]) =>
-                  syncSkillRoot(providerThread.appThreadId, {
-                    root: mcpSession?.harnessCodexSkillRoot,
-                  }).pipe(
-                    Effect.andThen(
-                      resumeNativeThread(threadId, {
-                        excludeTurns: true,
-                        ...codexThreadRuntimeParams({
-                          threadId: providerThread.appThreadId,
-                          mcpSession,
-                          stdioMcpServers,
-                        }),
+                  withSkillRoot(
+                    providerThread.appThreadId,
+                    mcpSession?.harnessCodexSkillRoot,
+                    resumeNativeThread(threadId, {
+                      excludeTurns: true,
+                      ...codexThreadRuntimeParams({
+                        threadId: providerThread.appThreadId,
+                        mcpSession,
+                        stdioMcpServers,
                       }),
-                    ),
+                    }).pipe(withAppServerDeadline("thread/resume")),
                   ),
                 ),
                 Effect.andThen(request),
@@ -8324,11 +8362,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ]),
               ),
               Effect.flatMap(([mcpSession, stdioMcpServers]) =>
-                syncSkillRoot(threadInput.threadId, {
-                  root: mcpSession?.harnessCodexSkillRoot,
-                }).pipe(
-                  Effect.andThen(
-                    client.request("thread/start", {
+                withSkillRoot(
+                  threadInput.threadId,
+                  mcpSession?.harnessCodexSkillRoot,
+                  client
+                    .request("thread/start", {
                       ...codexThreadRuntimeParams({
                         threadId: threadInput.threadId,
                         mcpSession,
@@ -8340,8 +8378,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       ...(IdAllocator.isDelegatedTaskThread(threadInput.threadId)
                         ? { threadSource: "subagent" }
                         : {}),
-                    }),
-                  ),
+                    })
+                    .pipe(withAppServerDeadline("thread/start")),
                 ),
               ),
               Effect.map((response): OrchestrationV2ProviderThread =>
@@ -8354,7 +8392,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   thread: response.thread,
                 }),
               ),
-              withAppServerDeadline("thread/start"),
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapter.ProviderAdapterEnsureThreadError({
@@ -8390,10 +8427,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               goalUpdatesHeld.add(nativeThreadId);
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(
-                  syncSkillRoot(appThreadId, { root: mcpSession?.harnessCodexSkillRoot }),
+                  withSkillRoot(
+                    appThreadId,
+                    mcpSession?.harnessCodexSkillRoot,
+                    resume.pipe(withAppServerDeadline("thread/resume")),
+                  ),
                 ),
-                Effect.andThen(resume),
-                withAppServerDeadline("thread/resume"),
                 Effect.flatMap(decodeCodexResumeMetadata),
                 // Stay registered: a lost or undecodable response may still have resumed the thread.
                 Effect.onError(() =>
@@ -9386,14 +9425,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               // thread/revert requires the thread loaded in this app-server; resume after restart or idle release.
               // Like withLoadedThread, resume with the thread's saved model and cwd, not the session's.
               if (!loaded) {
-                yield* resumeNativeThread(threadId, {
-                  excludeTurns: true,
-                  ...codexThreadRuntimeParams({
-                    threadId: threadInput.providerThread.appThreadId,
-                    mcpSession: yield* readMcpSession(threadInput.providerThread.appThreadId),
-                    stdioMcpServers: yield* readStdioMcpServers(undefined),
-                  }),
-                });
+                const appThreadId = threadInput.providerThread.appThreadId;
+                const mcpSession = yield* readMcpSession(appThreadId);
+                yield* withSkillRoot(
+                  appThreadId,
+                  mcpSession?.harnessCodexSkillRoot,
+                  resumeNativeThread(threadId, {
+                    excludeTurns: true,
+                    ...codexThreadRuntimeParams({
+                      threadId: appThreadId,
+                      mcpSession,
+                      stdioMcpServers: yield* readStdioMcpServers(undefined),
+                    }),
+                  }).pipe(withAppServerDeadline("thread/resume")),
+                );
               }
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(revertCodexThread(client, threadId, numTurns)),
@@ -9451,20 +9496,22 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(
-                  syncSkillRoot(threadInput.targetThreadId, {
-                    root: mcpSession?.harnessCodexSkillRoot,
-                  }),
-                ),
-                Effect.andThen(
-                  fork.pipe(
-                    Effect.catchTags({
-                      CodexAppServerRequestError: (cause) =>
-                        /\bsession \S+ is archived\b|\bcodex unarchive\b/i.test(cause.errorMessage)
-                          ? client.raw
-                              .request("thread/unarchive", { threadId })
-                              .pipe(Effect.andThen(fork))
-                          : Effect.fail(cause),
-                    }),
+                  withSkillRoot(
+                    threadInput.targetThreadId,
+                    mcpSession?.harnessCodexSkillRoot,
+                    fork.pipe(
+                      Effect.catchTags({
+                        CodexAppServerRequestError: (cause) =>
+                          /\bsession \S+ is archived\b|\bcodex unarchive\b/i.test(
+                            cause.errorMessage,
+                          )
+                            ? client.raw
+                                .request("thread/unarchive", { threadId })
+                                .pipe(Effect.andThen(fork))
+                            : Effect.fail(cause),
+                      }),
+                      withAppServerDeadline("thread/fork"),
+                    ),
                   ),
                 ),
                 Effect.mapError(

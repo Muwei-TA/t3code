@@ -179,6 +179,20 @@ export function redactHarnessServerConfig(config: HarnessMcpServerConfig): Harne
       type: config.transport.type,
       url: redactUrlCredentials(config.transport.url),
       ...(redactedHeaders ? { headers: redactedHeaders } : {}),
+      ...(config.transport.oauth
+        ? {
+            oauth: {
+              ...config.transport.oauth,
+              ...(config.transport.oauth.authorizationServerUrl
+                ? {
+                    authorizationServerUrl: redactUrlCredentials(
+                      config.transport.oauth.authorizationServerUrl,
+                    ),
+                  }
+                : {}),
+            },
+          }
+        : {}),
     },
   };
 }
@@ -513,12 +527,23 @@ export const mergeRedactedConfigWithExisting = Effect.fn(
     serverId,
     "headers",
   );
+  const oauth = incoming.transport.oauth;
+  const authorizationServerUrl = oauth?.authorizationServerUrl
+    ? yield* mergeRedactedUrl(
+        serverId,
+        oauth.authorizationServerUrl,
+        sameHttpDestination ? existingHttp.oauth?.authorizationServerUrl : undefined,
+      )
+    : undefined;
   return {
     ...incoming,
     transport: {
       type: incoming.transport.type,
       url: mergedUrl,
       ...(mergedHeaders ? { headers: mergedHeaders } : {}),
+      ...(oauth
+        ? { oauth: { ...oauth, ...(authorizationServerUrl ? { authorizationServerUrl } : {}) } }
+        : {}),
     },
   };
 });

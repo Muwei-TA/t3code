@@ -3830,25 +3830,21 @@ export const layerWsRpc = (
           }),
         [WS_METHODS.harnessMcpUpsert]: (input) =>
           Option.isSome(harnessStoreOption) && Option.isSome(mcpGatewayOption)
-            ? harnessStoreOption.value
-                .upsertUserServer({
+            ? mcpGatewayOption.value.updateServer(
+                { serverId: input.id, scope: "user", workspaceRoot: input.workspaceRoot },
+                harnessStoreOption.value.upsertUserServer({
                   id: input.id,
                   config: input.config,
                   authorize: authorizeHarnessConfig,
-                })
-                .pipe(
-                  Effect.andThen(mcpGatewayOption.value.invalidateServer(input.id)),
-                  Effect.andThen(mcpGatewayOption.value.getSnapshot(input.workspaceRoot)),
-                )
+                }),
+              )
             : harnessUnavailable("HarnessStore"),
         [WS_METHODS.harnessMcpRemove]: (input) =>
           Option.isSome(harnessStoreOption) && Option.isSome(mcpGatewayOption)
-            ? harnessStoreOption.value
-                .removeUserServer(input.id)
-                .pipe(
-                  Effect.andThen(mcpGatewayOption.value.invalidateServer(input.id)),
-                  Effect.andThen(mcpGatewayOption.value.getSnapshot(input.workspaceRoot)),
-                )
+            ? mcpGatewayOption.value.updateServer(
+                { serverId: input.id, scope: "user", workspaceRoot: input.workspaceRoot },
+                harnessStoreOption.value.removeUserServer(input.id),
+              )
             : harnessUnavailable("HarnessStore"),
         [WS_METHODS.harnessMcpSetEnabled]: (input) =>
           Option.isSome(harnessStoreOption) && Option.isSome(mcpGatewayOption)
@@ -3878,12 +3874,10 @@ export const layerWsRpc = (
             : harnessUnavailable("HarnessStore"),
         [WS_METHODS.harnessMcpRevokeProjectTrust]: (input) =>
           Option.isSome(harnessStoreOption) && Option.isSome(mcpGatewayOption)
-            ? harnessStoreOption.value
-                .revokeProjectTrust(input)
-                .pipe(
-                  Effect.andThen(mcpGatewayOption.value.invalidateServer(input.serverId)),
-                  Effect.andThen(mcpGatewayOption.value.getSnapshot(input.repoRoot)),
-                )
+            ? mcpGatewayOption.value.updateServer(
+                { serverId: input.serverId, scope: "project", workspaceRoot: input.repoRoot },
+                harnessStoreOption.value.revokeProjectTrust(input),
+              )
             : harnessUnavailable("HarnessStore"),
         [WS_METHODS.harnessMcpRestart]: (input) =>
           Option.match(mcpGatewayOption, {
@@ -3907,7 +3901,16 @@ export const layerWsRpc = (
         [WS_METHODS.harnessMcpOAuthComplete]: (input) =>
           Option.match(mcpGatewayOption, {
             onNone: () => harnessUnavailable("McpGateway"),
-            onSome: (gateway) => gateway.completeOAuth(input.callbackUrl),
+            onSome: (gateway) =>
+              gateway.completeOAuth(
+                input.callbackUrl,
+                input.serverId === undefined
+                  ? undefined
+                  : {
+                      serverId: input.serverId,
+                      ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
+                    },
+              ),
           }),
         [WS_METHODS.harnessMcpOAuthDisconnect]: (input) =>
           Option.match(mcpGatewayOption, {

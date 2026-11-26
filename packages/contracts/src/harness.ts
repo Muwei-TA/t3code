@@ -907,6 +907,8 @@ export type HarnessMcpRestartInput = typeof HarnessMcpRestartInput.Type;
 export const HarnessMcpOAuthStartResult = Schema.Struct({ authorizationUrl: Schema.String });
 export const HarnessMcpOAuthCompleteInput = Schema.Struct({
   callbackUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(8192)),
+  serverId: Schema.optionalKey(HarnessMcpServerId),
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
 export const HarnessMcpLogsInput = Schema.Struct({

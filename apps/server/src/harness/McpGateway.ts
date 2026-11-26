@@ -713,11 +713,20 @@ export class McpGateway extends Context.Service<
       readonly authorize?: (config: HarnessMcpServerConfig) => Effect.Effect<void, E>;
     }) => Effect.Effect<HarnessMcpSnapshot, HarnessError | E>;
     readonly invalidateServer: (serverId: HarnessMcpServerId) => Effect.Effect<void>;
+    readonly updateServer: <E>(
+      input: {
+        readonly serverId: HarnessMcpServerId;
+        readonly workspaceRoot?: string | undefined;
+        readonly scope: "user" | "project";
+      },
+      update: Effect.Effect<void, E>,
+    ) => Effect.Effect<HarnessMcpSnapshot, HarnessError | E>;
     readonly startOAuth: (
       input: HarnessMcpRestartInput,
     ) => Effect.Effect<{ readonly authorizationUrl: string }, HarnessError>;
     readonly completeOAuth: (
       callbackUrl: string,
+      expected?: HarnessMcpRestartInput,
     ) => Effect.Effect<HarnessMcpSnapshot, HarnessError>;
     readonly disconnectOAuth: (
       input: HarnessMcpRestartInput,
@@ -835,13 +844,16 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     serverId: HarnessMcpServerId,
     key: string,
     expected: PooledUpstream,
+    error: HarnessError,
   ) {
     const record = getOrCreateRecord(serverId);
     yield* record.lock.withPermits(1)(
       Effect.gen(function* () {
         if (pool.get(key) !== expected) return;
         yield* closePooled(key);
-        if (record.stateByDigest.get(expected.scopeKey)?.state === "connected") {
+        if (error.code === "auth_required") {
+          setDigestState(record, expected.scopeKey, "auth_required", error.detail);
+        } else if (record.stateByDigest.get(expected.scopeKey)?.state === "connected") {
           setDigestState(record, expected.scopeKey, "idle", null);
         }
       }),
@@ -981,6 +993,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
           ? {
               oauth: {
                 bearer: oauth.bearer(server),
+                explicitlyEnabled:
+                  server.config.transport.type !== "stdio" &&
+                  server.config.transport.oauth?.enabled === true,
                 unauthorized: (header, rejectedBearer) =>
                   oauth.unauthorized(server, header, rejectedBearer),
                 logs: record.logs,
@@ -1222,13 +1237,73 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     yield* closeAllForServer(serverId);
   });
 
+  const updateServer: McpGateway["Service"]["updateServer"] = Effect.fn("McpGateway.updateServer")(
+    function* <E>(
+      input: Parameters<McpGateway["Service"]["updateServer"]>[0],
+      update: Effect.Effect<void, E>,
+    ): Effect.fn.Return<HarnessMcpSnapshot, HarnessError | E> {
+      const { serverId, scope, workspaceRoot } = input;
+      const readServer = store
+        .resolveWorkspace(scope === "user" ? undefined : workspaceRoot)
+        .pipe(
+          Effect.map((workspace) =>
+            workspace.servers.find((server) => server.id === serverId && server.scope === scope),
+          ),
+        );
+      const record = getOrCreateRecord(serverId);
+      yield* record.lock.withPermits(1)(
+        Effect.gen(function* () {
+          const previous = yield* readServer;
+          yield* update;
+          yield* closeAllForServerUnlocked(serverId);
+          if (!oauth || !previous || !HarnessMcpOAuthService.oauthCredentialKey(previous)) return;
+          const current = yield* readServer;
+          if (
+            !current ||
+            !current.trusted ||
+            !oauth.supports(current) ||
+            HarnessMcpOAuthService.oauthCredentialKey(previous) !==
+              HarnessMcpOAuthService.oauthCredentialKey(current)
+          ) {
+            yield* oauth.clear(previous);
+          }
+        }),
+      );
+      return yield* getSnapshot(workspaceRoot);
+    },
+  );
+
   const noOAuth = Effect.fail(
     new HarnessError({ code: "invalid_config", detail: "Harness OAuth is unavailable." }),
   );
   const startOAuth = (input: HarnessMcpRestartInput) => oauth?.start(input) ?? noOAuth;
-  const completeOAuth = Effect.fn("McpGateway.completeOAuth")(function* (callbackUrl: string) {
-    const input = yield* oauth?.complete(callbackUrl) ?? noOAuth;
-    yield* invalidateServer(input.serverId);
+  const completeOAuth = Effect.fn("McpGateway.completeOAuth")(function* (
+    callbackUrl: string,
+    expected?: HarnessMcpRestartInput,
+  ) {
+    const { input, exchanged } = yield* oauth?.complete(callbackUrl, expected) ?? noOAuth;
+    if (exchanged) {
+      const record = getOrCreateRecord(input.serverId);
+      yield* record.lock.withPermits(1)(
+        Effect.gen(function* () {
+          const workspace = yield* store.resolveWorkspace(input.workspaceRoot);
+          const server = workspace.servers.find(
+            (entry) => entry.id === input.serverId && entry.effectiveEnabled,
+          );
+          if (
+            !workspace.managedPolicyAllowsHarness ||
+            !server?.effectiveEnabled ||
+            !server.trusted ||
+            !oauth?.supports(server)
+          )
+            return;
+          const key = poolKeyFor(server);
+          yield* closePooled(key);
+          setDigestState(record, runtimeScopeKey(server), "idle", null);
+          yield* ensureConnectedUnlocked(server, record).pipe(Effect.ignore);
+        }),
+      );
+    }
     return yield* getSnapshot(input.workspaceRoot);
   });
   const disconnectOAuth = Effect.fn("McpGateway.disconnectOAuth")(function* (
@@ -1765,9 +1840,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     const callRes = yield* pooled.connection
       .callTool(upstreamToolName, args)
       .pipe(
-        Effect.tapError(() =>
-          pooled.connection.isClosed()
-            ? closePooledInstance(serverId, expectedPoolKey, pooled)
+        Effect.tapError((error) =>
+          pooled.connection.isClosed() || error.code === "auth_required"
+            ? closePooledInstance(serverId, expectedPoolKey, pooled, error)
             : Effect.void,
         ),
       );
@@ -1880,7 +1955,13 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       });
     }
     pooled.lastUsedMs = yield* Clock.currentTimeMillis;
-    const raw = yield* readRes(decoded.upstreamUri);
+    const raw = yield* readRes(decoded.upstreamUri).pipe(
+      Effect.tapError((error) =>
+        pooled.connection.isClosed() || error.code === "auth_required"
+          ? closePooledInstance(server.id, poolKeyFor(server), pooled, error)
+          : Effect.void,
+      ),
+    );
     // Rewrite returned content URIs back to the canonical gateway URI so MCP App frames resolve cleanly.
     return {
       contents: raw.contents.map((item) => ({
@@ -1895,6 +1976,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     getLogs,
     restartServer,
     invalidateServer,
+    updateServer,
     startOAuth,
     completeOAuth,
     disconnectOAuth,

@@ -111,6 +111,13 @@ const make = Effect.gen(function* () {
     function* (input: ProviderMcpSignInStartInput) {
       if (input.server.startsWith("t3-harness:")) {
         const resolved = yield* resolveGateway(input);
+        const snapshot = yield* resolved.gateway.getSnapshot(resolved.input.workspaceRoot);
+        const server = snapshot.servers.find(
+          (entry) => entry.id === resolved.input.serverId && entry.effectiveEnabled,
+        );
+        if (server?.oauthStatus === "connected" && server.state !== "auth_required") {
+          return { authorizationUrl: null, signedInAt: DateTime.formatIso(yield* DateTime.now) };
+        }
         const result = yield* resolved.gateway.startOAuth(resolved.input);
         return { ...result, signedInAt: null };
       }
@@ -134,7 +141,7 @@ const make = Effect.gen(function* () {
     function* (input: ProviderMcpSignInCompleteInput) {
       if (input.server.startsWith("t3-harness:")) {
         const resolved = yield* resolveGateway(input);
-        yield* resolved.gateway.completeOAuth(input.callbackUrl);
+        yield* resolved.gateway.completeOAuth(input.callbackUrl, resolved.input);
         return { signedInAt: DateTime.formatIso(yield* DateTime.now) };
       }
       const { providerThread, mcpSignIn } = yield* resolve(input);

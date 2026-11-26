@@ -22,6 +22,7 @@ import {
   HarnessMcpServerId,
   type HarnessMcpServerView,
   type HarnessMcpSnapshot,
+  isValidHarnessHttpUrl,
   supportsHarnessMcpOAuth,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -42,6 +43,7 @@ import {
 import { useState } from "react";
 
 import type { EnvironmentPresentation } from "../../state/environments";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { ensureLocalApi } from "../../localApi";
 import { harnessEnvironment } from "../../state/harness";
 import { useEnvironmentScope } from "../../state/session";
@@ -239,6 +241,7 @@ function EnvironmentHarnessMcpSection({
   const canOperate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canReadDiagnostics = useEnvironmentScope(environmentId, AuthDiagnosticsReadScope);
   const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
+  const { copyToClipboard, isCopied } = useCopyToClipboard();
 
   const queryAtom = harnessEnvironment.listMcpQuery({
     environmentId,
@@ -340,7 +343,14 @@ function EnvironmentHarnessMcpSection({
     const address = callbackUrl.trim();
     const result =
       address.length > 0
-        ? await completeMcpOAuth({ environmentId, input: { callbackUrl: address } })
+        ? await completeMcpOAuth({
+            environmentId,
+            input: {
+              serverId: signIn.server.id,
+              callbackUrl: address,
+              ...(workspaceRoot ? { workspaceRoot } : {}),
+            },
+          })
         : await listMcp({ environmentId, input: workspaceRoot ? { workspaceRoot } : {} });
     setFinishingOAuth(false);
     if (result._tag === "Success") {
@@ -351,7 +361,8 @@ function EnvironmentHarnessMcpSection({
           (entry) =>
             entry.id === signIn.server.id &&
             entry.scope === signIn.server.scope &&
-            entry.oauthStatus === "connected",
+            entry.oauthStatus === "connected" &&
+            entry.state !== "auth_required",
         )
       ) {
         setSignIn(null);
@@ -900,14 +911,24 @@ function EnvironmentHarnessMcpSection({
           </DialogHeader>
           <DialogPanel>
             <div className="grid gap-3">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  if (signIn) void ensureLocalApi().shell.openExternal(signIn.url);
-                }}
-              >
-                <T>Open sign-in page</T>
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (signIn) void ensureLocalApi().shell.openExternal(signIn.url);
+                  }}
+                >
+                  <T>Open sign-in page</T>
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    if (signIn) copyToClipboard(signIn.url);
+                  }}
+                >
+                  {isCopied ? <T>Copied</T> : <T>Copy link</T>}
+                </Button>
+              </div>
               <Input
                 aria-label={gt("OAuth callback address")}
                 value={callbackUrl}
@@ -1291,8 +1312,13 @@ function McpServerEditorForm({
       };
     } else {
       const trimmedUrl = url.trim();
-      if (!/^https?:\/\/[^\s/]+/i.test(trimmedUrl)) {
+      if (!isValidHarnessHttpUrl(trimmedUrl)) {
         setValidationError(gt("Enter a valid http:// or https:// MCP endpoint URL."));
+        return;
+      }
+      const issuer = oauthIssuer.trim();
+      if (issuer && !isValidHarnessHttpUrl(issuer)) {
+        setValidationError(gt("Enter a valid http:// or https:// OAuth authorization server URL."));
         return;
       }
       const parsedHeaders = parseKeyValueLines(headersText);
@@ -1301,7 +1327,7 @@ function McpServerEditorForm({
         ...(initialOAuth?.enabled === undefined ? {} : { enabled: initialOAuth.enabled }),
         ...(oauthClientId.trim() ? { clientId: oauthClientId.trim() } : {}),
         ...(scopes.length > 0 ? { scopes } : {}),
-        ...(oauthIssuer.trim() ? { authorizationServerUrl: oauthIssuer.trim() } : {}),
+        ...(issuer ? { authorizationServerUrl: issuer } : {}),
       };
       transport = {
         type: transportType,

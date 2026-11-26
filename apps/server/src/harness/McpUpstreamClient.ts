@@ -37,6 +37,7 @@ const MAX_RING_LOG_LINES = 200;
 
 interface UpstreamOAuth {
   readonly bearer: Effect.Effect<string | undefined, HarnessError>;
+  readonly explicitlyEnabled?: boolean;
   readonly unauthorized: (
     header: string | null,
     rejectedBearer: string | undefined,
@@ -697,6 +698,7 @@ const fetchSameOriginOnly = Effect.fn("McpUpstreamClient.fetchSameOriginOnly")(f
       input.oauth !== undefined &&
       input.init.method !== "DELETE" &&
       (oauthBearer !== undefined ||
+        input.oauth.explicitlyEnabled ||
         /^\s*Bearer\b/i.test(response.headers.get("www-authenticate") ?? ""))
     ) {
       const challenge = response.headers.get("www-authenticate");
