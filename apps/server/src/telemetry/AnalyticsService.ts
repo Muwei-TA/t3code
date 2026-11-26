@@ -2,7 +2,7 @@
 // T3 ingest retains events and forwards to PostHog; UUIDs deduplicate retries there.
 import * as NodeCrypto from "node:crypto";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import type { ClientOs } from "@t3tools/contracts";
+import type { ClientOs, ProductTelemetryStatus } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -16,6 +16,8 @@ import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import * as Result from "effect/Result";
 import * as Semaphore from "effect/Semaphore";
+import type * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -25,6 +27,7 @@ import * as ServerConfig from "../config.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
+import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import { getTelemetryIdentity, type TelemetryOwner } from "./Identify.ts";
 
 interface BufferedAnalyticsEvent {
@@ -99,6 +102,12 @@ export class AnalyticsService extends Context.Service<
     ) => Effect.Effect<boolean>;
 
     readonly flush: Effect.Effect<void>;
+    readonly productTelemetryStatus: Effect.Effect<ProductTelemetryStatus>;
+    readonly subscribeProductTelemetryStatus: Effect.Effect<
+      Stream.Stream<ProductTelemetryStatus>,
+      never,
+      Scope.Scope
+    >;
 
     /**
      * Records `install.owner_observed` for each owner of this install that the
@@ -132,19 +141,26 @@ export const make = Effect.gen(function* () {
   const telemetryConfig = yield* TelemetryEnvConfig;
   const wsl = Option.exists(telemetryConfig.wslDistroName, (value) => value.trim().length > 0);
   const hostEnvironment = yield* HostProcess.Environment;
+  const desktopTelemetry = yield* Effect.serviceOption(
+    DesktopTelemetryReceiver.DesktopTelemetryReceiver,
+  );
   const awaitingShellConsent = hostEnvironment.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING === "1";
   // A managed policy can switch analytics off over the environment, never on.
   const policyAllows =
     ManagedPolicy.deniedBy(yield* ManagedPolicy.ManagedPolicy, "telemetry") === undefined;
   const settings = yield* ServerSettingsService;
   // A cached PATH does not establish consent from the current login shell.
-  const telemetryOverride = Effect.suspend((): Effect.Effect<Option.Option<boolean>> => {
-    if (!policyAllows || !Option.getOrElse(telemetryConfig.enabled, () => true)) {
-      return Effect.succeedSome(false);
+  const productTelemetryStatus = Effect.suspend((): Effect.Effect<ProductTelemetryStatus> => {
+    if (Option.contains(telemetryConfig.enabled, false) || !awaitingShellConsent) {
+      return Effect.succeed(
+        Option.match(telemetryConfig.enabled, {
+          onNone: () => ({}),
+          onSome: (envOverride) => ({ envOverride }),
+        }),
+      );
     }
-    if (!awaitingShellConsent) return Effect.succeed(telemetryConfig.enabled);
     if (hostEnvironment.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING === "1") {
-      return Effect.succeedSome(false);
+      return Effect.succeed({ shellDiscoveryPending: true });
     }
     const preference = hostEnvironment.T3CODE_TELEMETRY_ENABLED;
     return Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(
@@ -155,17 +171,28 @@ export const make = Effect.gen(function* () {
           env: preference === undefined ? {} : { T3CODE_TELEMETRY_ENABLED: preference },
         }),
       ),
-      Effect.orElseSucceed(() => Option.some(false)),
+      Effect.map(Option.match({ onNone: () => ({}), onSome: (envOverride) => ({ envOverride }) })),
+      Effect.orElseSucceed(() => ({ envOverride: false })),
     );
   });
-  const consentEpoch = telemetryOverride.pipe(
-    Effect.flatMap(
-      Option.match({
-        onSome: (enabled) => Effect.succeed(enabled ? -1 : null),
-        onNone: () => settings.getProductTelemetryConsent.pipe(Effect.orElseSucceed(() => null)),
-      }),
-    ),
-  );
+  const subscribeProductTelemetryStatus = Option.match(desktopTelemetry, {
+    onNone: () => Effect.succeed(Stream.empty),
+    onSome: (receiver) =>
+      receiver.subscribeShellEnvironmentChanges.pipe(
+        Effect.map(Stream.mapEffect(() => productTelemetryStatus)),
+      ),
+  });
+  const consentEpoch = policyAllows
+    ? productTelemetryStatus.pipe(
+        Effect.flatMap(({ envOverride, shellDiscoveryPending }) =>
+          shellDiscoveryPending || envOverride === false
+            ? Effect.succeed(null)
+            : envOverride === true
+              ? Effect.succeed(-1)
+              : settings.getProductTelemetryConsent.pipe(Effect.orElseSucceed(() => null)),
+        ),
+      )
+    : Effect.succeed(null);
   const httpClient = yield* HttpClient.HttpClient;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const { distinctId, installId } = yield* getTelemetryIdentity;
@@ -421,7 +448,13 @@ export const make = Effect.gen(function* () {
     flush.pipe(Effect.timeout(SHUTDOWN_FLUSH_TIMEOUT), Effect.ignore),
   );
 
-  return AnalyticsService.of({ record, flush, recordOwners });
+  return AnalyticsService.of({
+    record,
+    flush,
+    recordOwners,
+    productTelemetryStatus,
+    subscribeProductTelemetryStatus,
+  });
 });
 
 export const layer = Layer.effect(AnalyticsService, make);

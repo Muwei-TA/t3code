@@ -59,7 +59,7 @@ import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { Headers, HttpRouter, HttpServer } from "effect/http";
+import { Headers, HttpRouter, HttpServer, HttpServerRequest } from "effect/http";
 import * as Context from "effect/Context";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
@@ -191,12 +191,29 @@ import * as ProjectEnrichment from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import {
   layerWsRpc,
+  readClientAnalyticsProps,
   resolveOpenDiscoveryForConfig,
   subscribeOrchestrationV2Shell,
   subscribeOrchestrationV2Thread,
   WS_RPC_SERVER_OPTIONS,
   withLateConfigDiscovery,
 } from "./ws.ts";
+
+it.each([
+  { version: "1.2.3", accepted: true },
+  { version: "1.2.3-beta.2+build.4", accepted: true },
+  { version: "workstation.local", accepted: false },
+  { version: "working from home", accepted: false },
+  { version: "1.2.3 ", accepted: false },
+  { version: "1.2.3-rc..1", accepted: false },
+  { version: `1.2.3+${"a".repeat(59)}`, accepted: false },
+])("validates client app version $version", ({ version, accepted }) => {
+  const url = new URL("http://localhost/ws");
+  url.searchParams.set("clientAppVersion", version);
+  const props = readClientAnalyticsProps(HttpServerRequest.fromWeb(new Request(url)));
+  assert.equal(props.appVersion, accepted ? version : undefined);
+  assert.equal(props.clientAppVersion, accepted ? version : undefined);
+});
 
 const snapshotConfig = (fields: Partial<ServerConfig>) =>
   ({ availableEditors: [], settings: {}, ...fields }) as unknown as ServerConfig;
@@ -207,34 +224,50 @@ const settingsUpdated = (settings: object): ServerConfigStreamEvent => ({
   payload: { settings: settings as ServerConfig["settings"] },
 });
 
-it.effect("resends late editors without rolling back updates already sent", () =>
+it.effect("publishes late telemetry and editor discovery without rolling back settings", () =>
   Effect.gen(function* () {
     const settingsSent = yield* Deferred.make<void>();
+    const telemetrySent = yield* Deferred.make<void>();
     const events = yield* withLateConfigDiscovery(
-      snapshotConfig({ settings: { enableProviderUpdateChecks: true } as never }),
+      snapshotConfig({
+        settings: { enableProviderUpdateChecks: true } as never,
+        productTelemetry: { shellDiscoveryPending: true },
+      }),
       Stream.make(settingsUpdated({ enableProviderUpdateChecks: false })),
       {
         resolveAvailableEditors: () => Effect.succeed(["file-manager"]),
         resolveFileManagerRevealKind: () =>
-          Deferred.await(settingsSent).pipe(Effect.as("file-explorer" as const)),
+          Deferred.await(telemetrySent).pipe(Effect.as("file-explorer" as const)),
       },
       { resolveTargets: () => Effect.succeed([]) },
       { resolve: () => Effect.succeed([]) },
+      Stream.fromEffect(Deferred.await(settingsSent).pipe(Effect.as({ envOverride: false }))),
     ).pipe(
       Stream.tap((event) =>
-        event.type === "settingsUpdated" ? Deferred.succeed(settingsSent, undefined) : Effect.void,
+        event.type === "settingsUpdated"
+          ? Deferred.succeed(
+              event.payload.productTelemetry === undefined ? settingsSent : telemetrySent,
+              undefined,
+            )
+          : Effect.void,
       ),
       Stream.runCollect,
     );
 
-    const [first, second] = Array.from(events);
-    assert.equal(events.length, 2);
+    const [first, second, third] = Array.from(events);
+    assert.equal(events.length, 3);
     assert.equal(first?.type, "settingsUpdated");
-    assert.equal(second?.type, "snapshot");
-    if (second?.type === "snapshot") {
-      assert.deepEqual(second.config.availableEditors, ["file-manager"]);
-      assert.equal(second.config.shellRevealInFileManagerKind, "file-explorer");
-      assert.deepEqual(second.config.settings, { enableProviderUpdateChecks: false } as never);
+    assert.equal(second?.type, "settingsUpdated");
+    if (second?.type === "settingsUpdated") {
+      assert.deepEqual(second.payload.productTelemetry, { envOverride: false });
+      assert.deepEqual(second.payload.settings, { enableProviderUpdateChecks: false } as never);
+    }
+    assert.equal(third?.type, "snapshot");
+    if (third?.type === "snapshot") {
+      assert.deepEqual(third.config.availableEditors, ["file-manager"]);
+      assert.equal(third.config.shellRevealInFileManagerKind, "file-explorer");
+      assert.deepEqual(third.config.settings, { enableProviderUpdateChecks: false } as never);
+      assert.deepEqual(third.config.productTelemetry, { envOverride: false });
     }
   }),
 );
@@ -840,7 +873,10 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(AcpRegistrySessions.AcpRegistrySessions)({}),
   Layer.mock(AgentSessionImporter.AgentSessionImporter)({}),
   Layer.mock(AgentSessionScanner.AgentSessionScanner)({}),
-  Layer.mock(AnalyticsService.AnalyticsService)({}),
+  Layer.mock(AnalyticsService.AnalyticsService)({
+    productTelemetryStatus: Effect.succeed({}),
+    subscribeProductTelemetryStatus: Effect.succeed(Stream.empty),
+  }),
   Layer.mock(AntigravityInstallation.AntigravityInstallation)({ managedDirectory: "/unused" }),
   Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
   Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({}),

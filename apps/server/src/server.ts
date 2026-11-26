@@ -891,6 +891,7 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
     AnalyticsService.layer.pipe(
       Layer.provide(layerServerSettings),
       Layer.provide(ServerSecretStore.layer),
+      Layer.provide(layerDesktopTelemetryReceiver),
     ),
   ),
   Layer.provideMerge(ExternalLauncher.layer),

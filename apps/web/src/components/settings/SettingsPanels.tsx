@@ -100,6 +100,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { ScopedSwitch } from "./ScopedSwitch";
+import { supportsProductTelemetrySettings } from "./useAvailableSettingsSearchItems";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -849,47 +850,78 @@ function AutoSettleDaysInput({
 function PrivacySettings() {
   const gt = useGT();
   const setting = useSearchableSetting();
-  const { scope, connectedEnvironments } = useSettingsScope();
-  const settings = useScopedSettings();
-  const updateSettings = useUpdateScopedSettings();
+  const { scope, connectedEnvironments, targets } = useSettingsScope();
+  const { environments } = useEnvironments();
+  const updateSettings = useUpdateScopedSettings(
+    (environment) => environment.serverConfig?.managedPolicy?.limits?.telemetry !== false,
+  );
   const canWrite = useScopedSettingsWriteAllowed();
-  const mixed = useScopedSettingsMixed(["productTelemetryEnabled"]);
   const relayStatus = useSyncExternalStore(
     subscribeRelayTracingStatus,
     getRelayTracingStatus,
     getRelayTracingStatus,
   );
   const relayConfig = resolveRelayTracingConfig();
-  const productAvailable =
-    scope.kind !== "project" &&
-    scope.kind !== "checkout" &&
+  const productVisible = environments.some(supportsProductTelemetrySettings);
+  const projectScope = scope.kind === "project" || scope.kind === "checkout";
+  const selectedMachinesSupportProductTelemetry =
     connectedEnvironments.length > 0 &&
-    connectedEnvironments.every(
-      (environment) =>
-        environment.serverConfig?.environment.capabilities.productTelemetrySettings === true,
-    );
-  const policyDisablesTelemetry = connectedEnvironments.some(
-    (environment) => environment.serverConfig?.managedPolicy?.limits?.telemetry === false,
-  );
-  if (!productAvailable && relayConfig === null) return null;
+    connectedEnvironments.every(supportsProductTelemetrySettings);
+  const targetSettings = new Map(targets.map((target) => [target.environmentId, target.settings]));
+  const telemetryStates = connectedEnvironments.map(({ environmentId, serverConfig }) => {
+    const managed = serverConfig?.managedPolicy?.limits?.telemetry === false;
+    const { envOverride, shellDiscoveryPending } = serverConfig?.productTelemetry ?? {};
+    const enabled =
+      !managed &&
+      !shellDiscoveryPending &&
+      (envOverride ??
+        targetSettings.get(environmentId)?.productTelemetryEnabled ??
+        serverConfig?.settings.productTelemetryEnabled ??
+        false);
+    return { managed, envOverride, shellDiscoveryPending, enabled };
+  });
+  const enabled = telemetryStates.some((state) => state.enabled);
+  const mixed = enabled && telemetryStates.some((state) => !state.enabled);
+  const envOverride = telemetryStates.some((state) => state.envOverride !== undefined);
+  const shellDiscoveryPending = telemetryStates.some((state) => state.shellDiscoveryPending);
+  const allManaged = telemetryStates.every((state) => state.managed);
+  if (!productVisible && relayConfig === null) return null;
   return (
     <SettingsSection id="privacy" title={gt("Privacy")}>
-      {productAvailable ? (
+      {productVisible ? (
         <SettingsRow
           serverScoped
+          mixed={mixed}
           {...setting("product-usage-data")}
-          description={
-            policyDisablesTelemetry
-              ? gt("An administrator has disabled product usage data on a selected machine.")
-              : gt(
-                  "Send usage events from the selected machines. An explicit T3CODE_TELEMETRY_ENABLED value takes precedence.",
-                )
+          description={gt("Send usage events from the selected machines.")}
+          status={
+            projectScope
+              ? gt("Select a machine or All environments to change this setting.")
+              : !selectedMachinesSupportProductTelemetry
+                ? gt("All selected connected machines must support product usage settings.")
+                : envOverride
+                  ? gt("T3CODE_TELEMETRY_ENABLED is explicitly set on a selected machine.")
+                  : shellDiscoveryPending
+                    ? gt("Checking the shell environment on a selected machine.")
+                    : telemetryStates.some((state) => state.managed)
+                      ? gt(
+                          "An administrator has disabled product usage data on a selected machine.",
+                        )
+                      : undefined
           }
           control={
             <Switch
               aria-label={gt("Send product usage data")}
-              checked={!policyDisablesTelemetry && !mixed && settings.productTelemetryEnabled}
-              disabled={!canWrite || policyDisablesTelemetry}
+              checked={enabled}
+              mixed={mixed}
+              disabled={
+                !canWrite ||
+                projectScope ||
+                !selectedMachinesSupportProductTelemetry ||
+                allManaged ||
+                envOverride ||
+                shellDiscoveryPending
+              }
               onCheckedChange={(value) => updateSettings({ productTelemetryEnabled: value })}
             />
           }

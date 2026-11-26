@@ -266,19 +266,36 @@ function ProductUsageSettings() {
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: true });
   if (supported.length === 0) return null;
   return (
-    <SettingsSection
-      title={gt("Product usage data")}
-      footer={gt("An explicit T3CODE_TELEMETRY_ENABLED value on the machine takes precedence.")}
-    >
+    <SettingsSection title={gt("Product usage data")}>
       {supported.map((environment) => {
-        const managed = environment.serverConfig?.managedPolicy?.limits?.telemetry === false;
+        const { serverConfig } = environment;
+        const managed = serverConfig?.managedPolicy?.limits?.telemetry === false;
+        const { envOverride, shellDiscoveryPending } = serverConfig?.productTelemetry ?? {};
         return (
           <SettingsSwitchRow
             key={environment.environmentId}
             icon="tray.and.arrow.up"
             label={environment.label}
-            disabled={managed || !writable.has(environment.environmentId)}
-            value={!managed && environment.serverConfig?.settings.productTelemetryEnabled === true}
+            subtitle={
+              managed
+                ? gt("An administrator has disabled product usage data.")
+                : envOverride !== undefined
+                  ? gt("Controlled by T3CODE_TELEMETRY_ENABLED on this machine.")
+                  : shellDiscoveryPending
+                    ? gt("Checking this machine’s shell environment.")
+                    : undefined
+            }
+            disabled={
+              managed ||
+              envOverride !== undefined ||
+              shellDiscoveryPending ||
+              !writable.has(environment.environmentId)
+            }
+            value={
+              !managed &&
+              !shellDiscoveryPending &&
+              (envOverride ?? serverConfig?.settings.productTelemetryEnabled ?? false)
+            }
             onValueChange={(value) =>
               void updateSettings({
                 environmentId: environment.environmentId,

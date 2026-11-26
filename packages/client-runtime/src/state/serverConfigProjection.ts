@@ -153,11 +153,20 @@ export function applyServerConfigProjection(
     case "settingsUpdated":
       return Option.map(current, (projection) => {
         const settings = reuseUnchanged(projection.config.settings, event.payload.settings);
+        const productTelemetry = reuseUnchanged(
+          projection.config.productTelemetry,
+          event.payload.productTelemetry ?? projection.config.productTelemetry,
+        );
         return {
           config:
-            settings === projection.config.settings
+            settings === projection.config.settings &&
+            productTelemetry === projection.config.productTelemetry
               ? projection.config
-              : { ...projection.config, settings },
+              : {
+                  ...projection.config,
+                  settings,
+                  ...(productTelemetry === undefined ? {} : { productTelemetry }),
+                },
           latestEvent: event,
           source: "live",
         };

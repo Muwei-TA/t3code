@@ -8,6 +8,7 @@ import { isElectron } from "~/env";
 import { isLocalEnvironmentDisabled } from "~/localEnvironment";
 import { desktopWslStateAtom } from "~/state/desktopWslState";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
+import type { EnvironmentPresentation } from "~/state/environments";
 import { usePeerLinkHosts } from "~/state/peerLinks";
 import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope } from "~/state/session";
@@ -17,6 +18,13 @@ import {
   filterAvailableSettingsSearchItems,
   getThreadAutoSettlementSearchAvailability,
 } from "./settingsSearch";
+
+export function supportsProductTelemetrySettings(environment: EnvironmentPresentation): boolean {
+  return (
+    environment.connection.phase === "connected" &&
+    environment.serverConfig?.environment.capabilities.productTelemetrySettings === true
+  );
+}
 
 /** Any environment whose server enables secret providers; gates the Secrets page, nav and search. */
 export function useHasSecretProvidersEnvironment() {
@@ -52,11 +60,7 @@ export function useAvailableSettingsSearchItems() {
         environment.serverConfig?.environment.capabilities.agentFeedback === true,
     ) === true;
   const hasProductTelemetrySettingsEnvironment =
-    environments.some(
-      (environment) =>
-        environment.connection.phase === "connected" &&
-        environment.serverConfig?.environment.capabilities.productTelemetrySettings === true,
-    ) === true;
+    environments.some(supportsProductTelemetrySettings) === true;
   const hasTextGeneratorsEnvironment =
     environments.some(
       (environment) =>

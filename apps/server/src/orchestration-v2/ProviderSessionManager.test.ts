@@ -5,6 +5,8 @@ import { assert, it } from "@effect/vitest";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import {
   EnvironmentId,
+  HarnessMcpServerId,
+  type HarnessMcpServerConfig,
   MessageId,
   type ModelSelection,
   type OrchestrationV2AppThread,
@@ -46,6 +48,11 @@ import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as McpGateway from "../harness/McpGateway.ts";
+import * as HarnessStore from "../harness/HarnessStore.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import * as ServerConfig from "../config.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -5983,6 +5990,92 @@ it.effect(
             capabilities: ExclusiveCapabilities,
             mcpGatewayLayer,
           }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "reopens an idle session through T3 Gateway when a native MCP server gains a tool filter",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const mcpConfigs = yield* Ref.make<
+        ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+      >([]);
+      const configLayer = ServerConfig.layerTest(process.cwd(), {
+        prefix: "t3-native-mcp-filter-",
+      });
+      const storeLayer = HarnessStore.layer.pipe(
+        Layer.provide(Layer.mergeAll(configLayer, ManagedPolicy.layerTest())),
+        Layer.provide(NodeServices.layer),
+        Layer.orDie,
+      );
+      const mcpGatewayLayer = McpGateway.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            storeLayer,
+            Layer.mock(SecretResolver.SecretResolver)({}),
+            Layer.mock(ServerSecretStore.ServerSecretStore)({}),
+          ),
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const store = yield* HarnessStore.HarnessStore;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const mcpRegistry = yield* McpSessionRegistry.McpSessionRegistry;
+        const threadId = ThreadId.make("thread-native-mcp-filter");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({ idAllocator, threadId, now: yield* DateTime.now }),
+          ],
+        });
+
+        const id = HarnessMcpServerId.make("issue_tracker");
+        const config = {
+          enabled: true,
+          transport: { type: "http", url: "https://issues.example.test/mcp" },
+          injectionMode: "native",
+          approvalPolicy: "auto-read",
+        } satisfies HarnessMcpServerConfig;
+        yield* store.upsertUserServer({ id, config });
+        const openInput = { threadId, providerSessionId, modelSelection, runtimePolicy };
+        const first = yield* manager.open(openInput);
+        const [native] = yield* Ref.get(mcpConfigs);
+        assert.deepEqual(native?.nativeMcpServers, [{ id, ...config.transport }]);
+        assert.isUndefined(native?.harnessEndpoint);
+        const nativeToken = native!.authorizationHeader.replace(/^Bearer\s+/, "");
+        assert.isDefined(yield* mcpRegistry.resolve(nativeToken));
+
+        yield* store.upsertUserServer({
+          id,
+          config: { ...config, allowedTools: ["search_issues"] },
+        });
+        const next = yield* manager.open(openInput);
+        assert.notStrictEqual(next, first);
+        assert.include(yield* Ref.get(state), { openCount: 2, closeCount: 1 });
+        const [, gateway] = yield* Ref.get(mcpConfigs);
+        assert.isDefined(gateway?.harnessEndpoint);
+        assert.isTrue(gateway?.capabilities?.has("harness"));
+        assert.isUndefined(gateway?.nativeMcpServers);
+        assert.isUndefined(yield* mcpRegistry.resolve(nativeToken));
+        const gatewayToken = gateway!.authorizationHeader.replace(/^Bearer\s+/, "");
+        assert.isDefined(yield* mcpRegistry.resolve(gatewayToken));
+
+        assert.strictEqual(yield* manager.open(openInput), next);
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            storeLayer,
+            layerTest({ state, mcpConfigs, capabilities: ExclusiveCapabilities, mcpGatewayLayer }),
+          ),
         ),
       );
     }),

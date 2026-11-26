@@ -710,6 +710,12 @@ export const ServerFeatureFlags = Schema.Struct({
 });
 export type ServerFeatureFlags = typeof ServerFeatureFlags.Type;
 
+const ProductTelemetryStatus = Schema.Struct({
+  envOverride: Schema.optionalKey(Schema.Boolean),
+  shellDiscoveryPending: Schema.optionalKey(Schema.Literal(true)),
+});
+export type ProductTelemetryStatus = typeof ProductTelemetryStatus.Type;
+
 export const ServerConfig = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   auth: ServerAuthDescriptor,
@@ -726,6 +732,7 @@ export const ServerConfig = Schema.Struct({
   directEndpoints: Schema.optionalKey(ForwardCompatibleArray(ServerDirectEndpoint)),
   observability: ServerObservability,
   settings: ServerSettings,
+  productTelemetry: Schema.optionalKey(ProductTelemetryStatus),
   /** Present when an administrator's policy file manages this environment. */
   managedPolicy: Schema.optionalKey(ManagedPolicySummary),
   shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
@@ -842,6 +849,7 @@ export type ServerConfigProviderStatusDeltasPayload =
 
 export const ServerConfigSettingsUpdatedPayload = Schema.Struct({
   settings: ServerSettings,
+  productTelemetry: Schema.optionalKey(ProductTelemetryStatus),
 });
 export type ServerConfigSettingsUpdatedPayload = typeof ServerConfigSettingsUpdatedPayload.Type;
 

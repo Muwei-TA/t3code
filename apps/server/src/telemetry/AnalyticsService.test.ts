@@ -267,6 +267,7 @@ it.layer(testLayer)("AnalyticsService test", (it) => {
           const analytics = yield* AnalyticsService.AnalyticsService;
           const settings = yield* ServerSettingsService;
           yield* settings.updateSettings({ productTelemetryEnabled: !enabled });
+          assert.deepEqual(yield* analytics.productTelemetryStatus, { envOverride: enabled });
           assert.equal(yield* analytics.record("test.override"), enabled);
           yield* analytics.flush;
         }).pipe(Effect.provide(analyticsLayerWith(client, undefined, enabled)));
@@ -283,13 +284,18 @@ it.layer(testLayer)("AnalyticsService test", (it) => {
         respondWithStatus(204),
         Effect.gen(function* () {
           const analytics = yield* AnalyticsService.AnalyticsService;
+          assert.deepEqual(yield* analytics.productTelemetryStatus, {
+            shellDiscoveryPending: true,
+          });
           yield* analytics.record("test.before-discovery");
           yield* analytics.flush;
           env.T3CODE_TELEMETRY_ENABLED = "false";
           delete env.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING;
+          assert.deepEqual(yield* analytics.productTelemetryStatus, { envOverride: false });
           yield* analytics.record("test.opted-out");
           yield* analytics.flush;
           env.T3CODE_TELEMETRY_ENABLED = "true";
+          assert.deepEqual(yield* analytics.productTelemetryStatus, { envOverride: true });
           yield* analytics.record("test.allowed");
           yield* analytics.flush;
         }),
