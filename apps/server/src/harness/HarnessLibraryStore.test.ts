@@ -8,6 +8,7 @@ import {
   type ManagedPolicyLimits,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -218,6 +219,30 @@ describe("HarnessLibraryStore", () => {
           expect(yield* fs.exists(path.join(codexRoot!, "audit-sql", "SKILL.md"))).toBe(true);
           expect(yield* fs.exists(path.join(codexRoot!, "audit-sql", "checklist.md"))).toBe(true);
           expect(yield* lib.materializeCodexSkillRoot({ skills })).toBe(codexRoot);
+
+          const checklist = path.join(auditSkillDir, "checklist.md");
+          yield* fs.writeFileString(checklist, "- Verify backups\n");
+          const changedCodexRoot = yield* lib.materializeCodexSkillRoot({ skills });
+          const changedMountDir = yield* lib.materializeClaudePluginDir({ skills });
+          expect(changedCodexRoot).not.toBe(codexRoot);
+          expect(changedMountDir).not.toBe(mountDir);
+          expect(
+            yield* fs.readFileString(path.join(changedCodexRoot!, "audit-sql", "checklist.md")),
+          ).toBe("- Verify backups\n");
+
+          if ((yield* HostProcess.Platform) !== "win32") {
+            yield* fs.chmod(checklist, 0o700);
+            const executableRoot = yield* lib.materializeCodexSkillRoot({ skills });
+            expect(executableRoot).not.toBe(changedCodexRoot);
+            const info = yield* fs.stat(path.join(executableRoot!, "audit-sql", "checklist.md"));
+            expect(info.mode & 0o111).toBe(0o100);
+          }
+
+          yield* fs.remove(checklist);
+          const removedCodexRoot = yield* lib.materializeCodexSkillRoot({ skills });
+          expect(yield* fs.exists(path.join(removedCodexRoot!, "audit-sql", "checklist.md"))).toBe(
+            false,
+          );
 
           // 4. Rules CRUD + t3.json disabledRules
           yield* lib.upsertUserRule({

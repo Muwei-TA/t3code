@@ -160,12 +160,6 @@ function utf8Bytes(text: string): typeof NonNegativeInt.Type {
   return NonNegativeInt.make(Buffer.byteLength(text, "utf8"));
 }
 
-function serializePluginSkillsDigest(skills: ReadonlyArray<HarnessSkillEntry>): string {
-  return sha256Hex(
-    JSON.stringify(skills.map((skill) => [skill.id, skill.sourcePath, skill.contentDigest])),
-  ).slice(0, 16);
-}
-
 const CLAUDE_HARNESS_PLUGIN_MANIFEST = `${JSON.stringify(
   {
     name: "t3-harness",
@@ -1352,13 +1346,56 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const readMountCompanion = Effect.fn("HarnessLibraryStore.readMountCompanion")(function* (
+    skillDir: string,
+    relPath: string,
+  ) {
+    const contained = yield* resolveContainedPath(skillDir, path.join(skillDir, relPath));
+    if (contained === null) return undefined;
+    const info = yield* fs.stat(contained).pipe(Effect.option);
+    if (
+      Option.isNone(info) ||
+      info.value.type !== "File" ||
+      Number(info.value.size) > MAX_READ_BYTES
+    ) {
+      return undefined;
+    }
+    const bytes = yield* fs.readFile(contained).pipe(Effect.option);
+    if (Option.isNone(bytes) || bytes.value.byteLength > MAX_READ_BYTES) return undefined;
+    return {
+      bytes: bytes.value,
+      digest: NodeCrypto.createHash("sha256").update(bytes.value).digest("hex"),
+      executable: info.value.mode & 0o111,
+    };
+  });
+
   const materializeSkillMount = Effect.fn("HarnessLibraryStore.materializeSkillMount")(function* (
     kind: "claude-plugin" | "codex-skills",
     skills: ReadonlyArray<HarnessSkillEntry>,
   ) {
     if (skills.length === 0) return undefined;
     const sorted = [...skills].sort((a, b) => a.id.localeCompare(b.id));
-    const digest = serializePluginSkillsDigest(sorted);
+    const planned = yield* Effect.forEach(sorted, (skill) =>
+      Effect.gen(function* () {
+        const sourceDir = path.dirname(skill.sourcePath);
+        const companions: Array<{ relPath: string; digest: string; executable: number }> = [];
+        for (const relPath of yield* listCompanionFiles(sourceDir)) {
+          const file = yield* readMountCompanion(sourceDir, relPath);
+          if (file) companions.push({ relPath, digest: file.digest, executable: file.executable });
+        }
+        return { skill, sourceDir, companions };
+      }),
+    );
+    const fingerprint = yield* encodeSnapshotFingerprint(
+      planned.map(({ skill, companions }) => [
+        skill.id,
+        skill.sourcePath,
+        skill.contentDigest,
+        companions,
+      ]),
+    ).pipe(Effect.option);
+    if (Option.isNone(fingerprint)) return undefined;
+    const digest = sha256Hex(fingerprint.value).slice(0, 16);
     const mountName = `${kind}-${digest}`;
     issuedMounts.add(mountName);
     const mountDir = path.join(mountsRoot, mountName);
@@ -1389,39 +1426,28 @@ const make = Effect.gen(function* () {
         const stage = Effect.gen(function* () {
           yield* fs.makeDirectory(stageDir, { mode: 0o700 });
           const skillRoot = kind === "claude-plugin" ? path.join(stageDir, "skills") : stageDir;
-          for (const skill of sorted) {
+          for (const { skill, sourceDir, companions } of planned) {
             const targetSkillDir = path.join(skillRoot, skill.id);
-            const sourceSkillDir = path.dirname(skill.sourcePath);
-            const raw = yield* readBoundedContainedFile(sourceSkillDir, skill.sourcePath);
+            const raw = yield* readBoundedContainedFile(sourceDir, skill.sourcePath);
             if (Option.isNone(raw) || sha256Hex(raw.value.text) !== skill.contentDigest)
               return false;
             yield* fs.makeDirectory(targetSkillDir, { recursive: true });
             yield* fs.writeFileString(path.join(targetSkillDir, "SKILL.md"), raw.value.text);
 
-            // Copy bounded non-escaping companion files (e.g., references/, scripts/, checklists)
-            // alongside SKILL.md so Claude plugin-dir skills have full relative asset access.
-            const companions = yield* listCompanionFiles(sourceSkillDir);
-            for (const relPath of companions) {
-              const srcFile = path.join(sourceSkillDir, relPath);
-              const contained = yield* resolveContainedPath(sourceSkillDir, srcFile);
-              if (contained === null) continue;
-              const info = yield* fs.stat(contained).pipe(Effect.option);
+            // Keep the staged files consistent with the digest if the skill changes mid-copy.
+            for (const companion of companions) {
+              const file = yield* readMountCompanion(sourceDir, companion.relPath);
               if (
-                Option.isNone(info) ||
-                info.value.type !== "File" ||
-                Number(info.value.size) > MAX_READ_BYTES
-              )
-                continue;
-              const destFile = path.join(targetSkillDir, relPath);
-              const fileBytes = yield* fs.readFile(contained).pipe(
-                Effect.asSome,
-                Effect.orElseSucceed(() => Option.none<Uint8Array>()),
-              );
-              if (Option.isNone(fileBytes) || fileBytes.value.byteLength > MAX_READ_BYTES) {
-                continue;
+                !file ||
+                file.digest !== companion.digest ||
+                file.executable !== companion.executable
+              ) {
+                return false;
               }
+              const destFile = path.join(targetSkillDir, companion.relPath);
               yield* fs.makeDirectory(path.dirname(destFile), { recursive: true });
-              yield* fs.writeFile(destFile, fileBytes.value);
+              yield* fs.writeFile(destFile, file.bytes, { mode: 0o600 });
+              if (file.executable !== 0) yield* fs.chmod(destFile, 0o600 | file.executable);
             }
           }
           const marker = path.join(stageDir, path.relative(mountDir, readyPath));
