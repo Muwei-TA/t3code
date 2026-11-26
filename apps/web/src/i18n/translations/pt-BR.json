@@ -6279,8 +6279,8 @@
   ],
   "216ab7514aea1d61": "Começar sem agente",
   "501ce2d99da8bfd1": "Configure um agente para começar.",
-  "71f3822326109c8e": [
-    "O T3 Code coleta dados de uso anônimos para melhorar o app. Para recusar, consulte a",
+  "dc099484b76a9526": [
+    "O T3 Code só envia dados de uso anônimos quando habilitado. Consulte a",
     " ",
     {
       "t": "a",
@@ -10535,7 +10535,7 @@
   "c424bee294b9f778": "Este ambiente é gerenciado por {organization}. Algumas configurações e recursos seguem a política dela.",
   "82d9538af590f58c": "Veja seus agentes, importe projetos e configure seu celular.",
   "6a48fd0a37e725a1": "Jurídico",
-  "d6d3ea46ac979e1c": "Como tratamos seus dados, incluindo os dados de uso anônimos que o T3 Code coleta.",
+  "c8b1137fecfff62e": "Como tratamos seus dados, incluindo dados de uso anônimos quando habilitado.",
   "e741b1ab9396053a": "Como tratamos seus dados. {telemetryOff}",
   "0bffbbf4d7f780c0": "Avisos de dependências, recursos e ferramentas opcionais usados pelo T3 Code.",
   "e39a57514be028e9": "Revisar",
