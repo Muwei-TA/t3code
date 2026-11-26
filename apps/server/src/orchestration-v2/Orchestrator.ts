@@ -3150,6 +3150,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(freshContext ? { freshContext: true } : {}),
         providerThreadId: queuedProviderThread.id,
         inputIntent: "queued_turn",
+        interactionMode: projection.thread.interactionMode,
         status: "completed",
         startedAt: now,
         completedAt: now,
@@ -6585,6 +6586,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           updatedAt: now,
           type: "user_message",
           messageId: input.messageId,
+          interactionMode: input.projection.thread.interactionMode,
           inputIntent:
             input.command.type === "queued-message.promote-to-steer"
               ? "promoted_queued_to_steer"
@@ -8721,6 +8723,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         type: "user_message",
         messageId: command.messageId,
         inputIntent: "turn_start",
+        interactionMode: projection.thread.interactionMode,
         text: dispatchText,
         ...(command.context ? { context: command.context } : {}),
         attachments: command.attachments,
@@ -9532,6 +9535,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       type: "user_message",
       messageId: command.messageId,
       inputIntent: "turn_start",
+      interactionMode: projection.thread.interactionMode,
       text: dispatchText,
       ...(command.context ? { context: command.context } : {}),
       attachments: command.attachments,

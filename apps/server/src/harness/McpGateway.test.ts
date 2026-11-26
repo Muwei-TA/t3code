@@ -223,6 +223,7 @@ describe("McpGateway", () => {
           const echoView = passive.servers.find((s) => s.id === "my__echo");
           expect(echoView?.state).toBe("idle");
           expect(echoView?.toolCount).toBe(0);
+          expect(echoView?.discoveredToolNames).toBeUndefined();
           expect(
             echoView?.config.transport.type === "stdio" ? echoView.config.transport.env : undefined,
           ).toEqual({
@@ -319,6 +320,32 @@ describe("McpGateway", () => {
           });
           expect(writeBlockedByAutoRead.isError).toBe(true);
           expect(String(writeBlockedByAutoRead.content[0]?.text ?? "")).toContain("auto-read");
+
+          const filteredConfig = {
+            enabled: true,
+            transport: {
+              type: "stdio",
+              command: process.execPath,
+              args: ["-e", ECHO_STDIO_MCP_SCRIPT],
+              env: { MY_TOKEN: "${secret:ECHO_SECRET}" },
+            },
+            injectionMode: "gateway",
+            approvalPolicy: "auto-read",
+            disabledTools: ["mutate_item"],
+          } as const;
+          const serverId = HarnessMcpServerId.make("my__echo");
+          const conflict = yield* store
+            .upsertUserServer({
+              id: serverId,
+              config: { ...filteredConfig, allowedTools: ["mutate_item"] },
+            })
+            .pipe(Effect.flip);
+          expect(conflict.code).toBe("invalid_config");
+          yield* store.upsertUserServer({ id: serverId, config: filteredConfig });
+          const filtered = yield* gateway.restartServer({ serverId });
+          const filteredView = filtered.servers.find(({ id }) => id === serverId);
+          expect(filteredView?.tools.map(({ name }) => name)).toEqual(["read_env"]);
+          expect(filteredView?.discoveredToolNames).toEqual(["mutate_item", "read_env"]);
 
           // Under `always-ask`, EVEN read-only tools in full-access MUST fail closed!
           yield* store.upsertUserServer({

@@ -1,10 +1,5 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type {
-  EnvironmentId,
-  ProviderInteractionMode,
-  ThreadContextManifest,
-  ThreadId,
-} from "@t3tools/contracts";
+import type { EnvironmentId, ThreadContextManifest, ThreadId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { T, useGT, Var } from "gt-react";
 import { LayersIcon, RefreshCwIcon, Settings2Icon } from "lucide-react";
@@ -27,18 +22,16 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
 
 /**
- * Context Inspector v0: fetches the thread's on-demand `ThreadContextManifest`
+ * The harness inspector fetches the thread's on-demand `ThreadContextManifest`
  * only when opened so zero extra bytes ride on live WebSocket streams.
  */
 export function ThreadContextInspectorButton({
   environmentId,
   threadId,
-  interactionMode,
   size = "sm",
 }: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId | null;
-  readonly interactionMode: ProviderInteractionMode;
   readonly size?: "sm" | "xs";
 }) {
   const gt = useGT();
@@ -62,7 +55,7 @@ export function ThreadContextInspectorButton({
     } else {
       const failure = squashAtomCommandFailure(result);
       setErrorText(
-        failure instanceof Error ? failure.message : gt("Could not inspect thread context."),
+        failure instanceof Error ? failure.message : gt("Could not inspect harness status."),
       );
     }
   };
@@ -82,18 +75,18 @@ export function ThreadContextInspectorButton({
             <ComposerControl
               type="button"
               size={size}
-              aria-label={gt("Inspect thread context and MCP servers")}
+              aria-label={gt("Inspect harness status")}
               onClick={handleOpen}
             />
           }
         >
           <ComposerControlIcon icon={LayersIcon} size={size} />
-          <span data-composer-control-label>{gt("Context")}</span>
+          <span data-composer-control-label>
+            {gt("Harness", { $context: "composer harness status button" })}
+          </span>
         </TooltipTrigger>
         <TooltipPopup side="top">
-          {interactionMode === "plan"
-            ? gt("Inspect active MCP servers and Plan mode status")
-            : gt("Inspect active MCP servers and harness context")}
+          <T>Inspect MCP servers and Plan mode status</T>
         </TooltipPopup>
       </Tooltip>
 
@@ -101,7 +94,7 @@ export function ThreadContextInspectorButton({
         <DialogPopup className="max-w-xl">
           <DialogHeader>
             <DialogTitle>
-              <T>Thread context & Harness</T>
+              <T>Harness status</T>
             </DialogTitle>
             <DialogDescription>
               <T>
@@ -113,7 +106,7 @@ export function ThreadContextInspectorButton({
           <DialogPanel>
             {loading && manifest === null ? (
               <p className="text-sm text-muted-foreground">
-                <T>Inspecting thread context...</T>
+                <T>Inspecting harness status...</T>
               </p>
             ) : errorText !== null ? (
               <p className="text-sm text-destructive">{errorText}</p>

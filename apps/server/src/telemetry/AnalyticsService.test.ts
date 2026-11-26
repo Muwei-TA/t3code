@@ -8,8 +8,10 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientError from "effect/http/HttpClientError";
@@ -20,9 +22,11 @@ import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
-import type { ManagedPolicyDocument } from "@t3tools/contracts";
+import type { ManagedPolicyDocument, ServerSettings } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import { getTelemetryIdentity } from "./Identify.ts";
 import * as AnalyticsService from "./AnalyticsService.ts";
@@ -71,6 +75,8 @@ const SentBatch = Schema.fromJsonString(
           telemetryChannel: Schema.String,
           installId: Schema.optionalKey(Schema.String),
           ownerSource: Schema.optionalKey(Schema.String),
+          ownerId: Schema.optionalKey(Schema.String),
+          wsl: Schema.optionalKey(Schema.Boolean),
           observedBy: Schema.optionalKey(Schema.String),
         }),
       }),
@@ -113,15 +119,38 @@ const recordTwentyEvents = Effect.gen(function* () {
   }
 });
 
-const analyticsLayerWith = (client: HttpClient.HttpClient, policy?: ManagedPolicyDocument) =>
+const testSettingsLayer = Layer.effect(
+  ServerSettingsService,
+  Effect.gen(function* () {
+    const settings = yield* ServerSettingsService;
+    const changes = yield* PubSub.unbounded<ServerSettings>();
+    return {
+      ...settings,
+      updateSettings: (patch) =>
+        settings
+          .updateSettings(patch)
+          .pipe(Effect.tap((updated) => PubSub.publish(changes, updated))),
+      subscribeChanges: PubSub.subscribe(changes).pipe(Effect.map(Stream.fromSubscription)),
+    } satisfies ServerSettingsService["Service"];
+  }),
+).pipe(Layer.provide(ServerSettingsService.layerTest()));
+
+const analyticsLayerWith = (
+  client: HttpClient.HttpClient,
+  policy?: ManagedPolicyDocument,
+  envOptIn: boolean | null = true,
+) =>
   AnalyticsService.layer.pipe(
+    Layer.provideMerge(testSettingsLayer),
+    Layer.provide(ServerSecretStore.layer),
     Layer.provideMerge(
       ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "t3-telemetry-retry-" }),
     ),
     Layer.provide(
       ConfigProvider.layer(
         ConfigProvider.fromUnknown({
-          T3CODE_TELEMETRY_ENABLED: true,
+          ...(envOptIn === null ? {} : { T3CODE_TELEMETRY_ENABLED: envOptIn }),
+          WSL_DISTRO_NAME: "private-org-linux",
           T3CODE_POSTHOG_KEY: "phc_test_key",
           T3CODE_POSTHOG_HOST: "http://localhost",
         }),
@@ -226,6 +255,43 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
 
       assert.equal(owners.filter((observedBy) => observedBy === "client").length, 1_000);
       assert.equal(owners.filter((observedBy) => observedBy === "server").length, 1);
+      const events = batches.flat();
+      assert.notEqual(events[0]?.properties.ownerId, "0".repeat(64));
+      assert.equal(events.at(-1)?.properties.ownerId, "a".repeat(64));
+      assert.isTrue(events.every(({ properties }) => properties.wsl === true));
+    }),
+  );
+
+  it.effect("clears buffered events and failed deliveries when usage data is switched off", () =>
+    Effect.gen(function* () {
+      const attempts: string[] = [];
+      const client = HttpClient.make((request) => {
+        if (request.body._tag === "Uint8Array") {
+          attempts.push(new TextDecoder().decode(request.body.body));
+        }
+        return respondWithStatus(attempts.length === 1 ? 503 : 204)(request);
+      });
+
+      yield* Effect.gen(function* () {
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        const settings = yield* ServerSettingsService;
+        assert.isFalse(yield* analytics.record("while-disabled"));
+        yield* settings.updateSettings({ productTelemetryEnabled: true });
+        assert.isTrue(yield* analytics.record("failed-before-opt-out"));
+        yield* analytics.flush;
+        assert.isTrue(yield* analytics.record("queued-before-opt-out"));
+        yield* settings.updateSettings({ productTelemetryEnabled: false });
+        assert.isFalse(yield* analytics.record("after-opt-out"));
+        yield* TestClock.adjust("1 millis");
+        yield* settings.updateSettings({ productTelemetryEnabled: true });
+        assert.isTrue(yield* analytics.record("after-opt-in"));
+        yield* analytics.flush;
+      }).pipe(Effect.provide(analyticsLayerWith(client, undefined, null)));
+
+      assert.equal(attempts.length, 2);
+      assert.include(attempts[0], "failed-before-opt-out");
+      assert.include(attempts[1], "after-opt-in");
+      assert.notInclude(attempts[1], "before-opt-out");
     }),
   );
 
@@ -299,7 +365,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
         prefix: "t3-telemetry-base-",
       });
 
-      const layerTelemetry = AnalyticsService.layer.pipe(Layer.provideMerge(layerServerConfig));
+      const layerTelemetry = AnalyticsService.layer.pipe(
+        Layer.provide(ServerSettingsService.layerTest()),
+        Layer.provide(ServerSecretStore.layer),
+        Layer.provideMerge(layerServerConfig),
+      );
       const layerConfig = ConfigProvider.layer(
         ConfigProvider.fromUnknown({
           T3CODE_TELEMETRY_ENABLED: true,
@@ -404,7 +474,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
       const layerServerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
         prefix: "t3-telemetry-disabled-",
       });
-      const layerTelemetry = AnalyticsService.layer.pipe(Layer.provideMerge(layerServerConfig));
+      const layerTelemetry = AnalyticsService.layer.pipe(
+        Layer.provide(ServerSettingsService.layerTest()),
+        Layer.provide(ServerSecretStore.layer),
+        Layer.provideMerge(layerServerConfig),
+      );
       const layerConfig = ConfigProvider.layer(
         ConfigProvider.fromUnknown({
           ...env,

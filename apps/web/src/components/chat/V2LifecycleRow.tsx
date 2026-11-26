@@ -647,6 +647,11 @@ export function FreshSessionRow() {
   return <TimelineSystemDivider label={gt("New session")} icon={EraserIcon} />;
 }
 
+export function PlanModeRow() {
+  const gt = useGT();
+  return <TimelineSystemDivider label={gt("Plan mode")} />;
+}
+
 /** A same-harness model or effort change. Shows only what changed. */
 export function ModelSwitchRow(props: {
   readonly environmentId: EnvironmentId;

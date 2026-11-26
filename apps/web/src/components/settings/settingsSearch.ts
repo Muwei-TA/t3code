@@ -751,6 +751,20 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("notification sound alert completion input approval desktop")],
   },
   {
+    id: "product-usage-data",
+    title: msg("Send product usage data"),
+    to: "/settings/general",
+    targetId: "privacy",
+    searchTerms: [msg("privacy telemetry analytics usage events")],
+  },
+  {
+    id: "relay-connection-diagnostics",
+    title: msg("Send T3 Connect diagnostics"),
+    to: "/settings/general",
+    targetId: "privacy",
+    searchTerms: [msg("privacy telemetry relay traces connection diagnostics")],
+  },
+  {
     id: "in-app-notifications",
     title: msg("In-app notifications"),
     to: "/settings/general",

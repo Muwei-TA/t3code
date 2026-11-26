@@ -61,20 +61,33 @@ export function resolveCloudPublicConfig(): CloudPublicConfig {
   };
 }
 
+const RELAY_TRACING_PREFERENCE = "t3code.relay-tracing-enabled";
 let desktopRelayTelemetry: boolean | null = null;
+
+function readRelayTracingPreference(): boolean | undefined {
+  try {
+    const value = window.localStorage.getItem(RELAY_TRACING_PREFERENCE);
+    return value === "true" ? true : value === "false" ? false : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function setRelayTracingPreference(enabled: boolean) {
+  window.localStorage.setItem(RELAY_TRACING_PREFERENCE, String(enabled));
+}
 
 /** Whether relay spans may be exported now; the desktop host may not know yet at startup. */
 export function relayTelemetryEnabled(): boolean | null {
-  if (typeof window === "undefined" || !window.desktopBridge) return true;
+  if (typeof window === "undefined") return false;
+  const preference = readRelayTracingPreference();
+  if (!window.desktopBridge) return preference === true;
+  if (preference === false) return false;
   desktopRelayTelemetry ??= window.desktopBridge.getRelayTelemetryEnabled();
   return desktopRelayTelemetry;
 }
 
 export function resolveRelayTracingConfig() {
-  // The relay exporter is created during module initialization, so this must be synchronous.
-  if (relayTelemetryEnabled() === false) {
-    return null;
-  }
   const { relayTracing } = resolveCloudPublicConfig();
   return relayTracing.tracesUrl && relayTracing.tracesDataset && relayTracing.tracesToken
     ? {

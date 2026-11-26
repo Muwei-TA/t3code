@@ -692,6 +692,15 @@ const make = Effect.gen(function* () {
         detail: `MCP server id "${id}" is reserved by T3 Code.`,
       });
     }
+    const disabled = new Set(config.disabledTools);
+    const conflicts = config.allowedTools?.filter((name) => disabled.has(name)) ?? [];
+    if (conflicts.length > 0) {
+      return yield* new HarnessError({
+        code: "invalid_config",
+        serverId: id,
+        detail: `Tools cannot be both allowed and disabled: ${conflicts.join(", ")}.`,
+      });
+    }
     yield* writeLock.withPermits(1)(
       Effect.gen(function* () {
         const { config: current } = yield* loadUserConfig;

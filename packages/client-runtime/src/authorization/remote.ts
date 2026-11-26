@@ -95,12 +95,6 @@ export const appendClientConnectionParams = (
     }
   }
   if (clientMetadata?.surface === "mobile") {
-    if (clientMetadata.osMajorVersion !== undefined) {
-      url.searchParams.set("clientOsMajorVersion", String(clientMetadata.osMajorVersion));
-    }
-    if (clientMetadata.deviceModel) {
-      url.searchParams.set("clientDeviceModel", clientMetadata.deviceModel);
-    }
   }
   if (connectionMethod) {
     url.searchParams.set("connectionMethod", connectionMethod);

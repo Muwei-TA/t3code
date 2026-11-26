@@ -179,7 +179,6 @@ function backOffSilentRoute(previous: SilentRoute | undefined, now: bigint): Sil
 function annotateTarget(target: ConnectionTarget) {
   return Effect.annotateCurrentSpan({
     "environment.id": target.environmentId,
-    "environment.label": target.label,
     "environment.target.kind": target._tag,
   });
 }
@@ -472,7 +471,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   ).pipe(
     Effect.annotateLogs({
       "environment.id": target.environmentId,
-      "environment.label": target.label,
     }),
   );
 
@@ -487,7 +485,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     ).pipe(
       Effect.annotateLogs({
         "environment.id": target.environmentId,
-        "environment.label": target.label,
         "cause.reason_count": cause.reasons.length,
         ...(died ? safeErrorLogAttributes(died.defect) : {}),
       }),
@@ -1130,7 +1127,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         root: true,
         attributes: {
           "environment.id": target.environmentId,
-          "environment.label": target.label,
           "environment.target.kind": target._tag,
           "connection.connected_ms": connectedForMs,
           "connection.failure.reason": outcome.failure.error.reason,
@@ -1343,7 +1339,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         yield* Effect.logError("Connection supervisor task failed; restarting it.").pipe(
           Effect.annotateLogs({
             "environment.id": target.environmentId,
-            "environment.label": target.label,
             task,
             ...safeErrorLogAttributes(exit.cause.reasons.find(Cause.isDieReason)?.defect),
           }),

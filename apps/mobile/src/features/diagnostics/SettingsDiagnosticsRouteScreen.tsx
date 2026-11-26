@@ -1,3 +1,7 @@
+import { AuthSettingsWriteScope } from "@t3tools/contracts";
+import { serverEnvironment } from "../../state/server";
+import { useEnvironments } from "../../state/environments";
+import { useEnvironmentsWithScope } from "../../state/session";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import * as Application from "expo-application";
@@ -17,6 +21,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { relayTracingAvailable, setRelayTracingEnabled } from "../observability/tracing";
 import { crashReportingAvailable, setCrashReportsEnabled } from "../observability/observe";
 import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActionRow";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
@@ -104,6 +109,8 @@ export function SettingsDiagnosticsRouteScreen() {
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
         {crashReportingAvailable ? <CrashReportsSetting /> : null}
+        {relayTracingAvailable ? <RelayTracingSetting /> : null}
+        <ProductUsageSettings />
 
         <SettingsSection title={gt("Startup crashes")}>
           {state.status === "loading" ? (
@@ -202,6 +209,72 @@ function CrashReportsSetting() {
         </T>
       </Text>
     </View>
+  );
+}
+
+function RelayTracingSetting() {
+  const gt = useGT();
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const save = useAtomCommand(saveMobilePreferences, { reportFailure: true });
+  const [saving, setSaving] = useState(false);
+  const ready = AsyncResult.isSuccess(preferences) && !preferences.waiting;
+  return (
+    <SettingsSection title={gt("Privacy")}>
+      <SettingsSwitchRow
+        icon="tray.and.arrow.up"
+        label={gt("Send T3 Connect diagnostics")}
+        subtitle={gt("Share relay connection timings from this app.")}
+        value={AsyncResult.isSuccess(preferences) && preferences.value.relayTracingEnabled === true}
+        disabled={!ready || saving}
+        onValueChange={(value) => {
+          setSaving(true);
+          if (!value) setRelayTracingEnabled(false);
+          void save({ relayTracingEnabled: value })
+            .then((result) => {
+              setRelayTracingEnabled(result._tag === "Success" && value);
+            })
+            .finally(() => setSaving(false));
+        }}
+      />
+    </SettingsSection>
+  );
+}
+
+function ProductUsageSettings() {
+  const gt = useGT();
+  const { environments } = useEnvironments();
+  const supported = environments.filter(
+    (environment) =>
+      environment.connection.phase === "connected" &&
+      environment.serverConfig?.environment.capabilities.productTelemetrySettings === true,
+  );
+  const writable = useEnvironmentsWithScope(supported, AuthSettingsWriteScope);
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: true });
+  if (supported.length === 0) return null;
+  return (
+    <SettingsSection
+      title={gt("Product usage data")}
+      footer={gt("An explicit T3CODE_TELEMETRY_ENABLED value on the machine takes precedence.")}
+    >
+      {supported.map((environment) => {
+        const managed = environment.serverConfig?.managedPolicy?.limits?.telemetry === false;
+        return (
+          <SettingsSwitchRow
+            key={environment.environmentId}
+            icon="tray.and.arrow.up"
+            label={environment.label}
+            disabled={managed || !writable.has(environment.environmentId)}
+            value={!managed && environment.serverConfig?.settings.productTelemetryEnabled === true}
+            onValueChange={(value) =>
+              void updateSettings({
+                environmentId: environment.environmentId,
+                input: { patch: { productTelemetryEnabled: value } },
+              })
+            }
+          />
+        );
+      })}
+    </SettingsSection>
   );
 }
 

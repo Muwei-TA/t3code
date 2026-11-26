@@ -31,26 +31,57 @@ export function resolveTracingConfig(): TracingConfig | null {
   return { tracesUrl, tracesDataset, tracesToken };
 }
 
-export function layerFromConfig(config: TracingConfig | null, resource: TracingResource) {
+export function layerFromConfig(
+  config: TracingConfig | null,
+  resource: TracingResource,
+  isEnabled?: () => boolean,
+) {
   const channel =
     typeof __DEV__ !== "undefined" && __DEV__
       ? "dev"
       : RELEASE_CHANNEL_BY_VARIANT[resource.appVariant];
-  return RelayTracing.layer(config, {
-    serviceName: "t3code-mobile",
-    serviceVersion: resource.serviceVersion,
-    runtime: "react-native",
-    serviceInstanceId: resource.serviceInstanceId,
-    client: `mobile-${resource.appVariant}`,
-    attributes: channel && releaseResourceAttributes(channel),
-  });
+  return RelayTracing.layer(
+    config,
+    {
+      serviceName: "t3code-mobile",
+      serviceVersion: resource.serviceVersion,
+      runtime: "react-native",
+      serviceInstanceId: resource.serviceInstanceId,
+      client: `mobile-${resource.appVariant}`,
+      attributes: channel && releaseResourceAttributes(channel),
+    },
+    isEnabled ? { isEnabled } : undefined,
+  );
 }
 
-export const layer = layerFromConfig(resolveTracingConfig(), {
-  serviceVersion: Constants.expoConfig?.version,
-  serviceInstanceId: Constants.sessionId,
-  appVariant:
-    typeof Constants.expoConfig?.extra?.appVariant === "string"
-      ? Constants.expoConfig.extra.appVariant
-      : "unknown",
-});
+const config = resolveTracingConfig();
+export const relayTracingAvailable = config !== null;
+let relayTracingEnabled = false;
+let preferenceUpdated = false;
+
+export function setRelayTracingEnabled(enabled: boolean) {
+  preferenceUpdated = true;
+  relayTracingEnabled = enabled;
+}
+
+if (relayTracingAvailable) {
+  void import("../../persistence/imperative")
+    .then(({ loadPreferences }) => loadPreferences())
+    .then((preferences) => {
+      if (!preferenceUpdated) relayTracingEnabled = preferences.relayTracingEnabled === true;
+    })
+    .catch((error: unknown) => console.warn("[tracing] could not read trace preference", error));
+}
+
+export const layer = layerFromConfig(
+  config,
+  {
+    serviceVersion: Constants.expoConfig?.version,
+    serviceInstanceId: Constants.sessionId,
+    appVariant:
+      typeof Constants.expoConfig?.extra?.appVariant === "string"
+        ? Constants.expoConfig.extra.appVariant
+        : "unknown",
+  },
+  () => relayTracingEnabled,
+);

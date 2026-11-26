@@ -2,6 +2,11 @@ import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m as resolveMessage } from "~/i18n/messages";
 import { useAtomValue } from "@effect/atom-react";
 import { NotificationSettings } from "./NotificationSettings";
+import {
+  relayTelemetryEnabled,
+  resolveRelayTracingConfig,
+  setRelayTracingPreference,
+} from "../../cloud/publicConfig";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import { CheckIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
@@ -63,6 +68,7 @@ import {
 import {
   useScopedSettings,
   useScopedSettingsMixed,
+  useScopedSettingsWriteAllowed,
   useUpdateScopedSettings,
 } from "./useScopedSettings";
 import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
@@ -839,6 +845,80 @@ function AutoSettleDaysInput({
   );
 }
 
+function PrivacySettings() {
+  const gt = useGT();
+  const setting = useSearchableSetting();
+  const { scope, connectedEnvironments } = useSettingsScope();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const canWrite = useScopedSettingsWriteAllowed();
+  const mixed = useScopedSettingsMixed(["productTelemetryEnabled"]);
+  const [relayEnabled, setRelayEnabled] = useState(() => relayTelemetryEnabled() === true);
+  const relayConfig = resolveRelayTracingConfig();
+  const productAvailable =
+    scope.kind !== "project" &&
+    scope.kind !== "checkout" &&
+    connectedEnvironments.length > 0 &&
+    connectedEnvironments.every(
+      (environment) =>
+        environment.serverConfig?.environment.capabilities.productTelemetrySettings === true,
+    );
+  const policyDisablesTelemetry = connectedEnvironments.some(
+    (environment) => environment.serverConfig?.managedPolicy?.limits?.telemetry === false,
+  );
+  if (!productAvailable && relayConfig === null) return null;
+  return (
+    <SettingsSection id="privacy" title={gt("Privacy")}>
+      {productAvailable ? (
+        <SettingsRow
+          serverScoped
+          {...setting("product-usage-data")}
+          description={
+            policyDisablesTelemetry
+              ? gt("An administrator has disabled product usage data on a selected machine.")
+              : gt(
+                  "Send usage events from the selected machines. An explicit T3CODE_TELEMETRY_ENABLED value takes precedence.",
+                )
+          }
+          control={
+            <Switch
+              aria-label={gt("Send product usage data")}
+              checked={!policyDisablesTelemetry && !mixed && settings.productTelemetryEnabled}
+              disabled={!canWrite || policyDisablesTelemetry}
+              onCheckedChange={(value) => updateSettings({ productTelemetryEnabled: value })}
+            />
+          }
+        />
+      ) : null}
+      {relayConfig === null ? null : (
+        <SettingsRow
+          {...setting("relay-connection-diagnostics")}
+          description={gt(
+            "Share relay connection timings from this app. On desktop, the host must also allow tracing.",
+          )}
+          control={
+            <Switch
+              aria-label={gt("Send T3 Connect diagnostics")}
+              checked={relayEnabled}
+              onCheckedChange={(value) => {
+                try {
+                  setRelayTracingPreference(value);
+                  setRelayEnabled(relayTelemetryEnabled() === true);
+                } catch {
+                  toastManager.add({
+                    type: "error",
+                    title: gt("Could not save the diagnostics preference."),
+                  });
+                }
+              }}
+            />
+          }
+        />
+      )}
+    </SettingsSection>
+  );
+}
+
 export function GeneralSettingsPanel() {
   const gt = useGT();
   const m = useMessages();
@@ -854,6 +934,7 @@ export function GeneralSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <PrivacySettings />
       <SettingsSection id="notifications" title={gt("Notifications")}>
         <NotificationSettings />
         <SettingsRow

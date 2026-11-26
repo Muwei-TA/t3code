@@ -33,6 +33,7 @@ describe("web runtime relay telemetry policy", () => {
       surface: "desktop enabled once the login shell is read",
       desktopBridge: { getRelayTelemetryEnabled: answers(null, true) },
       exports: true,
+      startsPending: true,
     },
     {
       surface: "desktop opt-out found in the login shell",
@@ -40,11 +41,25 @@ describe("web runtime relay telemetry policy", () => {
       exports: false,
     },
     {
-      surface: "ordinary browser ignores host opt-out",
+      surface: "ordinary browser defaults to off",
       desktopBridge: undefined,
+      exports: false,
+    },
+    {
+      surface: "ordinary browser opts in",
+      desktopBridge: undefined,
+      preference: "true",
       exports: true,
     },
-  ])("applies $surface before the first relay span", async ({ desktopBridge, exports }) => {
+    {
+      surface: "browser opts out before flush",
+      desktopBridge: undefined,
+      preference: "true",
+      exports: false,
+      disableBeforeFlush: true,
+    },
+  ])("applies $surface before the first relay span", async (entry) => {
+    const { desktopBridge, exports, preference, startsPending, disableBeforeFlush } = entry;
     vi.resetModules();
     vi.stubEnv("T3CODE_TELEMETRY_ENABLED", "false");
     vi.stubEnv("T3CODE_OTEL_SDK_DISABLED", "true");
@@ -52,7 +67,8 @@ describe("web runtime relay telemetry policy", () => {
     vi.stubEnv("VITE_RELAY_OTLP_TRACES_URL", "https://telemetry.example.test/v1/traces");
     vi.stubEnv("VITE_RELAY_OTLP_TRACES_DATASET", "relay-test");
     vi.stubEnv("VITE_RELAY_OTLP_TRACES_TOKEN", "test-token");
-    vi.stubGlobal("window", { desktopBridge });
+    let storedPreference = preference;
+    vi.stubGlobal("window", { desktopBridge, localStorage: { getItem: () => storedPreference } });
     const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }));
     vi.stubGlobal("fetch", fetchFn);
     // Re-import after setting runtime policy: static initialization creates the exporter layer.
@@ -61,6 +77,11 @@ describe("web runtime relay telemetry policy", () => {
     const userSpans: Array<string> = [];
 
     try {
+      if (startsPending) {
+        await freshRuntime.runPromise(
+          Effect.void.pipe(Effect.withSpan("relay.before-consent"), withRelayClientTracing),
+        );
+      }
       expect(
         await freshRuntime.runPromise(
           Effect.succeed("relay operation completed").pipe(
@@ -82,6 +103,7 @@ describe("web runtime relay telemetry policy", () => {
       expect(userSpans).toEqual(["user.work"]);
     } finally {
       setDelegate(null);
+      if (disableBeforeFlush) storedPreference = "false";
       // Closing the runtime flushes the exporter without waiting for its batch timer.
       await freshRuntime.dispose();
     }

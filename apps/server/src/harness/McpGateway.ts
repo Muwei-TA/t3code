@@ -735,8 +735,8 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       state = "idle";
     }
 
-    const cachedTools = liveConnected ? pooled.tools : (record?.toolsByDigest.get(scopeKey) ?? []);
-    const filteredTools = filterAllowedTools(server.config, cachedTools);
+    const discoveredTools = liveConnected ? pooled.tools : record?.toolsByDigest.get(scopeKey);
+    const filteredTools = filterAllowedTools(server.config, discoveredTools ?? []);
     const tools: ReadonlyArray<HarnessMcpToolSummary> = filteredTools.map((tool) => ({
       name: tool.name,
       exposedName: canonicalExposedToolName(server.id, tool.name),
@@ -753,6 +753,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       state,
       toolCount: tools.length,
       tools,
+      ...(discoveredTools === undefined
+        ? {}
+        : { discoveredToolNames: discoveredTools.map((tool) => tool.name).toSorted() }),
       estimatedToolListBytes: estimateToolsBytes(tools),
       lastError,
       needsTrustConfirmation: server.needsTrustConfirmation,
