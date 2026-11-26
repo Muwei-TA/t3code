@@ -1,9 +1,10 @@
 import {
   EnvironmentId,
   ProviderInstanceId,
+  ThreadContextManifest,
   ThreadId,
-  type ThreadContextManifest,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { getTranslationsSnapshot, GTProvider } from "gt-react";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
@@ -18,7 +19,7 @@ vi.mock("../../state/use-atom-command", () => ({
 
 const reason = "Tool filters require routing through T3 Gateway.";
 const error = "MCP server disconnected unexpectedly";
-const manifest: ThreadContextManifest = {
+const manifest = Schema.decodeSync(ThreadContextManifest)({
   threadId: ThreadId.make("test-thread"),
   generatedAt: "2026-11-26T00:00:00Z",
   providerInstanceId: ProviderInstanceId.make("codex"),
@@ -50,7 +51,7 @@ const manifest: ThreadContextManifest = {
     { kind: "mcp", id: "project-server", reason },
     { kind: "mcp", id: "user-server", reason: error },
   ],
-};
+});
 
 it("opens Harness status and localizes scopes and static notices in Chinese", async () => {
   const translations = await getTranslationsSnapshot("zh");
