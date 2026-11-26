@@ -678,6 +678,14 @@ function EnvironmentHarnessMcpSection({
                         ) : null}
                       </div>
                     ) : null}
+                    {server.discoveredToolNames !== undefined &&
+                    [...(server.config.allowedTools ?? []), ...(server.config.disabledTools ?? [])].some(
+                      (name) => !server.discoveredToolNames?.includes(name),
+                    ) ? (
+                      <p className="text-xs text-warning-foreground">
+                        <T>Some configured tool names do not match the connected server. Edit the tool policy to review them.</T>
+                      </p>
+                    ) : null}
                     {server.tools.length > 0 ? (
                       <div className="pt-1">
                         <Button
@@ -1096,6 +1104,12 @@ function McpServerEditorForm({
   const [description, setDescription] = useState(initial?.config.description ?? "");
   const [saving, setSaving] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const discoveredNames = initial?.discoveredToolNames;
+  const allowedNames = parseCommaList(allowedToolsText);
+  const disabledNames = parseCommaList(disabledToolsText);
+  const unmatchedNames = discoveredNames === undefined
+    ? []
+    : [...new Set([...allowedNames, ...disabledNames])].filter((name) => !discoveredNames.includes(name));
 
   const handleSave = async () => {
     const parsedId = decodeServerId(serverId.trim());
@@ -1142,6 +1156,10 @@ function McpServerEditorForm({
 
     const allowedTools = parseCommaList(allowedToolsText);
     const disabledTools = parseCommaList(disabledToolsText);
+    if (allowedTools.some((name) => disabledTools.includes(name))) {
+      setValidationError(gt("A tool cannot be both allowed and disabled. Remove it from one list."));
+      return;
+    }
     const config: HarnessMcpServerConfig = {
       enabled: initial?.config.enabled ?? true,
       transport,
@@ -1418,6 +1436,35 @@ function McpServerEditorForm({
                 onChange={(event) => setDisabledToolsText(event.target.value)}
               />
             </label>
+          </div>
+
+          <div className="space-y-2 text-xs">
+            <p className="text-muted-foreground">
+              <T>Use exact upstream tool names, not gateway-prefixed names. Disabled tools take precedence.</T>
+            </p>
+            {discoveredNames === undefined ? (
+              <p className="text-muted-foreground">
+                <T>Tool names are not verified yet. Save and connect the server to discover its tools.</T>
+              </p>
+            ) : (
+              <>
+                {unmatchedNames.length > 0 ? (
+                  <p role="alert" className="text-warning-foreground">
+                    {gt("Not found in the last connected tool list: {names}", { names: unmatchedNames.join(", ") })}
+                  </p>
+                ) : null}
+                <p className="font-medium"><T>Discovered upstream tools</T></p>
+                <div className="max-h-48 space-y-1 overflow-y-auto">
+                  {discoveredNames.map((name) => (
+                    <div key={name} className="flex flex-wrap items-center gap-2">
+                      <span className="min-w-0 flex-1 break-all font-mono">{name}</span>
+                      <Button type="button" size="xs" variant="outline" disabled={saving || allowedNames.includes(name)} onClick={() => setAllowedToolsText([...allowedNames, name].join(", "))}><T>Allow</T></Button>
+                      <Button type="button" size="xs" variant="outline" disabled={saving || disabledNames.includes(name)} onClick={() => setDisabledToolsText([...disabledNames, name].join(", "))}><T>Disable</T></Button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
 
           <label className="grid gap-1">

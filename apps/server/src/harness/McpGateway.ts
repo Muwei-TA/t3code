@@ -1133,6 +1133,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       state,
       toolCount: tools.length,
       tools,
+      ...(state === "connected" && liveConnected
+        ? { discoveredToolNames: [...new Set(pooled.tools.map((tool) => tool.name))].sort() }
+        : {}),
       estimatedToolListBytes: estimateToolsBytes(tools),
       lastError,
       needsTrustConfirmation: server.needsTrustConfirmation,

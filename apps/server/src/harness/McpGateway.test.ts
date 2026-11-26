@@ -223,6 +223,7 @@ describe("McpGateway", () => {
           const echoView = passive.servers.find((s) => s.id === "my__echo");
           expect(echoView?.state).toBe("idle");
           expect(echoView?.toolCount).toBe(0);
+          expect(echoView?.discoveredToolNames).toBeUndefined();
           expect(
             echoView?.config.transport.type === "stdio" ? echoView.config.transport.env : undefined,
           ).toEqual({
@@ -285,6 +286,11 @@ describe("McpGateway", () => {
           };
           expect(payload.injected).toBe("resolved-echo-secret-value");
           expect(payload.leakedOpenAi).toBeNull();
+          const discovered = yield* gateway.getSnapshot();
+          expect(discovered.servers.find((s) => s.id === "my__echo")?.discoveredToolNames).toEqual([
+            "mutate_item",
+            "read_env",
+          ]);
 
           // In `approval-required`, unconfirmed upstream `readOnlyHint` alone MUST NOT bypass approval.
           const readBlockedInApprovalRequired = yield* gateway.callToolForSession({

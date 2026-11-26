@@ -303,6 +303,8 @@ export const HarnessMcpServerView = Schema.Struct({
   state: HarnessMcpServerState,
   toolCount: NonNegativeInt,
   tools: Schema.Array(HarnessMcpToolSummary),
+  /** Unfiltered upstream names from a live, trusted connection; absent before discovery. */
+  discoveredToolNames: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   estimatedToolListBytes: NonNegativeInt,
   lastError: Schema.NullOr(Schema.String),
   needsTrustConfirmation: Schema.Boolean,
