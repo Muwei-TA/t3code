@@ -606,6 +606,16 @@ async function readPendingPullBases(
   return bases;
 }
 
+async function writePendingPullBases(
+  gitDir: string,
+  target: string,
+  bases: ReadonlyMap<string, string | null>,
+): Promise<void> {
+  await (bases.size === 0
+    ? safeRemoveFile(gitDir, target)
+    : safeWriteFileAtomic(gitDir, target, JSON.stringify(Object.fromEntries(bases))));
+}
+
 function computeTreeDigest(
   headSha: string | null,
   files: ReadonlyMap<string, ScannedFileSnapshot>,
@@ -900,7 +910,12 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
             if (!entry || entry.origin?.kind === "project") continue;
             const normalized = portableMcpConfig(entry);
             if (normalized === null) {
-              findings.push(safetyFinding(PORTABLE_MCP_FILE, "unsafe-portable-mcp"));
+              findings.push({
+                ...safetyFinding(PORTABLE_MCP_FILE, "unsafe-portable-mcp"),
+                ...(SECRET_RULES.some(({ pattern }) => pattern.test(id))
+                  ? {}
+                  : { serverId: typedId }),
+              });
             } else {
               servers.push({ id: typedId, config: normalized });
             }
@@ -933,6 +948,9 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
           );
           const baseById = new Map(git?.base?.servers.map((server) => [server.id, server.config]));
           for (const { id, config } of catalog.servers) {
+            const oldConfig = baseById.get(id);
+            const incomingShape = stableStringify(config);
+            if (oldConfig !== undefined && incomingShape === stableStringify(oldConfig)) continue;
             const current = existing.mcpServers[id];
             existingState.push([
               id,
@@ -944,18 +962,16 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
             const currentShape = stableStringify(currentPortable);
             if (
               current !== undefined &&
-              (currentShape === stableStringify(config) ||
-                currentShape === stableStringify(imported))
+              (currentShape === incomingShape || currentShape === stableStringify(imported))
             )
               continue;
-            const oldConfig = baseById.get(id);
             const gitConflict =
               git !== undefined &&
               !git.force &&
-              current !== undefined &&
-              (oldConfig === undefined ||
-                (currentShape !== stableStringify(oldConfig) &&
-                  currentShape !== stableStringify(importedMcpConfig(oldConfig))));
+              (oldConfig === undefined
+                ? current !== undefined
+                : currentShape !== stableStringify(oldConfig) &&
+                  currentShape !== stableStringify(importedMcpConfig(oldConfig)));
             if (
               invalidEntries.length > 0 ||
               gitConflict ||
@@ -1059,13 +1075,12 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
         const deadline = performance.now() + 750;
         for (const path of paths) {
           const key = path.toLowerCase();
-          if (!isBundlePath(path) || isLockedPath(path) || seen.has(key)) {
-            findings.push(
-              safetyFinding(
-                ".",
-                isLockedPath(path) ? "organization-locked-rule" : "disallowed-bundle-path",
-              ),
-            );
+          if (!isBundlePath(path) || seen.has(key)) {
+            findings.push(safetyFinding(".", "disallowed-bundle-path"));
+            continue;
+          }
+          if (isLockedPath(path)) {
+            findings.push(safetyFinding(path, "organization-locked-rule"));
             continue;
           }
           seen.add(key);
@@ -1345,9 +1360,14 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
           };
           const bundle = { ...payload, bundleDigest: bundleDigest(payload) };
           const findings = [
-            ...snapshot.findings,
-            ...(portable?.findings ?? []),
-            ...inspectBundle(bundle),
+            ...new Map(
+              [...snapshot.findings, ...(portable?.findings ?? []), ...inspectBundle(bundle)].map(
+                (finding) => [
+                  `${finding.path}\0${finding.line}\0${finding.rule}\0${finding.serverId ?? ""}`,
+                  finding,
+                ],
+              ),
+            ).values(),
           ].slice(0, 50);
           return {
             bundle: findings.length === 0 ? bundle : null,
@@ -1526,6 +1546,28 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                   await safeRemoveFile(gitDir, pendingPath);
                 }
                 if (input.includePortableMcpServers !== undefined) {
+                  const previousPreference = await runGit(repoDir, [
+                    "config",
+                    "--local",
+                    "--get",
+                    PORTABLE_MCP_GIT_CONFIG,
+                  ]);
+                  if (previousPreference.code === 1) {
+                    const head = await resolveRef("HEAD");
+                    // Older clients could fetch a catalog before they tracked portable MCP pulls.
+                    if (
+                      head &&
+                      (await gitTree(head)).some(
+                        (entry) => entry.path === PORTABLE_MCP_FILE && isRegularSyncEntry(entry),
+                      )
+                    ) {
+                      const pending = await readPendingPullBases(gitDir, pendingPath);
+                      if (!pending.has(PORTABLE_MCP_FILE)) {
+                        pending.set(PORTABLE_MCP_FILE, null);
+                        await writePendingPullBases(gitDir, pendingPath, pending);
+                      }
+                    }
+                  }
                   const configured = await runGit(repoDir, [
                     "config",
                     "--local",
@@ -1725,11 +1767,7 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                   const beforeEntries = inspected.headSha ? await gitTree(inspected.headSha) : [];
                   const beforeAllowlisted = new Map(
                     beforeEntries
-                      .filter(
-                        (entry) =>
-                          isRegularSyncEntry(entry) &&
-                          (entry.path !== PORTABLE_MCP_FILE || inspected.includePortableMcpServers),
-                      )
+                      .filter(isRegularSyncEntry)
                       .map((entry) => [entry.path, entry.sha]),
                   );
                   const gitDir = NodePath.join(repoDir, ".git");
@@ -1743,11 +1781,7 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                   const fetchedEntries = await gitTree("FETCH_HEAD");
                   const fetchedAllowlisted = new Map(
                     fetchedEntries
-                      .filter(
-                        (entry) =>
-                          isRegularSyncEntry(entry) &&
-                          (entry.path !== PORTABLE_MCP_FILE || inspected.includePortableMcpServers),
-                      )
+                      .filter(isRegularSyncEntry)
                       .map((entry) => [entry.path, entry.sha]),
                   );
 
@@ -1765,13 +1799,7 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                     }
                   }
                   const writePendingBases = () =>
-                    pendingBases.size === 0
-                      ? safeRemoveFile(gitDir, pendingPath)
-                      : safeWriteFileAtomic(
-                          gitDir,
-                          pendingPath,
-                          JSON.stringify(Object.fromEntries(pendingBases)),
-                        );
+                    writePendingPullBases(gitDir, pendingPath, pendingBases);
                   if (pendingBases.size > 0) await writePendingBases();
 
                   const advance =
@@ -1859,20 +1887,24 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                     pendingBases.delete(path);
                   }
                   const entry = afterEntries.get(PORTABLE_MCP_FILE);
-                  const portableBase = pendingBases.get(PORTABLE_MCP_FILE) ?? null;
-                  const portableCatalog =
-                    inspected.includePortableMcpServers &&
-                    entry !== undefined &&
-                    isRegularSyncEntry(entry)
+                  const portableBase = pendingBases.get(PORTABLE_MCP_FILE);
+                  let portableCatalog: HarnessPortableMcpCatalog | null = null;
+                  let previousPortableCatalog: HarnessPortableMcpCatalog | null = null;
+                  if (
+                    entry === undefined ||
+                    (isRegularSyncEntry(entry) && entry.sha === portableBase)
+                  ) {
+                    pendingBases.delete(PORTABLE_MCP_FILE);
+                  } else if (inspected.includePortableMcpServers && portableBase !== undefined) {
+                    portableCatalog = isRegularSyncEntry(entry)
                       ? await gitPortableCatalog(entry.sha)
                       : null;
-                  const previousPortableCatalog =
-                    portableCatalog !== null && portableBase !== null
-                      ? await gitPortableCatalog(portableBase)
-                      : null;
-                  if (entry && inspected.includePortableMcpServers && portableCatalog === null)
-                    skippedFiles.add(PORTABLE_MCP_FILE);
-                  if (!entry) pendingBases.delete(PORTABLE_MCP_FILE);
+                    if (portableCatalog === null) {
+                      skippedFiles.add(PORTABLE_MCP_FILE);
+                    } else if (portableBase !== null) {
+                      previousPortableCatalog = await gitPortableCatalog(portableBase);
+                    }
+                  }
                   await writePendingBases();
 
                   const skippedSuffix =
@@ -1886,6 +1918,7 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                   const result: HarnessSyncPullResult = {
                     pulled: true,
                     updatedFiles,
+                    ...(inspected.includePortableMcpServers ? { importedDisabledMcpIds: [] } : {}),
                     ...(skippedFiles.size > 0 ? { skippedFiles: [...skippedFiles] } : {}),
                     ...(conflicts.length > 0 ? { conflicts } : {}),
                     summary: `Applied ${updatedFiles.length} allowlisted file change(s) from origin/${branch}.${skippedSuffix}${conflictSuffix}`,
@@ -1913,7 +1946,9 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                 force: input?.force === true,
               });
               const blocked = planned.mcpServerDiffs.some(({ status }) => status === "conflict");
-              const importedDisabledMcpIds = yield* applyPortableCatalog(planned.entries);
+              const importedDisabledMcpIds = blocked
+                ? []
+                : yield* applyPortableCatalog(planned.entries);
               if (!blocked)
                 yield* Effect.tryPromise({
                   try: received.settlePortable,
@@ -1935,7 +1970,7 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                   : {}),
                 importedDisabledMcpIds,
                 missingSecretRefs: planned.missingSecretRefs,
-                summary: `${received.result.summary} Applied ${planned.entries.length} portable MCP server change(s).${blocked ? " Some MCP definitions conflict with local settings." : ""}${planned.missingSecretRefs.length ? ` Missing secret references: ${planned.missingSecretRefs.join(", ")}.` : ""}`,
+                summary: `${received.result.summary} Applied ${blocked ? 0 : planned.entries.length} portable MCP server change(s).${blocked ? " Some MCP definitions conflict with local settings." : ""}${planned.missingSecretRefs.length ? ` Missing secret references: ${planned.missingSecretRefs.join(", ")}.` : ""}`,
               };
             }),
           );

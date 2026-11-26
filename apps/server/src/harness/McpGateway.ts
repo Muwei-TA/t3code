@@ -1680,7 +1680,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       if (!context.includeLibraryTools) {
         listed.push(HARNESS_WORKFLOW_VALIDATE_DEF);
       }
-      if (canWriteCreator) {
+      if (canWriteCreator && store.managedPolicyAllowsPlugins) {
         listed.push(HARNESS_PLUGIN_PACK_DEF);
       }
     }

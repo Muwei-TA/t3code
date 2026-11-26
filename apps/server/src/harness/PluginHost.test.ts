@@ -107,9 +107,12 @@ describe("PluginHost", () => {
           }),
           host.setEnabled({ id: installed.id, enabled: true }),
           host.reload({}),
+          host
+            .packPlugin({ id: installed.id, name: installed.name, version: "2.0.0" })
+            .pipe(Effect.asVoid),
         ];
         for (const operation of operations)
-          expect((yield* operation.pipe(Effect.flip)).code).toBe("policy_denied");
+          expect((yield* Effect.flip(operation)).code).toBe("policy_denied");
         expect((yield* host.remove({ id: installed.id })).plugins).toEqual([]);
       }).pipe(Effect.provide(makeTestLayer(baseDir, paths, true)));
     }).pipe(Effect.provide(NodeServices.layer)),

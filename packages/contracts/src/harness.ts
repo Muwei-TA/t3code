@@ -1249,6 +1249,7 @@ export const HarnessSyncSecretFinding = Schema.Struct({
   line: PositiveInt,
   rule: Schema.String,
   preview: Schema.String,
+  serverId: Schema.optionalKey(HarnessMcpServerId),
 });
 export type HarnessSyncSecretFinding = typeof HarnessSyncSecretFinding.Type;
 

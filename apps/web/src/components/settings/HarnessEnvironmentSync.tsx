@@ -163,7 +163,12 @@ export function HarnessEnvironmentSync({
   const preview = target ? pending?.preview : null;
   const findings = preview?.secretFindings ?? sourceFindings;
   const findingLabels = [
-    ...new Set(findings.map(({ path, line, rule }) => `${path}:${line} (${rule})`)),
+    ...new Set(
+      findings.map(
+        ({ path, line, rule, serverId }) =>
+          `${path}:${line} (${rule}${serverId ? `, ${serverId}` : ""})`,
+      ),
+    ),
   ];
   const hasChanges =
     preview?.files.some((file) => file.status !== "deleted" || deleteRemovedFiles) ||

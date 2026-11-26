@@ -5,7 +5,12 @@ import * as NodePath from "node:path";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { HarnessMcpServerId, TrimmedNonEmptyString } from "@t3tools/contracts";
+import {
+  HarnessMcpServerId,
+  HarnessRuleId,
+  TrimmedNonEmptyString,
+  type ManagedPolicyDocument,
+} from "@t3tools/contracts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -27,6 +32,7 @@ function makeTestLayer(
   baseDir: string,
   paths: ServerConfig.ServerDerivedPaths,
   allowLocalRemoteForTest = true,
+  policy?: ManagedPolicyDocument,
 ) {
   const configLayer = Layer.succeed(ServerConfig.ServerConfig, {
     ...paths,
@@ -37,7 +43,7 @@ function makeTestLayer(
     baseDir,
   } as unknown as ServerConfig.ServerConfig["Service"]);
   const policyLayer = Layer.succeed(ManagedPolicy.ManagedPolicy, {
-    document: undefined,
+    document: policy,
     source: undefined,
     error: undefined,
   } as unknown as ManagedPolicy.ManagedPolicy["Service"]);
@@ -116,6 +122,25 @@ describe("HarnessSyncService", () => {
           },
         };
         const manifest = "mcp-servers.portable.json";
+        const pushCatalog = (serverId: HarnessMcpServerId, args: ReadonlyArray<string>) =>
+          Effect.gen(function* () {
+            const sync = yield* HarnessSyncService.HarnessSyncService;
+            const store = yield* HarnessStore.HarnessStore;
+            yield* store.upsertUserServer({
+              id: serverId,
+              config: { ...config, transport: { ...config.transport, args } },
+            });
+            yield* sync.configureRemote({ remoteUrl, branch, includePortableMcpServers: true });
+            const preview = yield* sync.previewPush();
+            expect(preview.files.map(({ path }) => path)).toEqual([manifest]);
+            expect(
+              (yield* sync.push({
+                expectedRemoteUrl: remoteUrl,
+                expectedBranch: branch,
+                expectedTreeDigest: TrimmedNonEmptyString.make(preview.previewTreeDigest!),
+              })).pushed,
+            ).toBe(true);
+          }).pipe(Effect.provide(srcLayer));
         yield* Effect.gen(function* () {
           const sync = yield* HarnessSyncService.HarnessSyncService;
           const store = yield* HarnessStore.HarnessStore;
@@ -124,17 +149,8 @@ describe("HarnessSyncService", () => {
           expect(
             (yield* sync.previewPush()).files.find(({ path }) => path === manifest),
           ).toBeUndefined();
-          yield* sync.configureRemote({ remoteUrl, branch, includePortableMcpServers: true });
-          const preview = yield* sync.previewPush();
-          expect(preview.files.map(({ path }) => path)).toEqual([manifest]);
-          expect(
-            (yield* sync.push({
-              expectedRemoteUrl: remoteUrl,
-              expectedBranch: branch,
-              expectedTreeDigest: TrimmedNonEmptyString.make(preview.previewTreeDigest!),
-            })).pushed,
-          ).toBe(true);
         }).pipe(Effect.provide(srcLayer));
+        yield* pushCatalog(id, config.transport.args);
         yield* Effect.gen(function* () {
           const sync = yield* HarnessSyncService.HarnessSyncService;
           const store = yield* HarnessStore.HarnessStore;
@@ -151,6 +167,49 @@ describe("HarnessSyncService", () => {
           });
           expect(yield* fs.exists(path.join(store.harnessDir, manifest))).toBe(false);
           expect((yield* sync.pull()).importedDisabledMcpIds).toEqual([]);
+          yield* store.upsertUserServer({
+            id,
+            config: {
+              ...config,
+              enabled: false,
+              transport: { ...config.transport, args: ["./local-edit.js"] },
+            },
+          });
+          expect((yield* sync.pull()).conflicts).toBeUndefined();
+          yield* sync.pull({ force: true });
+          expect((yield* store.loadUserConfig).config.mcpServers[id]?.transport).toMatchObject({
+            args: ["./local-edit.js"],
+          });
+
+          yield* store.removeUserServer(id);
+          yield* sync.pull();
+          expect((yield* store.loadUserConfig).config.mcpServers[id]).toBeUndefined();
+          yield* sync.configureRemote({ remoteUrl, branch, includePortableMcpServers: false });
+          yield* sync.configureRemote({ remoteUrl, branch, includePortableMcpServers: true });
+          yield* sync.pull();
+          expect((yield* store.loadUserConfig).config.mcpServers[id]).toBeUndefined();
+        }).pipe(Effect.provide(dstLayer));
+
+        const otherId = HarnessMcpServerId.make("second-fixture");
+        yield* pushCatalog(otherId, ["./another.js"]);
+        yield* Effect.gen(function* () {
+          const sync = yield* HarnessSyncService.HarnessSyncService;
+          const store = yield* HarnessStore.HarnessStore;
+          expect((yield* sync.pull()).importedDisabledMcpIds).toEqual([otherId]);
+          expect((yield* store.loadUserConfig).config.mcpServers[id]).toBeUndefined();
+        }).pipe(Effect.provide(dstLayer));
+        yield* pushCatalog(id, ["./upstream-edit.js"]);
+        yield* Effect.gen(function* () {
+          const sync = yield* HarnessSyncService.HarnessSyncService;
+          const store = yield* HarnessStore.HarnessStore;
+          expect((yield* sync.pull()).conflicts).toEqual([
+            { path: manifest, reason: "modified_both" },
+          ]);
+          expect((yield* store.loadUserConfig).config.mcpServers[id]).toBeUndefined();
+          expect((yield* sync.pull({ force: true })).importedDisabledMcpIds).toEqual([id]);
+          expect((yield* store.loadUserConfig).config.mcpServers[id]?.transport).toMatchObject({
+            args: ["./upstream-edit.js"],
+          });
         }).pipe(Effect.provide(dstLayer));
       }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -287,12 +346,107 @@ describe("HarnessSyncService", () => {
             },
           });
           const sync = yield* HarnessSyncService.HarnessSyncService;
+          yield* fs.writeFileString(
+            path.join(sourceDir, rule),
+            "Sample fixture ghp_abcdefghijklmnopqrstuvwxyz\n",
+          );
           const blocked = yield* sync.exportBundle({ includeMcpServers: true });
           expect(blocked.canExport).toBe(false);
           expect(blocked.bundle).toBeNull();
-          expect(blocked.secretFindings.map(({ rule }) => rule)).toContain("unsafe-portable-mcp");
+          expect(blocked.secretFindings).toContainEqual(
+            expect.objectContaining({ rule: "unsafe-portable-mcp", serverId: id }),
+          );
+          expect(
+            blocked.secretFindings.filter(
+              (finding) => finding.path === rule && finding.rule === "github-token",
+            ),
+          ).toHaveLength(1);
         }).pipe(Effect.provide(srcLayer));
       }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps organization-locked rules out of bundles and Git pull", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "t3-harness-locked-sync-" }),
+      );
+      const source = path.join(root, "source");
+      const target = path.join(root, "target");
+      const srcLayer = makeTestLayer(
+        source,
+        yield* ServerConfig.deriveServerPaths(source, undefined),
+      );
+      const dstLayer = makeTestLayer(
+        target,
+        yield* ServerConfig.deriveServerPaths(target, undefined),
+        true,
+        {
+          schemaVersion: 1,
+          organization: TrimmedNonEmptyString.make("Example Org"),
+          limits: {
+            harnessLockedRules: [
+              {
+                id: HarnessRuleId.make("locked"),
+                apply: "always",
+                body: TrimmedNonEmptyString.make("Organization rule"),
+              },
+            ],
+          },
+        },
+      );
+      const rule = "rules/locked.md";
+      const srcRules = path.join(source, "harness", "rules");
+      const dstRules = path.join(target, "harness", "rules");
+      yield* fs.makeDirectory(srcRules, { recursive: true });
+      yield* fs.makeDirectory(dstRules, { recursive: true });
+      yield* fs.writeFileString(path.join(srcRules, "locked.md"), "Source file\n");
+      yield* fs.writeFileString(path.join(dstRules, "locked.md"), "Dormant local file\n");
+      const remoteUrl = TrimmedNonEmptyString.make(path.join(root, "sync.git"));
+      const branch = TrimmedNonEmptyString.make("main");
+      yield* Effect.promise(() => execGit(root, ["init", "--bare", "-b", branch, remoteUrl]));
+
+      const bundle = yield* Effect.gen(function* () {
+        const sync = yield* HarnessSyncService.HarnessSyncService;
+        const exported = yield* sync.exportBundle({});
+        expect(exported.bundle?.files.map(({ path }) => path)).toEqual([rule]);
+        yield* sync.configureRemote({ remoteUrl, branch });
+        const preview = yield* sync.previewPush();
+        yield* sync.push({
+          expectedRemoteUrl: remoteUrl,
+          expectedBranch: branch,
+          expectedTreeDigest: TrimmedNonEmptyString.make(preview.previewTreeDigest!),
+        });
+        return exported.bundle!;
+      }).pipe(Effect.provide(srcLayer));
+
+      yield* Effect.gen(function* () {
+        const sync = yield* HarnessSyncService.HarnessSyncService;
+        expect((yield* sync.exportBundle({})).bundle?.files).toEqual([]);
+        const preview = yield* sync.previewReceive({ bundle });
+        expect(preview.canApply).toBe(false);
+        expect(preview.secretFindings).toContainEqual(
+          expect.objectContaining({ path: rule, rule: "organization-locked-rule" }),
+        );
+        const rejected = yield* sync
+          .applyReceive({
+            bundle,
+            expectedPreviewDigest: "0".repeat(64),
+            selectedPaths: [rule],
+            deleteRemovedFiles: true,
+          })
+          .pipe(Effect.flip);
+        expect(rejected.code).toBe("invalid_config");
+        yield* sync.configureRemote({ remoteUrl, branch });
+        const pulled = yield* sync.pull({ force: true });
+        expect(pulled.skippedFiles).toContain(rule);
+        expect(pulled.updatedFiles).toEqual([]);
+        expect(yield* fs.readFileString(path.join(dstRules, "locked.md"))).toBe(
+          "Dormant local file\n",
+        );
+      }).pipe(Effect.provide(dstLayer));
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect(

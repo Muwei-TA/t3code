@@ -471,10 +471,15 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
                     </T>
                   </p>
                   <ul className="list-disc pl-4 font-mono text-xs">
-                    {status.secretFindings.map((finding) => (
-                      <li key={`${finding.path}:${finding.line}:${finding.rule}`}>
-                        {`${finding.path}:${finding.line} (${finding.rule})`}
-                      </li>
+                    {[
+                      ...new Set(
+                        status.secretFindings.map(
+                          ({ path, line, rule, serverId }) =>
+                            `${path}:${line} (${rule}${serverId ? `, ${serverId}` : ""})`,
+                        ),
+                      ),
+                    ].map((label) => (
+                      <li key={label}>{label}</li>
                     ))}
                   </ul>
                 </div>
@@ -565,7 +570,7 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
             <Button
               size="sm"
               variant="outline"
-              disabled={!status?.initialized || busy}
+              disabled={!status?.initialized || portableMcpDraft !== null || busy}
               onClick={async () => {
                 setBusy(true);
                 const res = await previewSyncPush({ environmentId, input: {} });

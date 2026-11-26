@@ -6,6 +6,7 @@ import {
   HarnessRuleId,
   HarnessSkillId,
   TrimmedNonEmptyString,
+  type ManagedPolicyDocument,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -25,6 +26,7 @@ const makeTestLayer = (
   baseDir: string,
   homeDir: string,
   paths: ServerConfig.ServerDerivedPaths,
+  policy?: ManagedPolicyDocument,
 ) => {
   const configLayer = Layer.succeed(ServerConfig.ServerConfig, {
     ...paths,
@@ -36,7 +38,7 @@ const makeTestLayer = (
   } as unknown as ServerConfig.ServerConfig["Service"]);
 
   const policyLayer = Layer.succeed(ManagedPolicy.ManagedPolicy, {
-    document: undefined,
+    document: policy,
     source: undefined,
     error: undefined,
   } as unknown as ManagedPolicy.ManagedPolicy["Service"]);
@@ -231,6 +233,11 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
         const homeDir = path.join(tempRoot, "fakehome");
         const repoRoot = path.join(tempRoot, "repo");
         const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+        const organizationRule = {
+          id: HarnessRuleId.make("locked-guide"),
+          apply: "always" as const,
+          body: TrimmedNonEmptyString.make("Keep this instruction managed by T3 Code."),
+        };
 
         // Pre-populate unrelated keys in Codex config.toml and Claude ~/.claude.json
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
@@ -341,6 +348,7 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
             expect(exported.startsWith(handWritten)).toBe(true);
             expect(exported).toContain("<!-- T3-HARNESS-BEGIN -->");
             expect(exported).toContain("Prefer small pure functions.");
+            expect(exported).not.toContain(organizationRule.body);
             expect(exported).toContain("<!-- T3-HARNESS-END -->");
             const second = yield* exporter.preview({ target });
             expect(second.files.find((file) => file.targetPath === rulesPath)?.action).toBe(
@@ -360,6 +368,9 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
           });
           const cursorRuleFile = path.join(homeDir, ".cursor", "rules", "no-any.mdc");
           expect(yield* fs.exists(cursorRuleFile)).toBe(true);
+          expect(yield* fs.exists(path.join(homeDir, ".cursor", "rules", "locked-guide.mdc"))).toBe(
+            false,
+          );
           const cursorRuleContent = yield* fs.readFileString(cursorRuleFile);
           expect(cursorRuleContent).toContain("globs:");
           expect(cursorRuleContent).toContain("Never use any.");
@@ -369,7 +380,15 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
           yield* fs.symlink(path.join(homeDir, "linked-claude"), linkedHome);
           const rejectedExport = yield* exporter.preview({ target: "claude" }).pipe(Effect.flip);
           expect(rejectedExport.detail).toContain("symlinked dotfile directory");
-        }).pipe(Effect.provide(makeTestLayer(baseDir, homeDir, paths)));
+        }).pipe(
+          Effect.provide(
+            makeTestLayer(baseDir, homeDir, paths, {
+              schemaVersion: 1,
+              organization: TrimmedNonEmptyString.make("Example Org"),
+              limits: { harnessLockedRules: [organizationRule] },
+            }),
+          ),
+        );
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

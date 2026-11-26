@@ -1564,7 +1564,7 @@ export const layer = Layer.effect(
         return yield* mutex.withPermits(1)(
           Effect.gen(function* () {
             const policy = yield* readPolicy();
-            if (!policy.allowsHarness) {
+            if (!policy.allowsPlugins) {
               return yield* new HarnessError({
                 code: "policy_denied",
                 detail: "Portable harness plugins are disabled by managed policy.",

@@ -329,6 +329,18 @@ function MobileSyncPanel({
               detected.
             </T>
           </Text>
+          {[
+            ...new Set(
+              status.secretFindings.map(
+                ({ path, line, rule, serverId }) =>
+                  `${path}:${line} (${rule}${serverId ? `, ${serverId}` : ""})`,
+              ),
+            ),
+          ].map((label) => (
+            <Text key={label} className="font-mono text-2xs text-destructive">
+              {label}
+            </Text>
+          ))}
         </View>
       ) : null}
 
@@ -390,7 +402,7 @@ function MobileSyncPanel({
         <Button
           label={gt("Preview Push")}
           tone="secondary"
-          disabled={!status?.initialized || busy}
+          disabled={!status?.initialized || portableMcpDraft !== null || busy}
           onPress={() => {
             void (async () => {
               setBusy(true);

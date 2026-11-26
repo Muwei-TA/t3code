@@ -262,8 +262,8 @@ so restart T3 Code after that.
 
 ### Portable Harness
 
-Set `limits.harnessPlugins` to `false` to stop external Harness plugins from activating. Users can
-still view and remove installed bundles.
+Set `limits.harnessPlugins` to `false` to stop external Harness plugins from activating and disable
+plugin packing in Creator Mode. Users can still view and remove installed bundles.
 
 Put shared instructions in `limits.harnessLockedRules` to make them available to all projects on
 this environment. Give each rule a unique `id`, an `apply` value, and a Markdown `body`. Use

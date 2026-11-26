@@ -96,6 +96,7 @@ const makeGatewayTestLayer = (
   paths: ServerConfig.ServerDerivedPaths,
   options?: McpGateway.McpGatewayOptions & {
     readonly secrets?: Readonly<Record<string, string>>;
+    readonly denyPlugins?: boolean;
   },
 ) => {
   const secretsMap = options?.secrets ?? {};
@@ -110,7 +111,9 @@ const makeGatewayTestLayer = (
   } as unknown as ServerConfig.ServerConfig["Service"]);
 
   const policyLayer = Layer.succeed(ManagedPolicy.ManagedPolicy, {
-    document: undefined,
+    document: options?.denyPlugins
+      ? { schemaVersion: 1, organization: "Example Org", limits: { harnessPlugins: false } }
+      : undefined,
     source: undefined,
     error: undefined,
   } as unknown as ManagedPolicy.ManagedPolicy["Service"]);
@@ -152,6 +155,31 @@ const makeGatewayTestLayer = (
 };
 
 describe("McpGateway", () => {
+  it.effect.each([false, true])(
+    "lists plugin packing only when policy allows it (%s)",
+    (denyPlugins) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "t3-mcp-plugin-policy-" }),
+        );
+        const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+        yield* Effect.gen(function* () {
+          const gateway = yield* McpGateway.McpGateway;
+          const tools = yield* gateway.listToolsForSession({
+            providerSessionId: "creator-policy-test",
+            interactionMode: "default",
+            runtimeMode: "full-access",
+            includeProposePlan: false,
+            includeCreatorTools: true,
+            deferredExposure: false,
+          });
+          const names = tools.map(({ exposedName }) => exposedName);
+          expect(names).toContain(McpGateway.HARNESS_WRITE_SKILL_NAME);
+          expect(names.includes(McpGateway.HARNESS_PLUGIN_PACK_NAME)).toBe(!denyPlugins);
+        }).pipe(Effect.provide(makeGatewayTestLayer(baseDir, paths, { denyPlugins })));
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect("keeps app callbacks bound to their source and resource discovery passive", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

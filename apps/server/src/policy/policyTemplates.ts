@@ -132,6 +132,20 @@ const policies = (): ReadonlyArray<Policy> => [
     toggle: "Telemetry",
   },
   {
+    id: "HarnessPlugins",
+    title: "Allow external Harness plugins",
+    help: "Disabled keeps external Harness plugins inactive and stops users from installing, trusting, enabling, reloading, or packing them. Users can still view and remove installed bundles.",
+    toggle: "HarnessPlugins",
+  },
+  {
+    id: "HarnessLockedRules",
+    title: "Organization Harness rules (JSON)",
+    help: 'Provide the JSON array used by "limits.harnessLockedRules". Each rule requires a unique ID, an apply value, and a Markdown body. Add at least one glob when apply is "glob".\n\nExample: [{"id":"review","apply":"always","body":"Document validation results."}]',
+    elements: [
+      { kind: "text", name: "HarnessLockedRules", label: "Organization rules JSON", json: true },
+    ],
+  },
+  {
     id: "AllowedDrivers",
     title: "Allowed providers",
     help: "Only the checked providers may run. Threads on other providers stay, marked unavailable.\n\nDisabled or Not Configured: no restriction.",
