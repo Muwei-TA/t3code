@@ -62,7 +62,7 @@ export function ThreadContextInspectorButton({
     } else {
       const failure = squashAtomCommandFailure(result);
       setErrorText(
-        failure instanceof Error ? failure.message : gt("Could not inspect thread context."),
+        failure instanceof Error ? failure.message : gt("Could not inspect thread Harness."),
       );
     }
   };
@@ -82,18 +82,18 @@ export function ThreadContextInspectorButton({
             <ComposerControl
               type="button"
               size={size}
-              aria-label={gt("Inspect thread context and MCP servers")}
+              aria-label={gt("Inspect thread Harness and MCP servers")}
               onClick={handleOpen}
             />
           }
         >
           <ComposerControlIcon icon={LayersIcon} size={size} />
-          <span data-composer-control-label>{gt("Context")}</span>
+          <span data-composer-control-label>{gt("Harness")}</span>
         </TooltipTrigger>
         <TooltipPopup side="top">
           {interactionMode === "plan"
             ? gt("Inspect active MCP servers and Plan mode status")
-            : gt("Inspect active MCP servers and harness context")}
+            : gt("Inspect active MCP servers, rules, skills, and Harness status")}
         </TooltipPopup>
       </Tooltip>
 
@@ -101,19 +101,19 @@ export function ThreadContextInspectorButton({
         <DialogPopup className="max-w-xl">
           <DialogHeader>
             <DialogTitle>
-              <T>Thread context & Harness</T>
+              <T>Thread Harness</T>
             </DialogTitle>
             <DialogDescription>
               <T>
-                On-demand snapshot of MCP servers, routing channels, and Plan mode enforcement for
-                this thread.
+                On-demand snapshot of portable rules, skills, MCP servers, routing channels, and Plan
+                mode enforcement for this thread. This is not the message's attached context.
               </T>
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
             {loading && manifest === null ? (
               <p className="text-sm text-muted-foreground">
-                <T>Inspecting thread context...</T>
+                <T>Inspecting thread Harness...</T>
               </p>
             ) : errorText !== null ? (
               <p className="text-sm text-destructive">{errorText}</p>
@@ -361,7 +361,7 @@ export function ThreadContextInspectorButton({
               }}
             >
               <Settings2Icon className="size-3.5" aria-hidden />
-              <T>Manage Harness MCP</T>
+              <T>Manage Harness & MCP</T>
             </Button>
             <Button
               variant="outline"

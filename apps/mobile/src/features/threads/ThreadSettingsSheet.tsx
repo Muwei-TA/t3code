@@ -1129,11 +1129,11 @@ function ThreadSettingsOptionsItem(props: {
           ? ["", ...manifest.degradedItems.map((item) => `⚠ ${item.id}: ${item.reason}`)]
           : []),
       ];
-      Dialog.alert(gt("Thread context"), lines.join("\n"));
+      Dialog.alert(gt("Thread Harness"), lines.join("\n"));
     } else {
       const error = squashAtomCommandFailure(result);
       Dialog.alert(
-        gt("Could not inspect context"),
+        gt("Could not inspect Harness"),
         errorDisplayMessage(error, m) ?? gt("Try again."),
       );
     }
@@ -1243,7 +1243,7 @@ function ThreadSettingsOptionsItem(props: {
           <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
             <DisclosureRow
               isLast
-              label={inspectingContext ? gt("Inspecting context...") : gt("Inspect thread context")}
+              label={inspectingContext ? gt("Inspecting Harness...") : gt("Inspect thread Harness")}
               value={undefined}
               onPress={() => void handleInspectContext()}
             />
