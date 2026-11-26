@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Server-local CSPRNG HMAC binds export preview plans to prevent TOCTOU drift before writing CLI configs.
 import * as NodeCrypto from "node:crypto";
+import * as NodeUtil from "node:util";
 import {
   HarnessError,
   type HarnessExportApplyInput,
@@ -21,7 +22,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
-import { parse as parseToml } from "smol-toml";
+import { parse as parseToml, type TomlTable, type TomlValue } from "smol-toml";
 
 import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import {
@@ -104,23 +105,86 @@ function renderCodexMcpServerToml(id: string, config: HarnessMcpServerConfig): s
 const CODEX_EXPORT_START = "# >>> T3 Code Portable Harness MCP (managed export) >>>";
 const CODEX_EXPORT_END = "# <<< T3 Code Portable Harness MCP <<<";
 
-/** Non-destructively updates the managed T3 export block inside Codex `config.toml`. */
-function mergeCodexConfigToml(
-  existingToml: string,
+function renderCodexExportBlock(
   servers: ReadonlyArray<{ readonly id: string; readonly config: HarnessMcpServerConfig }>,
 ): string {
   const renderedBlocks = servers.map((s) => renderCodexMcpServerToml(s.id, s.config)).join("\n\n");
-  const managedSection = `${CODEX_EXPORT_START}\n${renderedBlocks}\n${CODEX_EXPORT_END}`;
-  const startIdx = existingToml.indexOf(CODEX_EXPORT_START);
-  const endIdx = existingToml.indexOf(CODEX_EXPORT_END);
-  if (startIdx !== -1 && endIdx !== -1 && endIdx >= startIdx) {
-    const before = existingToml.slice(0, startIdx).trimEnd();
-    const after = existingToml.slice(endIdx + CODEX_EXPORT_END.length).trimStart();
-    const parts = [before, managedSection, after].filter((part) => part.length > 0);
-    return `${parts.join("\n\n")}\n`;
+  return `${CODEX_EXPORT_START}\n${renderedBlocks}\n${CODEX_EXPORT_END}`;
+}
+
+function findCodexExportBlock(text: string): { start: number; end: number } | undefined {
+  const tag = `T3_EXPORT_MARKER_${NodeCrypto.randomUUID()}_`;
+  const candidates: Array<{ marker: string; start: number; end: number }> = [];
+  let offset = 0;
+  const probe = text.split("\n").map((line) => {
+    const start = offset;
+    offset += line.length + 1;
+    const marker = line.trim();
+    if (marker !== CODEX_EXPORT_START && marker !== CODEX_EXPORT_END) return line;
+    const carriageReturn = line.endsWith("\r") ? "\r" : "";
+    const end = start + line.length - carriageReturn.length;
+    const index = candidates.push({ marker, start, end }) - 1;
+    return `${line.trimEnd()} ${tag}${index}X${carriageReturn}`;
+  });
+  if (candidates.length === 0) return undefined;
+
+  // TOML discards comments but keeps tags that sit inside quoted strings.
+  const parsedProbe = JSON.stringify(parseToml(probe.join("\n")));
+  const quoted = new Set(
+    [...parsedProbe.matchAll(new RegExp(`${tag}(\\d+)X`, "gu"))].map((match) => Number(match[1])),
+  );
+  const markers = candidates.filter((_, index) => !quoted.has(index));
+  if (markers.length === 0) return undefined;
+  const [start, end] = markers;
+  if (
+    markers.length !== 2 ||
+    start?.marker !== CODEX_EXPORT_START ||
+    end?.marker !== CODEX_EXPORT_END
+  ) {
+    throw new Error("Ambiguous Codex MCP export markers.");
   }
-  const trimmed = existingToml.trimEnd();
-  return trimmed.length > 0 ? `${trimmed}\n\n${managedSection}\n` : `${managedSection}\n`;
+  return { start: start.start, end: end.end };
+}
+
+function isTomlTable(value: TomlValue | undefined): value is TomlTable {
+  return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === null;
+}
+
+function validateCodexMcpMerge(unmanaged: string, block: string, merged: string): void {
+  const expected = parseToml(unmanaged);
+  const { mcp_servers: managed, ...other } = parseToml(block);
+  if (Object.keys(other).length > 0) throw new Error("Unexpected settings in the managed block.");
+  if (managed !== undefined) {
+    const existing = expected.mcp_servers;
+    if (!isTomlTable(managed) || (existing !== undefined && !isTomlTable(existing))) {
+      throw new Error("Invalid MCP server table.");
+    }
+    if (existing !== undefined && Object.keys(managed).some((id) => Object.hasOwn(existing, id))) {
+      throw new Error("Conflicting MCP server IDs.");
+    }
+    expected.mcp_servers = Object.assign(managed, existing);
+  }
+  if (!NodeUtil.isDeepStrictEqual(parseToml(merged), expected)) {
+    throw new Error("Codex MCP export changed unrelated configuration.");
+  }
+}
+
+/** Non-destructively updates the managed T3 export block inside Codex `config.toml`. */
+function mergeCodexConfigToml(existingToml: string, managed: string): string {
+  const block = findCodexExportBlock(existingToml);
+  if (block !== undefined) {
+    const before = existingToml.slice(0, block.start);
+    const after = existingToml.slice(block.end);
+    const unmanaged = before + after;
+    validateCodexMcpMerge(unmanaged, existingToml.slice(block.start, block.end), existingToml);
+    const merged = before + managed + after;
+    validateCodexMcpMerge(unmanaged, managed, merged);
+    return merged;
+  }
+  const separator = existingToml.length === 0 ? "" : existingToml.endsWith("\n") ? "\n" : "\n\n";
+  const merged = `${existingToml}${separator}${managed}\n`;
+  validateCodexMcpMerge(existingToml, managed, merged);
+  return merged;
 }
 
 function toJsonMcpEntry(config: HarnessMcpServerConfig): Record<string, unknown> {
@@ -328,9 +392,9 @@ const make = Effect.gen(function* () {
         if (input.target === "codex") {
           const targetPath = path.join(homeDir, ".codex", "config.toml");
           const existing = Option.getOrNull(yield* readFileOpt(targetPath));
-          const merged = mergeCodexConfigToml(existing ?? "", exportableServers);
           const validated = yield* Effect.try({
-            try: () => parseToml(merged),
+            try: () =>
+              mergeCodexConfigToml(existing ?? "", renderCodexExportBlock(exportableServers)),
             catch: () =>
               new HarnessError({
                 code: "invalid_config",
@@ -339,13 +403,13 @@ const make = Effect.gen(function* () {
           }).pipe(Effect.result);
           if (validated._tag === "Success") {
             // Preview only the redacted T3-managed block to keep host config credentials private.
-            const redactedDeltaPreview = mergeCodexConfigToml("", redactedServers);
+            const redactedDeltaPreview = `${renderCodexExportBlock(redactedServers)}\n`;
             addPlannedFile(
               targetPath,
               existing,
               "mcp",
               "mcpServers",
-              merged,
+              validated.success,
               redactedDeltaPreview,
               hasSecrets,
             );

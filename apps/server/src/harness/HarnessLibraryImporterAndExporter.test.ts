@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import { parse as parseToml } from "smol-toml";
 
 import * as ServerConfig from "../config.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
@@ -321,6 +322,34 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
           expect(
             yield* fs.exists(path.join(homeDir, ".codex", "skills", "ship-check", "SKILL.md")),
           ).toBe(true);
+
+          const quotedToml = [
+            'developer_instructions = """',
+            "This is an example of a managed block.",
+            "# >>> T3 Code Portable Harness MCP (managed export) >>>",
+            "[mcp_servers.old_example]",
+            'command = "example"',
+            "# <<< T3 Code Portable Harness MCP <<<",
+            '"""',
+            'model = "gpt-5.4"',
+            "",
+          ].join("\n");
+          yield* fs.writeFileString(codexConfigPath, quotedToml);
+          const quotedPreview = yield* exporter.preview({ target: "codex", sections: ["mcp"] });
+          yield* exporter.apply({
+            target: "codex",
+            sections: ["mcp"],
+            planDigest: TrimmedNonEmptyString.make(quotedPreview.planDigest),
+          });
+          const parsedExport = parseToml(yield* fs.readFileString(codexConfigPath));
+          expect(parsedExport.developer_instructions).toBe(
+            parseToml(quotedToml).developer_instructions,
+          );
+          expect(parsedExport.mcp_servers).toMatchObject({
+            docs: { url: "https://mcp.example.com/docs" },
+          });
+          const repeatedExport = yield* exporter.preview({ target: "codex", sections: ["mcp"] });
+          expect(repeatedExport.files[0]?.action).toBe("unchanged");
 
           const unmanagedToml = '[mcp_servers."docs"]\nurl = "https://existing.example/mcp"\n';
           yield* fs.writeFileString(codexConfigPath, unmanagedToml);
