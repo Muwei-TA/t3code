@@ -4058,6 +4058,13 @@ export const layerWsRpc = (
             onNone: () => harnessUnavailable("HarnessApprovalAuditStore"),
             onSome: Effect.fn("ws.harnessApprovalRuleRevoke")(function* (audit) {
               const rule = yield* audit.revoke(input.id);
+              if (rule.source === "gateway") {
+                return {
+                  rule,
+                  sessionDetached: false,
+                  note: "Revoked. Future calls that require this gateway grant will ask again.",
+                };
+              }
               let sessionDetached = false;
               if (input.detachThreadSession !== false) {
                 const sessions = yield* threadManagement

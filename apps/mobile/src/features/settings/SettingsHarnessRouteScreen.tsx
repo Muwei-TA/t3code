@@ -12,6 +12,7 @@ import {
   AuthTerminalOperateScope,
   HarnessMcpServerId,
   type HarnessMcpImportCandidate,
+  type HarnessMcpApprovalPolicy,
   type HarnessMcpImportSource,
   type HarnessMcpServerConfig,
   type HarnessMcpServerView,
@@ -230,6 +231,7 @@ function EnvironmentHarnessSection({
   const [newOAuthClientId, setNewOAuthClientId] = useState("");
   const [newOAuthScopes, setNewOAuthScopes] = useState("");
   const [newOAuthIssuer, setNewOAuthIssuer] = useState("");
+  const [approvalPolicy, setApprovalPolicy] = useState<HarnessMcpApprovalPolicy>("auto-read");
   const [newCommand, setNewCommand] = useState("");
   const [newArgs, setNewArgs] = useState("");
   const [logsModal, setLogsModal] = useState<{
@@ -538,6 +540,7 @@ function EnvironmentHarnessSection({
       setNewOAuthClientId("");
       setNewOAuthScopes("");
       setNewOAuthIssuer("");
+      setApprovalPolicy("auto-read");
       setNewCommand("");
       setNewArgs("");
       listQuery.refresh();
@@ -586,7 +589,7 @@ function EnvironmentHarnessSection({
           ...(args.length > 0 ? { args } : {}),
         },
         injectionMode: "gateway",
-        approvalPolicy: "auto-read",
+        approvalPolicy,
       };
       const breakdown = formatMobileTransportBreakdown(config);
       confirmTwoStepRemoteAction({
@@ -643,7 +646,7 @@ function EnvironmentHarnessSection({
         ...(Object.keys(oauth).length > 0 ? { oauth } : {}),
       },
       injectionMode: "gateway",
-      approvalPolicy: "auto-read",
+      approvalPolicy,
     });
   };
 
@@ -878,6 +881,7 @@ function EnvironmentHarnessSection({
                 targetHost={targetHost}
                 canWriteSettings={canWriteSettings}
                 canManageProviders={canManageProviders}
+                canOperateOrchestration={canOperateOrchestration}
               />
             ) : (
               <>
@@ -1230,6 +1234,27 @@ function EnvironmentHarnessSection({
             </View>
           )}
 
+          <View className="gap-1.5">
+            <Text className="text-sm font-t3-medium text-foreground">
+              <T>Gateway tool policy</T>
+            </Text>
+            <View className="flex-row flex-wrap gap-2">
+              {(
+                [
+                  ["auto-read", gt("Auto-allow read-only")],
+                  ["always-ask", gt("Always ask")],
+                  ["auto-all", gt("Auto-allow all")],
+                ] as const
+              ).map(([policy, label]) => (
+                <Button
+                  key={policy}
+                  label={label}
+                  tone={approvalPolicy === policy ? "primary" : "secondary"}
+                  onPress={() => setApprovalPolicy(policy)}
+                />
+              ))}
+            </View>
+          </View>
           <View className="flex-row gap-2 pt-2">
             <Button
               label={busyId === "__add__" ? gt("Saving...") : gt("Save")}

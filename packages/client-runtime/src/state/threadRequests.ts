@@ -62,6 +62,25 @@ export interface ThreadPendingApproval {
   readonly options?: ReadonlyArray<ProviderApprovalOption>;
   readonly responseCapability: "live" | "not_resumable";
   readonly supportsFeedback?: boolean;
+  readonly harnessGateway?: boolean;
+}
+
+export function approvalOptionsForDisplay(
+  approval: ThreadPendingApproval,
+  resolve: MFunctionType = mFallback,
+): ReadonlyArray<ProviderApprovalOption> | undefined {
+  if (!approval.harnessGateway) return approval.options;
+  const labels = {
+    accept: msg("Allow once"),
+    acceptForSession: msg("Allow for session"),
+    acceptAlways: msg("Always allow"),
+    decline: msg("Deny"),
+    cancel: msg("Cancel"),
+  };
+  return approval.options?.map((option) => ({
+    ...option,
+    label: resolve(labels[option.decision]),
+  }));
 }
 
 export const FULL_ACCESS_OVERRIDE_QUESTION = msg("Why am I being asked this?");
@@ -266,7 +285,8 @@ export function derivePendingThreadRequests(
           ...question,
           multiSelect: question.multiSelect ?? false,
         })),
-        responseCapability,
+        responseCapability:
+          responseCapability === "harness_gateway" ? "not_resumable" : responseCapability,
         dismissible: item.responseMode === "message" || responseCapability === "message",
         ...(item.responseMode === "message" || responseCapability === "message"
           ? { responseMode: "message" as const }
@@ -292,8 +312,14 @@ export function derivePendingThreadRequests(
       ...(item?.type === "approval_request" && item.options !== undefined
         ? { options: item.options }
         : {}),
-      responseCapability: responseCapability === "live" ? "live" : "not_resumable",
-      ...(request.responseCapability.type === "live" && request.responseCapability.supportsFeedback
+      responseCapability:
+        responseCapability === "live" || responseCapability === "harness_gateway"
+          ? "live"
+          : "not_resumable",
+      ...(responseCapability === "harness_gateway" ? { harnessGateway: true } : {}),
+      ...((request.responseCapability.type === "live" ||
+        request.responseCapability.type === "harness_gateway") &&
+      request.responseCapability.supportsFeedback
         ? { supportsFeedback: true }
         : {}),
     });

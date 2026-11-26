@@ -4,9 +4,11 @@ import {
   HarnessApprovalRuleId,
   HarnessApprovalRuleRecord,
   type HarnessApprovalRuleScope,
+  type HarnessGatewayApprovalTarget,
   HarnessError,
   IsoDateTime,
   type ProviderInstanceId,
+  type ProviderSessionId,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -35,18 +37,47 @@ function serializeLedger(rules: ReadonlyArray<HarnessApprovalRuleRecord>): strin
   return `${JSON.stringify({ schemaVersion: 1, rules }, null, 2)}\n`;
 }
 
+interface GrantInput {
+  readonly threadId: ThreadId;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly requestKind: string;
+  readonly scope: HarnessApprovalRuleScope;
+  readonly summary: string;
+  readonly appName?: string | undefined;
+  readonly workspaceRoot?: string | null | undefined;
+}
+
+interface GatewayGrantTarget {
+  readonly target: HarnessGatewayApprovalTarget;
+  readonly threadId: ThreadId;
+  readonly providerSessionId: ProviderSessionId;
+}
+
+function matchesGatewayGrant(
+  rule: HarnessApprovalRuleRecord,
+  { target, threadId, providerSessionId }: GatewayGrantTarget,
+) {
+  return (
+    rule.source === "gateway" &&
+    rule.revokedAt === null &&
+    rule.target?.serverId === target.serverId &&
+    rule.target.serverScope === target.serverScope &&
+    rule.target.repoRoot === target.repoRoot &&
+    rule.target.toolName === target.toolName &&
+    rule.target.configDigest === target.configDigest &&
+    (rule.scope === "always" ||
+      (rule.threadId === threadId && rule.providerSessionId === providerSessionId))
+  );
+}
+
 export class HarnessApprovalAuditStore extends Context.Service<
   HarnessApprovalAuditStore,
   {
-    readonly recordGrant: (input: {
-      readonly threadId: ThreadId;
-      readonly providerInstanceId: ProviderInstanceId;
-      readonly requestKind: string;
-      readonly scope: HarnessApprovalRuleScope;
-      readonly summary: string;
-      readonly appName?: string | undefined;
-      readonly workspaceRoot?: string | null | undefined;
-    }) => Effect.Effect<HarnessApprovalRuleRecord>;
+    readonly recordGrant: (input: GrantInput) => Effect.Effect<HarnessApprovalRuleRecord>;
+    readonly recordGatewayGrant: (
+      input: GrantInput & GatewayGrantTarget,
+    ) => Effect.Effect<HarnessApprovalRuleRecord, HarnessError>;
+    readonly hasActiveGatewayGrant: (input: GatewayGrantTarget) => Effect.Effect<boolean>;
     readonly list: (input?: {
       readonly threadId?: ThreadId | undefined;
       readonly includeRevoked?: boolean | undefined;
@@ -74,21 +105,27 @@ const make = Effect.gen(function* () {
   const saveRules = Effect.fn("HarnessApprovalAuditStore.saveRules")(function* (
     rules: ReadonlyArray<HarnessApprovalRuleRecord>,
   ) {
-    yield* fs.makeDirectory(path.dirname(ledgerPath), { recursive: true }).pipe(Effect.ignore);
+    const failure = new HarnessError({
+      code: "io_error",
+      detail: "Could not save the approval rules.",
+    });
+    yield* fs
+      .makeDirectory(path.dirname(ledgerPath), { recursive: true })
+      .pipe(Effect.mapError(() => failure));
     const tmpPath = `${ledgerPath}.${NodeCrypto.randomUUID()}.tmp`;
-    yield* fs.writeFileString(tmpPath, serializeLedger(rules)).pipe(
+    yield* fs.writeFileString(tmpPath, serializeLedger(rules), { mode: 0o600 }).pipe(
       Effect.andThen(fs.rename(tmpPath, ledgerPath)),
       Effect.onError(() => fs.remove(tmpPath, { force: true }).pipe(Effect.ignore)),
-      Effect.ignore,
+      Effect.mapError(() => failure),
     );
   });
 
-  const recordGrant: HarnessApprovalAuditStore["Service"]["recordGrant"] = Effect.fn(
-    "HarnessApprovalAuditStore.recordGrant",
-  )(function* (input) {
+  const makeRecord = Effect.fn("HarnessApprovalAuditStore.makeRecord")(function* (
+    input: GrantInput,
+  ) {
     const now = yield* DateTime.now;
     const trimmedSummary = input.summary.trim().slice(0, 500) || input.requestKind;
-    const record: HarnessApprovalRuleRecord = {
+    return {
       id: HarnessApprovalRuleId.make(
         `apr_${NodeCrypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
       ),
@@ -103,18 +140,49 @@ const make = Effect.gen(function* () {
       workspaceRoot: input.workspaceRoot ?? null,
       createdAt: IsoDateTime.make(DateTime.formatIso(now)),
       revokedAt: null,
-    };
-
-    yield* lock.withPermits(1)(
+    } satisfies HarnessApprovalRuleRecord;
+  });
+  const saveGrant = (record: HarnessApprovalRuleRecord, gateway?: GatewayGrantTarget) =>
+    lock.withPermits(1)(
       Effect.gen(function* () {
         const existing = yield* loadRules();
+        const duplicate =
+          gateway &&
+          existing.find(
+            (rule) => rule.scope === record.scope && matchesGatewayGrant(rule, gateway),
+          );
+        if (duplicate) return duplicate;
         const next = [record, ...existing].slice(0, MAX_APPROVAL_AUDIT_RECORDS);
         yield* saveRules(next);
+        return record;
       }),
     );
-
+  const recordGrant = Effect.fn("HarnessApprovalAuditStore.recordGrant")(function* (
+    input: GrantInput,
+  ) {
+    const record = { ...(yield* makeRecord(input)), source: "provider-audit" as const };
+    yield* saveGrant(record).pipe(Effect.ignore);
     return record;
   });
+  const recordGatewayGrant = Effect.fn("HarnessApprovalAuditStore.recordGatewayGrant")(function* (
+    input: GrantInput & GatewayGrantTarget,
+  ) {
+    return yield* saveGrant(
+      {
+        ...(yield* makeRecord(input)),
+        source: "gateway",
+        target: input.target,
+        providerSessionId: input.providerSessionId,
+      },
+      input,
+    );
+  });
+  const hasActiveGatewayGrant = Effect.fn("HarnessApprovalAuditStore.hasActiveGatewayGrant")(
+    function* (input: GatewayGrantTarget) {
+      const rules = yield* loadRules();
+      return rules.some((rule) => matchesGatewayGrant(rule, input));
+    },
+  );
 
   const list: HarnessApprovalAuditStore["Service"]["list"] = Effect.fn(
     "HarnessApprovalAuditStore.list",
@@ -155,6 +223,8 @@ const make = Effect.gen(function* () {
 
   return HarnessApprovalAuditStore.of({
     recordGrant,
+    recordGatewayGrant,
+    hasActiveGatewayGrant,
     list,
     revoke,
   });

@@ -721,6 +721,8 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.created.record":
       return command.parentThreadId;
     case "secret_request.record":
+    case "harness_approval.open":
+    case "harness_approval.cancel":
     case "link_request.record":
     case "feedback_request.record":
       return command.threadId;
@@ -11487,6 +11489,168 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  const getApprovableHarnessRun = Effect.fn("Orchestrator.getApprovableHarnessRun")(function* (
+    threadId: ThreadId,
+    runId: RunId,
+  ) {
+    const { thread, runs, turnItems } = yield* projectionStore.getThreadRecords(
+      threadId,
+      ["runs", "turnItems"],
+      { runIds: [runId], turnItemRunIds: [runId], turnItemTypes: ["run_interrupt_request"] },
+    );
+    const run = runs.find((entry) => entry.id === runId);
+    return thread.deletedAt === null &&
+      thread.archivedAt === null &&
+      run &&
+      isLiveRun(run) &&
+      !turnItems.some(
+        (item) => item.type === "run_interrupt_request" && item.nodeId === run.rootNodeId,
+      )
+      ? run
+      : undefined;
+  });
+
+  const dispatchHarnessApproval = Effect.fn("Orchestrator.dispatchHarnessApproval")(function* (
+    command: Extract<
+      OrchestrationV2InternalCommand,
+      { readonly type: "harness_approval.open" | "harness_approval.cancel" }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    const emitEvent = emit(events, command);
+    const now = yield* DateTime.now;
+    const threadId = command.threadId;
+    if (command.type === "harness_approval.cancel") {
+      const { request, item, node } = yield* projectionStore
+        .getRuntimeResponseContext(threadId, command.requestId)
+        .pipe(mapDispatchError(command));
+      if (request?.status !== "pending" || request.responseCapability.type !== "harness_gateway")
+        return;
+      const base = {
+        threadId,
+        nodeId: request.nodeId,
+        ...(node?.runId == null ? {} : { runId: node.runId }),
+        occurredAt: now,
+      };
+      yield* emitEvent({
+        ...base,
+        type: "runtime-request.updated",
+        payload: {
+          ...request,
+          status: "cancelled",
+          resolvedAt: now,
+          responseCapability: { type: "not_resumable", reason: "The MCP call ended." },
+        },
+      });
+      if (node !== undefined)
+        yield* emitEvent({
+          ...base,
+          type: "node.updated",
+          payload: { ...node, status: "cancelled", completedAt: now },
+        });
+      if (item?.type === "approval_request")
+        yield* emitEvent({
+          ...base,
+          type: "turn-item.updated",
+          payload: { ...item, status: "cancelled", completedAt: now, updatedAt: now },
+        });
+      return;
+    }
+
+    const run = yield* getApprovableHarnessRun(threadId, command.runId).pipe(
+      mapDispatchError(command),
+    );
+    if (
+      !run ||
+      run.rootNodeId !== command.rootNodeId ||
+      run.activeAttemptId !== command.attemptId ||
+      run.providerThreadId === null
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "The MCP call no longer belongs to the active run.",
+      });
+    }
+    const nodeId = NodeId.make(`${command.requestId}:node`);
+    const base = {
+      threadId,
+      nodeId,
+      runId: run.id,
+      providerInstanceId: run.providerInstanceId,
+      occurredAt: now,
+    };
+    yield* emitEvent({
+      ...base,
+      type: "node.updated",
+      payload: {
+        id: nodeId,
+        threadId,
+        runId: run.id,
+        parentNodeId: run.rootNodeId,
+        rootNodeId: run.rootNodeId,
+        kind: "approval_request",
+        status: "waiting",
+        countsForRun: false,
+        providerThreadId: run.providerThreadId,
+        providerTurnId: null,
+        nativeItemRef: null,
+        runtimeRequestId: command.requestId,
+        checkpointScopeId: null,
+        startedAt: now,
+        completedAt: null,
+      },
+    });
+    yield* emitEvent({
+      ...base,
+      type: "runtime-request.updated",
+      payload: {
+        id: command.requestId,
+        nodeId,
+        providerTurnId: null,
+        nativeRequestRef: null,
+        kind: "permission",
+        status: "pending",
+        responseCapability: { type: "harness_gateway", supportsFeedback: true },
+        createdAt: now,
+        resolvedAt: null,
+      },
+    });
+    yield* emitEvent({
+      ...base,
+      type: "turn-item.updated",
+      payload: {
+        id: TurnItemId.make(`${command.requestId}:item`),
+        threadId,
+        runId: run.id,
+        nodeId,
+        providerThreadId: run.providerThreadId,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: yield* projectionStore
+          .getNextTurnItemOrdinal(threadId)
+          .pipe(mapDispatchError(command)),
+        type: "approval_request",
+        requestId: command.requestId,
+        requestKind: "permission",
+        prompt: command.prompt,
+        title: command.title,
+        appName: "T3 Harness",
+        options: [
+          { decision: "accept", label: TrimmedNonEmptyString.make("Allow once") },
+          { decision: "acceptForSession", label: TrimmedNonEmptyString.make("Allow for session") },
+          { decision: "acceptAlways", label: TrimmedNonEmptyString.make("Always allow") },
+          { decision: "decline", label: TrimmedNonEmptyString.make("Deny") },
+        ],
+        status: "waiting",
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      },
+    });
+  });
+
   const dispatchRuntimeRequestRespond = Effect.fn("Orchestrator.dispatchRuntimeRequestRespond")(
     function* (
       command: Extract<OrchestrationV2Command, { readonly type: "runtime-request.respond" }>,
@@ -11522,9 +11686,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: runtimeRequest.responseCapability.reason,
         });
       }
+      const gatewayApproval = runtimeRequest.responseCapability.type === "harness_gateway";
+      if (gatewayApproval) {
+        const node = context.node;
+        const run =
+          node?.runId == null
+            ? undefined
+            : yield* getApprovableHarnessRun(command.threadId, node.runId).pipe(
+                mapDispatchError(command),
+              );
+        if (command.decision === undefined || !run || run.rootNodeId !== node?.rootNodeId) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "A live MCP approval request and a decision are required.",
+          });
+        }
+      }
       if (
         command.feedback !== undefined &&
-        (runtimeRequest.responseCapability.type !== "live" ||
+        ((runtimeRequest.responseCapability.type !== "live" &&
+          runtimeRequest.responseCapability.type !== "harness_gateway") ||
           !runtimeRequest.responseCapability.supportsFeedback ||
           runtimeRequest.kind === "user_input" ||
           command.decision !== "decline" ||
@@ -11822,6 +12004,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         };
         yield* dispatchMessage(answer, events, effects);
         return yield* recordSubagentFollowup(answer, events).pipe(mapDispatchError(answer));
+      }
+      if (gatewayApproval && command.decision !== undefined) {
+        const decision = command.decision;
+        yield* Ref.update(effects, (existing) => [
+          ...existing,
+          {
+            id: `effect:${command.commandId}:runtime-request.respond:${command.requestId}`,
+            commandId: command.commandId,
+            threadId: command.threadId,
+            request: {
+              type: "runtime-request.respond",
+              target: "harness_gateway",
+              requestId: command.requestId,
+              decision,
+              ...(command.feedback === undefined ? {} : { feedback: command.feedback }),
+            },
+          } satisfies PendingOrchestrationEffectV2,
+        ]);
+        return;
       }
       if (providerSessionId === null) return;
       if (runtimeRequest.kind === "user_input" && resolvedNodeStatus === "completed") {
@@ -16489,6 +16690,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "secret_request.record":
         yield* dispatchSecretRequestRecord(command, events);
+        break;
+      case "harness_approval.open":
+      case "harness_approval.cancel":
+        yield* dispatchHarnessApproval(command, events);
         break;
       case "feedback_request.record":
         yield* dispatchFeedbackRequestRecord(command, events);

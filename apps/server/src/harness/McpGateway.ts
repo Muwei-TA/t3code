@@ -2,6 +2,7 @@
 import * as NodeCrypto from "node:crypto";
 import {
   HarnessError,
+  type HarnessGatewayApprovalTarget,
   type HarnessMcpLogsResult,
   type HarnessMcpServerConfig,
   type HarnessMcpServerId,
@@ -13,7 +14,11 @@ import {
   type HarnessModeEntry,
   type OrchestrationV2HarnessCapabilities,
   type ProviderInteractionMode,
+  type ProviderApprovalDecision,
+  type ProviderInstanceId,
+  type ProviderSessionId,
   type RuntimeMode,
+  type ThreadId,
 } from "@t3tools/contracts";
 import type { HarnessNativeMcpServer } from "@t3tools/provider-core/server/mcpSession";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
@@ -46,6 +51,7 @@ import {
   type UpstreamMcpTool,
 } from "./McpUpstreamClient.ts";
 import * as HarnessMcpOAuthService from "./HarnessMcpOAuthService.ts";
+import * as HarnessApprovalAuditStore from "./HarnessApprovalAuditStore.ts";
 
 const HARNESS_TOOL_SEARCH_NAME = "harness_tool_search";
 export const HARNESS_PROPOSE_PLAN_NAME = "propose_plan";
@@ -97,6 +103,26 @@ export interface GatewaySessionContext {
   readonly includeMemoryTools?: boolean | undefined;
   readonly deferredExposure: boolean;
   readonly harnessCapabilities?: OrchestrationV2HarnessCapabilities | undefined;
+  readonly approval?: GatewayApprovalContext | undefined;
+}
+
+export interface GatewayApprovalContext {
+  readonly threadId: ThreadId;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly providerSessionId?: ProviderSessionId | undefined;
+  readonly request?: (input: {
+    readonly target: HarnessGatewayApprovalTarget;
+    readonly readOnly: boolean;
+    readonly argumentCount: number;
+    readonly argumentNames: ReadonlyArray<string>;
+  }) => Effect.Effect<
+    { readonly decision: ProviderApprovalDecision; readonly feedback?: string | undefined },
+    HarnessError
+  >;
+  readonly validate?: (input: {
+    readonly serverId: HarnessMcpServerId;
+    readonly readOnly: boolean;
+  }) => Effect.Effect<void, HarnessError>;
 }
 
 /**
@@ -133,25 +159,26 @@ export function checkHarnessRuntimeToolCeiling(input: {
   return null;
 }
 
-function checkUpstreamToolCeiling(
+function checkUpstreamToolPolicy(
   input: Parameters<typeof checkHarnessRuntimeToolCeiling>[0] & {
     readonly serverPolicy: HarnessMcpServerConfig["approvalPolicy"];
-    readonly serverId: HarnessMcpServerId;
   },
-): string | null {
-  if (input.serverPolicy === "always-ask") {
-    return `Blocked "${input.toolName}" because MCP server "${input.serverId}" is configured with "always-ask" policy. Interactive gateway approval is not yet enabled; update the server's policy in Harness settings to permit execution.`;
-  }
-  if (input.serverPolicy === "auto-read" && !input.readOnly) {
-    return `Blocked "${input.toolName}" because MCP server "${input.serverId}" policy is "auto-read" and this tool is not read-only. Switch the server policy to "auto-all" in Harness settings and use Full access mode to allow mutating tools.`;
-  }
-  return checkHarnessRuntimeToolCeiling(input);
+): "allow" | "ask" | { readonly deny: string } {
+  const denied = checkHarnessRuntimeToolCeiling({ ...input, runtimeMode: "full-access" });
+  if (denied !== null) return { deny: denied };
+  if (
+    (input.serverPolicy === "auto-all" && input.runtimeMode === "full-access") ||
+    (input.serverPolicy === "auto-read" &&
+      input.readOnly &&
+      (input.runtimeMode !== "approval-required" || input.explicitlyAllowlisted === true))
+  )
+    return "allow";
+  return "ask";
 }
 
-function upstreamToolDenial(context: GatewaySessionContext, binding: CatalogToolBinding) {
-  return checkUpstreamToolCeiling({
+function upstreamToolPolicy(context: GatewaySessionContext, binding: CatalogToolBinding) {
+  return checkUpstreamToolPolicy({
     toolName: binding.exposed.exposedName,
-    serverId: binding.server.id,
     serverPolicy: binding.server.config.approvalPolicy,
     readOnly: binding.exposed.readOnly,
     explicitlyAllowlisted: binding.server.config.allowedTools?.includes(binding.tool.name),
@@ -771,6 +798,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const oauth = Option.getOrUndefined(
     yield* Effect.serviceOption(HarnessMcpOAuthService.HarnessMcpOAuthService),
+  );
+  const approvalAudit = Option.getOrUndefined(
+    yield* Effect.serviceOption(HarnessApprovalAuditStore.HarnessApprovalAuditStore),
   );
 
   const idleTtlMs = options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
@@ -1531,7 +1561,10 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     });
 
     return [...buildGatewayExposedCatalog(stillActive).byExposedName.values()]
-      .filter((binding) => upstreamToolDenial(context, binding) === null)
+      .filter((binding) => {
+        const policy = upstreamToolPolicy(context, binding);
+        return policy === "allow" || (policy === "ask" && context.approval !== undefined);
+      })
       .map(({ exposed }) => exposed);
   });
 
@@ -1789,10 +1822,83 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       (entry) => entry.server.id === server.id && entry.server.scope === server.scope,
     )!.pooled;
 
-    const ceilingError = upstreamToolDenial(context, binding);
-    if (ceilingError !== null) {
-      return { isError: true, content: [{ type: "text", text: ceilingError }] };
+    const policy = upstreamToolPolicy(context, binding);
+    if (typeof policy === "object") {
+      return { isError: true, content: [{ type: "text", text: policy.deny }] };
     }
+    const approval = context.approval;
+    const target = {
+      serverId,
+      serverScope: server.scope,
+      repoRoot: workspace.workspaceRoot,
+      toolName: upstreamToolName,
+      configDigest: server.configDigest,
+    } satisfies HarnessGatewayApprovalTarget;
+    const grantTarget =
+      approval?.providerSessionId === undefined
+        ? undefined
+        : { target, threadId: approval.threadId, providerSessionId: approval.providerSessionId };
+    const hasGrant =
+      policy === "ask" && grantTarget && approvalAudit
+        ? yield* approvalAudit.hasActiveGatewayGrant(grantTarget)
+        : false;
+    if (policy === "ask" && !hasGrant) {
+      if (!approval?.request) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `MCP tool "${toolName}" requires approval from an active T3 Code thread.`,
+            },
+          ],
+        };
+      }
+      const properties = targetTool.inputSchema.properties;
+      const { decision, feedback } = yield* approval.request({
+        target,
+        readOnly: binding.exposed.readOnly,
+        argumentCount: Object.keys(args).length,
+        argumentNames:
+          properties !== null && typeof properties === "object"
+            ? Object.keys(properties)
+                .filter((name) => Object.hasOwn(args, name))
+                .slice(0, 16)
+            : [],
+      });
+      if (decision === "decline" || decision === "cancel") {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: feedback
+                ? `User denied the MCP tool call: ${feedback}`
+                : "User denied the MCP tool call.",
+            },
+          ],
+        };
+      }
+      if (decision === "acceptAlways" || decision === "acceptForSession") {
+        if (!grantTarget || !approvalAudit) {
+          return yield* new HarnessError({
+            code: "policy_denied",
+            serverId,
+            detail: "The selected MCP approval could not be saved.",
+          });
+        }
+        yield* approval.validate?.({ serverId, readOnly: binding.exposed.readOnly }) ?? Effect.void;
+        yield* approvalAudit.recordGatewayGrant({
+          ...grantTarget,
+          providerInstanceId: approval.providerInstanceId,
+          workspaceRoot: workspace.workspaceRoot,
+          requestKind: "permission",
+          scope: decision === "acceptAlways" ? "always" : "session",
+          summary: `${serverId}: ${upstreamToolName}`,
+        });
+      }
+    }
+    yield* approval?.validate?.({ serverId, readOnly: binding.exposed.readOnly }) ?? Effect.void;
 
     // Re-verify live workspace trust, policy, config revision, and pool membership right before
     // dispatch so a revocation or edit occurring while sibling candidates connected can never execute.
@@ -1825,6 +1931,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     const expectedPoolKey = poolKeyFor(latestServer);
     if (
       latestServer.configDigest !== server.configDigest ||
+      preDispatchWorkspace.workspaceRoot !== workspace.workspaceRoot ||
       runtimeScopeKey(latestServer) !== runtimeScopeKey(server) ||
       pooled.connection.isClosed() ||
       pool.get(expectedPoolKey) !== pooled
@@ -1833,6 +1940,19 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         code: "invalid_config",
         serverId,
         detail: `MCP server "${serverId}" configuration or trust changed before tool execution. Retry the call.`,
+      });
+    }
+
+    if (
+      hasGrant &&
+      grantTarget &&
+      approvalAudit &&
+      !(yield* approvalAudit.hasActiveGatewayGrant(grantTarget))
+    ) {
+      return yield* new HarnessError({
+        code: "policy_denied",
+        serverId,
+        detail: "The MCP approval was revoked. Retry to request approval.",
       });
     }
 

@@ -96,6 +96,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as HarnessStore from "./harness/HarnessStore.ts";
 import * as HarnessApprovalAuditStore from "./harness/HarnessApprovalAuditStore.ts";
+import * as HarnessApprovalBroker from "./harness/HarnessApprovalBroker.ts";
 import * as HarnessHooksService from "./harness/HarnessHooksService.ts";
 import * as HarnessMemoryStore from "./harness/HarnessMemoryStore.ts";
 import * as HarnessSyncService from "./harness/HarnessSyncService.ts";
@@ -670,6 +671,7 @@ const layerHarness = Layer.mergeAll(HarnessLibraryImporter.layer, HarnessExporte
       McpGateway.layer.pipe(
         Layer.provide(SecretResolver.layer.pipe(Layer.provide(layerServerSettings))),
         Layer.provide(HarnessMcpOAuthService.layer),
+        Layer.provide(HarnessApprovalAuditStore.layer),
         Layer.provide(ServerSecretStore.layer),
       ),
     ),
@@ -816,7 +818,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
 ).pipe(
-  Layer.provideMerge(layerOrchestrationApplication.pipe(Layer.provideMerge(layerHarness))),
+  Layer.provideMerge(
+    layerOrchestrationApplication.pipe(
+      Layer.provideMerge(layerHarness),
+      Layer.provideMerge(HarnessApprovalBroker.layer),
+    ),
+  ),
   // One hub, which the feeders above and the workflow store inside the runtime publish to.
   Layer.provideMerge(MilestoneHub.layer),
   Layer.provideMerge(layerTaskFolders),

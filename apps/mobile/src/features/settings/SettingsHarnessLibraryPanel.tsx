@@ -97,6 +97,7 @@ export function SettingsHarnessLibraryPanel({
   targetHost,
   canWriteSettings,
   canManageProviders,
+  canOperateOrchestration,
 }: {
   readonly activeTab: Exclude<MobileHarnessTab, "mcp" | "plugins" | "hooks" | "memory" | "sync">;
   readonly environmentId: EnvironmentId;
@@ -104,6 +105,7 @@ export function SettingsHarnessLibraryPanel({
   readonly targetHost: string;
   readonly canWriteSettings: boolean;
   readonly canManageProviders: boolean;
+  readonly canOperateOrchestration: boolean;
 }) {
   const gt = useGT();
   const libraryQuery = useEnvironmentQuery(
@@ -245,13 +247,19 @@ export function SettingsHarnessLibraryPanel({
   };
 
   const handleRevokeApprovalRule = (rule: HarnessApprovalRuleRecord) => {
-    if (!canWriteSettings || rule.revokedAt !== null) return;
+    if (!canOperateOrchestration || rule.revokedAt !== null) return;
     Dialog.confirm({
       title: gt("Revoke approval grant"),
-      message: gt(
-        'Revoke "{summary}" on {host} and detach its active provider session so future turns re-check permissions?',
-        { summary: rule.summary, host: targetHost },
-      ),
+      message:
+        rule.source === "gateway"
+          ? gt('Revoke "{summary}" on {host} so future MCP calls ask again?', {
+              summary: rule.summary,
+              host: targetHost,
+            })
+          : gt(
+              'Revoke "{summary}" on {host} and detach its active provider session so future turns re-check permissions?',
+              { summary: rule.summary, host: targetHost },
+            ),
       confirmText: gt("Revoke"),
       destructive: true,
       onConfirm: () => {
@@ -259,7 +267,7 @@ export function SettingsHarnessLibraryPanel({
           setBusyId(`approval:${rule.id}`);
           const result = await revokeApprovalRule({
             environmentId,
-            input: { id: rule.id, detachThreadSession: true },
+            input: { id: rule.id, detachThreadSession: rule.source !== "gateway" },
           });
           setBusyId(null);
           if (result._tag === "Success") {
@@ -673,8 +681,8 @@ export function SettingsHarnessLibraryPanel({
           </View>
           <Text className="text-xs text-foreground-muted">
             <T>
-              Audited native allow-always and session approval grants recorded on this host.
-              Revoking a grant marks it inactive and detaches the active provider session.
+              Gateway grants control future MCP calls. Revoking a provider audit grant can detach
+              its live session.
             </T>
           </Text>
           {approvalRulesQuery.isPending && !approvalRulesQuery.data ? (
@@ -694,7 +702,8 @@ export function SettingsHarnessLibraryPanel({
                 >
                   <Text className="font-mono text-xs text-foreground">{rule.summary}</Text>
                   <Text className="text-xs text-foreground-muted">
-                    {rule.scope} · {rule.requestKind} · {rule.providerInstanceId} ·{" "}
+                    {rule.source === "gateway" ? gt("Gateway (enforced)") : gt("Provider (audit)")}{" "}
+                    · {rule.scope} · {rule.requestKind} · {rule.providerInstanceId} ·{" "}
                     {rule.revokedAt ? gt("Revoked") : gt("Active")}
                   </Text>
                   <Text className="text-2xs text-foreground-muted">
@@ -705,7 +714,7 @@ export function SettingsHarnessLibraryPanel({
                       <Button
                         label={gt("Revoke")}
                         tone="danger"
-                        disabled={!canWriteSettings || busyId === `approval:${rule.id}`}
+                        disabled={!canOperateOrchestration || busyId === `approval:${rule.id}`}
                         onPress={() => handleRevokeApprovalRule(rule)}
                       />
                     </View>

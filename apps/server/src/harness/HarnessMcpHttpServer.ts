@@ -18,6 +18,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import packageJson from "../../package.json" with { type: "json" };
@@ -32,10 +33,12 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import { compileAndValidateDeclarativeWorkflow } from "./DeclarativeWorkflowCompiler.ts";
 import { resolveRunHarnessMode, runInteractionMode } from "./HarnessTurnPreprocess.ts";
 import * as HarnessHooksService from "./HarnessHooksService.ts";
+import * as HarnessApprovalBroker from "./HarnessApprovalBroker.ts";
 import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import * as HarnessMemoryStore from "./HarnessMemoryStore.ts";
 import * as HarnessMcpOAuthNotice from "./HarnessMcpOAuthNotice.ts";
 import { isMcpServerAllowedByMode } from "./HarnessProjector.ts";
+import { scrubHarnessLogText } from "./HarnessSecrets.ts";
 import * as McpGateway from "./McpGateway.ts";
 import * as PluginHost from "./PluginHost.ts";
 
@@ -103,6 +106,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
   readonly libraryStore: Option.Option<HarnessLibraryStore.HarnessLibraryStore["Service"]>;
   readonly memoryStore: Option.Option<HarnessMemoryStore.HarnessMemoryStore["Service"]>;
   readonly oauthNotice: Option.Option<HarnessMcpOAuthNotice.HarnessMcpOAuthNotice["Service"]>;
+  readonly approvalBroker: Option.Option<HarnessApprovalBroker.HarnessApprovalBroker["Service"]>;
   readonly hooksService: Option.Option<HarnessHooksService.HarnessHooksService["Service"]>;
   readonly pluginHost: Option.Option<PluginHost.PluginHost["Service"]>;
   readonly projections: ProjectionStore.ProjectionStoreV2["Service"];
@@ -123,6 +127,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     libraryStore,
     memoryStore,
     oauthNotice,
+    approvalBroker,
     hooksService,
     pluginHost,
     projections,
@@ -227,17 +232,24 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     const librarySnapshot = Option.isSome(libraryStore)
       ? yield* libraryStore.value.getSnapshot(workspaceRoot).pipe(Effect.orElseSucceed(() => null))
       : null;
-    const activeRun =
+    const activeRunRecords =
       shell.activeRunId !== null && typeof projections.getThreadRecords === "function"
         ? yield* projections
-            .getThreadRecords(scope.thread.threadId, ["runs"], { runIds: [shell.activeRunId] })
-            .pipe(
-              Effect.map(
-                (records) => records.runs.find((run) => run.id === shell.activeRunId) ?? null,
-              ),
-              Effect.orElseSucceed(() => null),
-            )
+            .getThreadRecords(scope.thread.threadId, ["runs", "providerThreads", "turnItems"], {
+              runIds: [shell.activeRunId],
+              turnItemRunIds: [shell.activeRunId],
+              turnItemTypes: ["run_interrupt_request"],
+            })
+            .pipe(Effect.orElseSucceed(() => null))
         : null;
+    const activeRun = activeRunRecords?.runs.find((run) => run.id === shell.activeRunId);
+    const interruptRequested =
+      activeRunRecords?.turnItems?.some(
+        (item) => item.type === "run_interrupt_request" && item.nodeId === activeRun?.rootNodeId,
+      ) ?? false;
+    const activeProviderThread = activeRunRecords?.providerThreads?.find(
+      (thread) => thread.id === activeRun?.providerThreadId,
+    );
     const effectiveInteractionMode = runInteractionMode(
       shell.interactionMode,
       activeRun?.harnessMode,
@@ -281,10 +293,21 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
         snapshot.managedPolicyAllowsHarness && supportsMcpTools && Option.isSome(memoryStore),
       deferredExposure,
       harnessCapabilities,
+      ...(Option.isSome(approvalBroker)
+        ? {
+            approval: {
+              threadId: scope.thread.threadId,
+              providerInstanceId: scope.thread.providerInstanceId,
+              providerSessionId: activeProviderThread?.providerSessionId ?? undefined,
+            },
+          }
+        : {}),
     };
     return {
       shell,
       context,
+      activeRun,
+      interruptRequested,
       librarySnapshot,
       managedPolicyAllowsHarness: snapshot.managedPolicyAllowsHarness,
     };
@@ -1253,8 +1276,120 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
       }
     }
 
+    const run = state.activeRun;
+    const rootNodeId = run?.rootNodeId;
+    const attemptId = run?.activeAttemptId;
+    const threadId = scope.thread.threadId;
+    const expiry = new HarnessError({
+      code: "policy_denied",
+      detail: "The MCP call no longer belongs to the same active run.",
+    });
+    const callContext: McpGateway.GatewaySessionContext =
+      Option.isSome(approvalBroker) && state.context.approval && run && rootNodeId && attemptId
+        ? {
+            ...state.context,
+            approval: {
+              ...state.context.approval,
+              validate: Effect.fn("HarnessMcpHttpServer.validateApprovalRun")(function* ({
+                serverId,
+                readOnly,
+              }) {
+                const currentScope = yield* registry.resolve(token);
+                const current = yield* resolveThreadState;
+                if (
+                  !currentScope?.capabilities.has("harness") ||
+                  current === null ||
+                  !isLiveCallerShell(current.shell, scope.thread.providerInstanceId) ||
+                  !current.managedPolicyAllowsHarness ||
+                  current.interruptRequested ||
+                  current.activeRun?.id !== run.id ||
+                  current.activeRun.activeAttemptId !== run.activeAttemptId ||
+                  current.activeRun.rootNodeId !== run.rootNodeId ||
+                  current.context.approval?.providerSessionId !==
+                    context.approval?.providerSessionId ||
+                  current.context.workspaceRoot !== context.workspaceRoot ||
+                  current.context.runtimeMode !== context.runtimeMode ||
+                  !isMcpServerAllowedByMode(serverId, current.context.activeMode) ||
+                  (!readOnly &&
+                    (current.context.interactionMode === "plan" ||
+                      current.context.activeMode?.readonly === true))
+                )
+                  return yield* expiry;
+              }),
+              request: Effect.fn("HarnessMcpHttpServer.requestApproval")(function* ({
+                target,
+                argumentCount,
+                argumentNames,
+                readOnly,
+              }) {
+                const afterSequence = yield* orchestrator
+                  .getThreadEventSequence(threadId)
+                  .pipe(Effect.mapError(() => expiry));
+                const prompt = JSON.stringify({
+                  server: target.serverId,
+                  tool: scrubHarnessLogText(target.toolName).slice(0, 180),
+                  readOnly,
+                  argumentCount,
+                  argumentNames: argumentNames.map((name) =>
+                    scrubHarnessLogText(name).slice(0, 60),
+                  ),
+                });
+                return yield* approvalBroker.value.requestApproval({
+                  threadId,
+                  open: (requestId) =>
+                    orchestrator
+                      .dispatch({
+                        type: "harness_approval.open",
+                        commandId: CommandId.make(`open:${requestId}`),
+                        threadId,
+                        requestId,
+                        runId: run.id,
+                        rootNodeId,
+                        attemptId,
+                        title: `MCP tool approval for ${target.serverId}`,
+                        prompt,
+                      })
+                      .pipe(
+                        Effect.asVoid,
+                        Effect.mapError(() => expiry),
+                      ),
+                  cancel: (requestId) =>
+                    orchestrator
+                      .dispatch({
+                        type: "harness_approval.cancel",
+                        commandId: CommandId.make(`cancel:${requestId}`),
+                        threadId,
+                        requestId,
+                      })
+                      .pipe(Effect.ignore),
+                  invalidated: orchestrator
+                    .streamStoredEventsFrom({ threadId, afterSequence })
+                    .pipe(
+                      Stream.filter(
+                        ({ event }) =>
+                          (event.type === "run.updated" &&
+                            event.payload.id === run.id &&
+                            (event.payload.rootNodeId !== rootNodeId ||
+                              event.payload.activeAttemptId !== attemptId ||
+                              !["preparing", "starting", "running"].includes(
+                                event.payload.status,
+                              ))) ||
+                          (event.type === "turn-item.updated" &&
+                            event.payload.type === "run_interrupt_request" &&
+                            event.payload.runId === run.id &&
+                            event.payload.nodeId === rootNodeId),
+                      ),
+                      Stream.runHead,
+                      Effect.andThen(Effect.fail(expiry)),
+                      Effect.mapError(() => expiry),
+                    ),
+                });
+              }),
+            },
+          }
+        : context;
     const result = yield* gateway
-      .callToolForSession({ context: state.context, toolName, arguments: toolArgs })
+      .callToolForSession({ context: callContext, toolName, arguments: toolArgs })
       .pipe(
         Effect.catch((error: HarnessError) => {
           const server = decodeMcpServerId(error.serverId);
@@ -1309,6 +1444,7 @@ export const layer = Layer.unwrap(
     const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
     const memoryStore = yield* Effect.serviceOption(HarnessMemoryStore.HarnessMemoryStore);
     const oauthNotice = yield* Effect.serviceOption(HarnessMcpOAuthNotice.HarnessMcpOAuthNotice);
+    const approvalBroker = yield* Effect.serviceOption(HarnessApprovalBroker.HarnessApprovalBroker);
     const hooksService = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
     const pluginHost = yield* Effect.serviceOption(PluginHost.PluginHost);
     const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -1322,6 +1458,7 @@ export const layer = Layer.unwrap(
       libraryStore,
       memoryStore,
       oauthNotice,
+      approvalBroker,
       hooksService,
       pluginHost,
       projections,

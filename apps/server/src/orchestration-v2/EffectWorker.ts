@@ -32,6 +32,7 @@ import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationServic
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as HarnessApprovalAuditStore from "../harness/HarnessApprovalAuditStore.ts";
+import * as HarnessApprovalBroker from "../harness/HarnessApprovalBroker.ts";
 import * as HarnessHooksService from "../harness/HarnessHooksService.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
@@ -124,6 +125,7 @@ export const layerExecutor: Layer.Layer<
     const approvalAuditOption = yield* Effect.serviceOption(
       HarnessApprovalAuditStore.HarnessApprovalAuditStore,
     );
+    const approvalBroker = yield* Effect.serviceOption(HarnessApprovalBroker.HarnessApprovalBroker);
     const adapterRegistryOption = yield* Effect.serviceOption(
       ProviderAdapterRegistry.ProviderAdapterRegistryV2,
     );
@@ -506,6 +508,18 @@ export const layerExecutor: Layer.Layer<
                 ),
               );
           case "runtime-request.respond": {
+            if (effect.request.target === "harness_gateway") {
+              return Option.isSome(approvalBroker)
+                ? approvalBroker.value
+                    .resolveApproval({
+                      threadId: effect.threadId,
+                      requestId: effect.request.requestId,
+                      decision: effect.request.decision,
+                      feedback: effect.request.feedback,
+                    })
+                    .pipe(Effect.asVoid)
+                : Effect.void;
+            }
             const { requestId, decision } = effect.request;
             return runtimeRequests
               .respond({

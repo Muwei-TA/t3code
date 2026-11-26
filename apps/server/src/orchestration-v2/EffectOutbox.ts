@@ -95,11 +95,19 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("runtime-request.respond"),
+    target: Schema.optionalKey(Schema.Literal("provider")),
     providerSessionId: ProviderSessionId,
     requestId: RuntimeRequestId,
     decision: Schema.optional(ProviderApprovalDecision),
     feedback: Schema.optional(Schema.String),
     answers: Schema.optional(ProviderUserInputAnswers),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("runtime-request.respond"),
+    target: Schema.Literal("harness_gateway"),
+    requestId: RuntimeRequestId,
+    decision: ProviderApprovalDecision,
+    feedback: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     type: Schema.Literal("provider-thread.rollback"),

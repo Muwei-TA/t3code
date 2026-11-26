@@ -90,12 +90,21 @@ describe("HarnessApprovalAuditStore", () => {
         return first.id;
       }).pipe(Effect.provide(makeTestLayer(baseDir, paths)));
 
+      const ledgerPath = path.join(baseDir, "harness", "approval-rules.json");
+      const current = yield* fs.readFileString(ledgerPath);
+      yield* fs.writeFileString(
+        ledgerPath,
+        current
+          .replaceAll('      "source": "provider-audit",\n', "")
+          .replaceAll(',\n      "source": "provider-audit"', ""),
+      );
       // Reload from disk in a fresh layer to verify persistence
       yield* Effect.gen(function* () {
         const audit = yield* HarnessApprovalAuditStore.HarnessApprovalAuditStore;
         const reloaded = yield* audit.list({ includeRevoked: true });
         expect(reloaded).toHaveLength(2);
         expect(reloaded.find((r) => r.id === recorded)?.revokedAt).not.toBeNull();
+        expect(reloaded.every((rule) => rule.source === undefined)).toBe(true);
       }).pipe(Effect.provide(makeTestLayer(baseDir, paths)));
     }).pipe(Effect.provide(NodeServices.layer)),
   );

@@ -4,6 +4,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  AuthOrchestrationOperateScope,
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
   type EnvironmentId,
@@ -103,6 +104,7 @@ export function HarnessLibraryPanels({
   const setting = useSearchableSetting();
   const canWriteSettings = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
+  const canRevokeApprovalRules = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
 
   const queryAtom = harnessEnvironment.libraryQuery({
     environmentId,
@@ -419,8 +421,8 @@ export function HarnessLibraryPanels({
           title={<T>Approval Grants & Audit Ledger</T>}
           description={
             <T>
-              Records “Allow always” and session grants accepted through T3 without replacing native
-              provider approvals. Revoking detaches live thread sessions.
+              Gateway grants control future MCP calls. Revoking a provider audit grant can detach
+              its live session.
             </T>
           }
         >
@@ -453,6 +455,11 @@ export function HarnessLibraryPanels({
                       {rule.summary}
                     </span>
                     <Badge variant="outline">{rule.scope}</Badge>
+                    <Badge variant="outline">
+                      {rule.source === "gateway"
+                        ? gt("Gateway (enforced)")
+                        : gt("Provider (audit)")}
+                    </Badge>
                     <Badge variant="secondary">{rule.requestKind}</Badge>
                     {rule.providerInstanceId ? (
                       <Badge variant="outline">{rule.providerInstanceId}</Badge>
@@ -474,12 +481,12 @@ export function HarnessLibraryPanels({
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={!editable || busy}
+                    disabled={!canRevokeApprovalRules || busy}
                     onClick={async () => {
                       setBusy(true);
                       const res = await revokeApprovalRule({
                         environmentId,
-                        input: { id: rule.id, detachThreadSession: true },
+                        input: { id: rule.id, detachThreadSession: rule.source !== "gateway" },
                       });
                       setBusy(false);
                       if (res._tag === "Success") {

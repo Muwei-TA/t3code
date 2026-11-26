@@ -5,6 +5,7 @@ import {
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
+  ProviderSessionId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
@@ -544,7 +545,15 @@ export const HarnessModeSetEnabledInput = Schema.Struct({
 });
 export type HarnessModeSetEnabledInput = typeof HarnessModeSetEnabledInput.Type;
 
-/** Audited native `allow_always` / session approval rule recorded for visibility and revocation. */
+export const HarnessGatewayApprovalTarget = Schema.Struct({
+  serverId: HarnessMcpServerId,
+  serverScope: Schema.Literals(["user", "project"]),
+  repoRoot: Schema.NullOr(Schema.String),
+  toolName: Schema.String,
+  configDigest: Schema.String,
+});
+export type HarnessGatewayApprovalTarget = typeof HarnessGatewayApprovalTarget.Type;
+
 export const HarnessApprovalRuleRecord = Schema.Struct({
   id: HarnessApprovalRuleId,
   threadId: ThreadId,
@@ -556,6 +565,9 @@ export const HarnessApprovalRuleRecord = Schema.Struct({
   workspaceRoot: Schema.NullOr(Schema.String),
   createdAt: IsoDateTime,
   revokedAt: Schema.NullOr(IsoDateTime),
+  source: Schema.optionalKey(Schema.Literals(["provider-audit", "gateway"])),
+  target: Schema.optionalKey(HarnessGatewayApprovalTarget),
+  providerSessionId: Schema.optionalKey(ProviderSessionId),
 });
 export type HarnessApprovalRuleRecord = typeof HarnessApprovalRuleRecord.Type;
 

@@ -4,6 +4,7 @@ import {
 } from "@t3tools/client-runtime/approval-analysis";
 import {
   FULL_ACCESS_OVERRIDE_QUESTION,
+  approvalOptionsForDisplay,
   fullAccessOverrideExplanation,
 } from "@t3tools/client-runtime/state/thread-requests";
 import { FileDiff } from "@pierre/diffs/react";
@@ -221,7 +222,7 @@ export const TimelinePendingApprovalRow = memo(function TimelinePendingApprovalR
                     disabled={!canOperateThread}
                     isResponding={respondingRequestIds.includes(approval.requestId)}
                     canRespond={canRespond}
-                    options={approval.options}
+                    options={approvalOptionsForDisplay(approval, m)}
                     onRespondToApproval={onRespondToApproval}
                   />
                 </>

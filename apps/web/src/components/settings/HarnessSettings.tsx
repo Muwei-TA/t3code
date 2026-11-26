@@ -1608,7 +1608,7 @@ function McpServerEditorForm({
                 disabled={saving}
                 onClick={() => setApprovalPolicy("always-ask")}
               >
-                <T>Strict</T>
+                <T>Always ask</T>
               </Button>
               <Button
                 type="button"

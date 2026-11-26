@@ -1458,6 +1458,10 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
       providerSessionId: ProviderSessionId,
       supportsFeedback: Schema.optional(Schema.Boolean),
     }),
+    Schema.Struct({
+      type: Schema.Literal("harness_gateway"),
+      supportsFeedback: Schema.optional(Schema.Boolean),
+    }),
     Schema.Struct({ type: Schema.Literal("message") }),
     Schema.Struct({ type: Schema.Literal("not_resumable"), reason: Schema.String }),
   ]),
@@ -4077,6 +4081,23 @@ const OrchestrationV2InternalCommand = Schema.Union([
     delivery: Schema.optional(OrchestrationV2SecretRequestDelivery),
     fields: Schema.optional(Schema.Array(OrchestrationV2SecretRequestField)),
     secretStatus: OrchestrationV2SecretRequestStatus,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("harness_approval.open"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    rootNodeId: NodeId,
+    attemptId: RunAttemptId,
+    requestId: RuntimeRequestId,
+    title: Schema.String,
+    prompt: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("harness_approval.cancel"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    requestId: RuntimeRequestId,
   }),
   /** Internal so no client can mark a report sent without it being stored and sent. */
   Schema.Struct({

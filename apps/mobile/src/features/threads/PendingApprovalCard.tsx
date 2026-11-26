@@ -10,6 +10,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   FULL_ACCESS_OVERRIDE_QUESTION,
+  approvalOptionsForDisplay,
   fullAccessOverrideExplanation,
 } from "@t3tools/client-runtime/state/thread-requests";
 import { T, useGT, useMessages } from "gt-react-native";
@@ -33,7 +34,10 @@ export interface PendingApprovalCardProps {
 export function PendingApprovalCard(props: PendingApprovalCardProps) {
   const gt = useGT();
   const m = useMessages();
-  const options: ReadonlyArray<ProviderApprovalOption> = props.approval.options ?? [
+  const options: ReadonlyArray<ProviderApprovalOption> = approvalOptionsForDisplay(
+    props.approval,
+    m,
+  ) ?? [
     { decision: "accept", label: gt("Allow once") },
     { decision: "acceptForSession", label: gt("Allow session") },
     {
