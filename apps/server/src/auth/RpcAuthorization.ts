@@ -200,6 +200,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.providerUploadFeedback]: AuthOrchestrationOperateScope,
   [WS_METHODS.mcpAppsCallTool]: AuthOrchestrationOperateScope,
   [WS_METHODS.harnessMcpList]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessMcpListResources]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessMcpReadResource]: AuthOrchestrationReadScope,
   [WS_METHODS.harnessMcpOAuthStart]: AuthProvidersManageScope,
   [WS_METHODS.harnessMcpOAuthComplete]: AuthProvidersManageScope,
   [WS_METHODS.harnessMcpOAuthDisconnect]: AuthProvidersManageScope,

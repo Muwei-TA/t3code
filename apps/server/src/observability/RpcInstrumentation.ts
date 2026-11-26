@@ -272,6 +272,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.subscribeServerLifecycle]: "server",
   [WS_METHODS.subscribeAuthAccess]: "auth",
   [WS_METHODS.harnessMcpList]: "harness",
+  [WS_METHODS.harnessMcpListResources]: "harness",
+  [WS_METHODS.harnessMcpReadResource]: "harness",
   [WS_METHODS.harnessMcpUpsert]: "harness",
   [WS_METHODS.harnessMcpRemove]: "harness",
   [WS_METHODS.harnessMcpSetEnabled]: "harness",

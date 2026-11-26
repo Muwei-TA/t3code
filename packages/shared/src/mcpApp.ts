@@ -5,6 +5,7 @@ export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 export const MCP_APP_EXTENSION_ID = "io.modelcontextprotocol/ui";
 export const MCP_APP_RESOURCE_SCHEME = "ui://";
 export const MCP_APP_OUTPUT_KEY = "t3McpApp";
+export const HARNESS_MCP_APP_SERVER = "t3-harness";
 /** Frame URL query parameter carrying the host's color scheme before `ui/initialize`. */
 export const MCP_APP_COLOR_SCHEME_PARAM = "t3-color-scheme";
 

@@ -8,6 +8,12 @@ export function createHarnessEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
   return {
+    listMcpResources: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:harness:mcp:resources",
+      tag: WS_METHODS.harnessMcpListResources,
+      staleTimeMs: 5_000,
+      idleTtlMs: 15_000,
+    }),
     listMcpQuery: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:harness:mcp:list",
       tag: WS_METHODS.harnessMcpList,

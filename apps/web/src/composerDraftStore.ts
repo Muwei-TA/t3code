@@ -26,6 +26,7 @@ import {
   RuntimeMode,
   ThreadContextRecord,
   EnvironmentContextRecord,
+  McpResourceContextRecord,
   type ServerProvider,
   type ScopedProjectRef,
   type ScopedThreadRef,
@@ -346,6 +347,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   reviewComments: Schema.optionalKey(Schema.Array(ReviewCommentContextSchema)),
   threadContexts: Schema.optionalKey(Schema.Array(ThreadContextRecord)),
   environmentContexts: Schema.optionalKey(Schema.Array(EnvironmentContextRecord)),
+  mcpResourceContexts: Schema.optionalKey(Schema.Array(McpResourceContextRecord)),
   replyTo: Schema.optionalKey(ResponseContextRecord),
   modelSelectionByProvider: Schema.optionalKey(Schema.Record(ProviderInstanceId, ModelSelection)),
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
@@ -475,6 +477,7 @@ export interface ComposerThreadDraftState {
   reviewComments: ReviewCommentContext[];
   threadContexts: ThreadContextRecord[];
   environmentContexts: EnvironmentContextRecord[];
+  mcpResourceContexts?: ReadonlyArray<McpResourceContextRecord> | undefined;
   /** The response this message replies to. It becomes a context record when the message is sent. */
   replyTo: ResponseContextRecord | null;
   modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
@@ -763,6 +766,10 @@ interface ComposerDraftStoreState {
     threadRef: ComposerThreadTarget,
     records: ReadonlyArray<EnvironmentContextRecord>,
   ) => void;
+  setMcpResourceContexts: (
+    threadRef: ComposerThreadTarget,
+    records: ReadonlyArray<McpResourceContextRecord>,
+  ) => void;
   clearPersistedAttachments: (threadRef: ComposerThreadTarget) => void;
   syncPersistedAttachments: (
     threadRef: ComposerThreadTarget,
@@ -925,6 +932,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     reviewComments: [],
     threadContexts: [],
     environmentContexts: [],
+    mcpResourceContexts: [],
     replyTo: null,
     modelSelectionByProvider: {},
     activeProvider: null,
@@ -2180,6 +2188,9 @@ function normalizePersistedDraftsByThreadId(
     const environmentContexts = Array.isArray(draftCandidate.environmentContexts)
       ? draftCandidate.environmentContexts.filter(isEnvironmentContextRecord)
       : [];
+    const mcpResourceContexts = Array.isArray(draftCandidate.mcpResourceContexts)
+      ? draftCandidate.mcpResourceContexts.filter(Schema.is(McpResourceContextRecord))
+      : [];
     const previewAnnotations = Array.isArray(draftCandidate.previewAnnotations)
       ? draftCandidate.previewAnnotations.filter(isPreviewAnnotationPayload)
       : [];
@@ -2326,6 +2337,7 @@ function normalizePersistedDraftsByThreadId(
       ...(reviewComments.length > 0 ? { reviewComments } : {}),
       ...(threadContexts.length > 0 ? { threadContexts } : {}),
       ...(environmentContexts.length > 0 ? { environmentContexts } : {}),
+      ...(mcpResourceContexts.length > 0 ? { mcpResourceContexts } : {}),
       ...(replyTo ? { replyTo: replyTo as DeepMutable<ResponseContextRecord> } : {}),
       ...(hasModelData
         ? {
@@ -2490,6 +2502,9 @@ export function partializeComposerDraftStoreState(
         : {}),
       ...(draft.environmentContexts.length > 0
         ? { environmentContexts: draft.environmentContexts.map((record) => ({ ...record })) }
+        : {}),
+      ...(draft.mcpResourceContexts?.length
+        ? { mcpResourceContexts: draft.mcpResourceContexts.map((record) => ({ ...record })) }
         : {}),
       ...(draft.replyTo
         ? { replyTo: { ...draft.replyTo } as DeepMutable<ResponseContextRecord> }
@@ -2777,6 +2792,7 @@ function toHydratedThreadDraft(
     reviewComments: persistedDraft.reviewComments?.map((comment) => ({ ...comment })) ?? [],
     threadContexts: persistedDraft.threadContexts?.map((record) => ({ ...record })) ?? [],
     environmentContexts: persistedDraft.environmentContexts?.map((record) => ({ ...record })) ?? [],
+    mcpResourceContexts: persistedDraft.mcpResourceContexts ?? [],
     replyTo: persistedDraft.replyTo ?? null,
     modelSelectionByProvider,
     activeProvider,
@@ -4377,6 +4393,18 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             if (shouldRemoveDraft(nextDraft)) delete nextDraftsByThreadKey[threadKey];
             else nextDraftsByThreadKey[threadKey] = nextDraft;
             return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
+        setMcpResourceContexts: (threadRef, records) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef);
+          if (!threadKey) return;
+          set((state) => {
+            const draft = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
+            const nextDraft = { ...draft, mcpResourceContexts: records };
+            const draftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(nextDraft)) delete draftsByThreadKey[threadKey];
+            else draftsByThreadKey[threadKey] = nextDraft;
+            return { draftsByThreadKey };
           });
         },
         removeReviewComment: (threadRef, commentId) => {

@@ -41,6 +41,10 @@ const DEFINITIONS = [
     capabilities: { details: "none", expanded: "none", defaultDraftView: "compact" },
   },
   {
+    kind: "mcp-resource",
+    capabilities: { details: "none", expanded: "none", defaultDraftView: "compact" },
+  },
+  {
     kind: "skill",
     capabilities: { details: "tooltip", expanded: "none", defaultDraftView: "compact" },
   },

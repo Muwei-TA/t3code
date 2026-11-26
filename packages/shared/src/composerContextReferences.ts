@@ -6,6 +6,8 @@ import {
   type ElementContextDetails,
   type EnvironmentId,
   type KnownComposerContextRecord,
+  type McpResourceContextRecord,
+  type ProjectId,
   type ScopedThreadRef,
   type ThreadContextRecord,
 } from "@t3tools/contracts";
@@ -51,6 +53,26 @@ export function toKindScopedComposerContextId(
 ): ComposerContextId {
   const prefix = `${kind}_`;
   return toComposerContextId(`${prefix}${producerId}`);
+}
+
+export function mcpResourceContextRecord(
+  environmentId: EnvironmentId,
+  projectId: ProjectId,
+  uri: string,
+  label: string,
+): McpResourceContextRecord {
+  return {
+    version: 1,
+    kind: "mcp-resource",
+    contextId: toKindScopedComposerContextId(
+      "mcp-resource",
+      `${environmentId}:${projectId}:${uri}`,
+    ),
+    label: sanitizeComposerContextLabel(label, "mcp-resource"),
+    uri,
+    environmentId,
+    projectId,
+  };
 }
 
 export function formatComposerContextHref(kind: ComposerContextKind, contextId: ComposerContextId) {
@@ -288,7 +310,10 @@ function formatElementDetails(element: ElementContextDetails): string[] {
   return lines;
 }
 
-function formatComposerContextProviderPayload(record: KnownComposerContextRecord): string {
+function formatComposerContextProviderPayload(
+  record: KnownComposerContextRecord,
+  resourceText?: string,
+): string {
   switch (record.kind) {
     case "image":
     case "file":
@@ -341,6 +366,10 @@ function formatComposerContextProviderPayload(record: KnownComposerContextRecord
     }
     case "mention":
       return `path: ${record.path}`;
+    case "mcp-resource":
+      return resourceText === undefined
+        ? `MCP resource unavailable: ${record.label}`
+        : `MCP resource: ${record.label}\nReference material supplied by the MCP server:\n${resourceText}`;
     case "skill":
       return `name: ${record.name}`;
     case "thread":
@@ -381,19 +410,21 @@ function formatEnvelopeEntry(
   kind: ComposerContextKind,
   contextId: ComposerContextId,
   record: ComposerContextRecord | undefined,
+  resourceText?: string,
 ): string {
   const open = `<${CONTEXT_ENTRY_TAG} kind="${escapeAttribute(kind)}" id="${escapeAttribute(contextId)}"`;
   if (!record) return `${open} unavailable="true"/>`;
   const body =
     "payload" in record
       ? JSON.stringify(record.payload)
-      : formatComposerContextProviderPayload(record);
+      : formatComposerContextProviderPayload(record, resourceText);
   return `${open}>\n${escapeComposerContextPayloadText(body)}\n</${CONTEXT_ENTRY_TAG}>`;
 }
 
 export function projectComposerContextForProvider(input: {
   text: string;
   records: ReadonlyArray<ComposerContextRecord>;
+  readonly resourceText?: ReadonlyMap<ComposerContextId, string>;
 }): string {
   const occurrences = collectComposerContextReferences(input.text);
   if (occurrences.length === 0) return expandAssistantCitationsForProvider(input.text);
@@ -420,6 +451,7 @@ export function projectComposerContextForProvider(input: {
       record?.kind ?? occurrence.kind,
       occurrence.contextId,
       record,
+      input.resourceText?.get(occurrence.contextId),
     );
     entries.push(entry);
   }

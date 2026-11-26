@@ -11,7 +11,7 @@ import type {
 } from "@t3tools/contracts";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { videoMimeType } from "@t3tools/shared/video";
-import { MessageCircleIcon, MousePointerClickIcon } from "lucide-react";
+import { BlocksIcon, MessageCircleIcon, MousePointerClickIcon } from "lucide-react";
 import { createContext, type ReactElement, type ReactNode, use } from "react";
 import { msg, T, useGT, useMessages } from "gt-react";
 import type { MessageResolver } from "../i18n/messages";
@@ -90,7 +90,8 @@ export type ComposerDraftContextRecord =
       contextId?: ComposerContextId | undefined;
     }
   | { kind: "thread"; record: ThreadContextRecord }
-  | { kind: "environment"; record: EnvironmentContextRecord };
+  | { kind: "environment"; record: EnvironmentContextRecord }
+  | { kind: "mcp-resource"; record: import("@t3tools/contracts").McpResourceContextRecord };
 
 export {
   ComposerContextActionsContext,
@@ -116,6 +117,9 @@ export function composerContextRecordsFromDraft(input: {
   previewAnnotations?: ReadonlyArray<PreviewAnnotationPayload>;
   threadContexts?: ReadonlyArray<ThreadContextRecord>;
   environmentContexts?: ReadonlyArray<EnvironmentContextRecord>;
+  mcpResourceContexts?:
+    | ReadonlyArray<import("@t3tools/contracts").McpResourceContextRecord>
+    | undefined;
   images?: ReadonlyArray<ComposerImageAttachment>;
   files?: ReadonlyArray<ComposerFileAttachment>;
   existingAttachments?:
@@ -189,6 +193,9 @@ export function composerContextRecordsFromDraft(input: {
   }
   for (const record of input.environmentContexts ?? []) {
     records.set(record.contextId, { kind: "environment", record });
+  }
+  for (const record of input.mcpResourceContexts ?? []) {
+    records.set(record.contextId, { kind: "mcp-resource", record });
   }
   return records;
 }
@@ -531,8 +538,16 @@ const composerContextPresentationRegistry = createContextPresentationRegistry<
     "preview-annotation",
     "thread",
     "environment",
+    "mcp-resource",
   ],
   handlers: [
+    {
+      kind: "mcp-resource",
+      canRender: (entry) => entry.kind === "mcp-resource",
+      render: (_, context) => (
+        <ContextChipShell kind="mcp-resource" icon={<BlocksIcon />} label={context.label} />
+      ),
+    },
     {
       kind: "terminal",
       canRender: (entry) => entry.kind === "terminal",

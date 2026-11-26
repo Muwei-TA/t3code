@@ -504,6 +504,10 @@ import {
   HarnessMcpApplyImportsInput,
   HarnessMcpApplyImportsResult,
   HarnessMcpListInput,
+  HarnessMcpResourceListInput,
+  HarnessMcpResourceListResult,
+  HarnessMcpResourceReadInput,
+  HarnessMcpResourceReadResult,
   HarnessMcpLogsInput,
   HarnessMcpLogsResult,
   HarnessMcpRemoveInput,
@@ -816,6 +820,8 @@ export const WS_METHODS = {
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
 
   harnessMcpList: "harness.mcp.list",
+  harnessMcpListResources: "harness.mcp.resources.list",
+  harnessMcpReadResource: "harness.mcp.resources.read",
   harnessMcpUpsert: "harness.mcp.upsert",
   harnessMcpRemove: "harness.mcp.remove",
   harnessMcpSetEnabled: "harness.mcp.setEnabled",
@@ -2603,6 +2609,18 @@ const WsHarnessMcpListRpc = Rpc.make(WS_METHODS.harnessMcpList, {
   error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
 });
 
+const WsHarnessMcpListResourcesRpc = Rpc.make(WS_METHODS.harnessMcpListResources, {
+  payload: HarnessMcpResourceListInput,
+  success: HarnessMcpResourceListResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpReadResourceRpc = Rpc.make(WS_METHODS.harnessMcpReadResource, {
+  payload: HarnessMcpResourceReadInput,
+  success: HarnessMcpResourceReadResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
 const WsHarnessMcpUpsertRpc = Rpc.make(WS_METHODS.harnessMcpUpsert, {
   payload: HarnessMcpUpsertInput,
   success: HarnessMcpSnapshot,
@@ -3193,6 +3211,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeCommandOutputRpc,
   WsOrchestrationV2SubscribePromptSuggestionRpc,
   WsHarnessMcpListRpc,
+  WsHarnessMcpListResourcesRpc,
+  WsHarnessMcpReadResourceRpc,
   WsHarnessMcpUpsertRpc,
   WsHarnessMcpRemoveRpc,
   WsHarnessMcpSetEnabledRpc,

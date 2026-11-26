@@ -1,3 +1,4 @@
+import * as HarnessMcpResourceMentions from "../harness/HarnessMcpResourceMentions.ts";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
   MessageId,
@@ -125,6 +126,7 @@ export const layer: Layer.Layer<
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const mcpAppModelContext = yield* McpAppModelContext.McpAppModelContext;
+    const projectComposerMessage = yield* HarnessMcpResourceMentions.makeMessageProjector;
 
     const load = Effect.fn("ProviderTurnControlService.load")(function* (input: {
       readonly threadId: ThreadId;
@@ -452,6 +454,19 @@ export const layer: Layer.Layer<
             mcpAppModelContext,
             input.threadId,
           );
+          const projectionInput = { text: message.text, records: message.context?.records ?? [] };
+          const shell = projectionInput.records.some(({ kind }) => kind === "mcp-resource")
+            ? yield* projections.getThreadShell(input.threadId)
+            : null;
+          const providerText =
+            shell === null
+              ? projectComposerContextForProvider(projectionInput)
+              : yield* projectComposerMessage(
+                  projectionInput,
+                  shell,
+                  run.harnessMode,
+                  loaded.session.value.providerSession?.capabilities.harness,
+                );
           yield* loaded.session.value
             .steerTurn({
               threadId: input.threadId,
@@ -464,13 +479,7 @@ export const layer: Layer.Layer<
               ...(appContext.length === 0 ? {} : { appContext }),
               message: {
                 messageId: message.id,
-                text: withMessageSenderNote(
-                  message,
-                  projectComposerContextForProvider({
-                    text: message.text,
-                    records: message.context?.records ?? [],
-                  }),
-                ),
+                text: withMessageSenderNote(message, providerText),
                 attachments: message.attachments,
                 createdBy: message.createdBy,
                 creationSource: message.creationSource,

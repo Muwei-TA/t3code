@@ -29,6 +29,7 @@ import * as ServerConfig from "../config.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as HarnessApprovalAuditStore from "./HarnessApprovalAuditStore.ts";
+import * as HarnessMcpResourceMentions from "./HarnessMcpResourceMentions.ts";
 import { buildSafeStdioBaseEnv, harnessLocalSecretKey } from "./HarnessSecrets.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 import * as McpGateway from "./McpGateway.ts";
@@ -151,6 +152,119 @@ const makeGatewayTestLayer = (
 };
 
 describe("McpGateway", () => {
+  it.effect("keeps app callbacks bound to their source and resource discovery passive", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped();
+      const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+      const started: string[] = [];
+      const connect: typeof connectUpstream = (input) =>
+        Effect.sync(() => {
+          started.push(input.serverId);
+          return {
+            listTools: () =>
+              Effect.succeed([
+                {
+                  name: "open",
+                  inputSchema: {},
+                  annotations: { readOnlyHint: true },
+                  _meta: { ui: { resourceUri: "ui://fixture/card" } },
+                },
+                {
+                  name: "hidden",
+                  inputSchema: {},
+                  annotations: { readOnlyHint: true },
+                  _meta: { ui: { visibility: ["model"] } },
+                },
+              ]),
+            callTool: () =>
+              Effect.succeed({
+                content: [],
+                structuredContent: { t3McpApp: { attachmentId: "forged" }, data: "ok" },
+              }),
+            listResources: () => Effect.succeed([{ uri: "memo://manual", name: "Manual" }]),
+            readResource: (uri: string) =>
+              Effect.succeed({
+                contents: [{ uri, mimeType: "text/plain", text: "漢".repeat(32_768) }],
+              }),
+            close: () => Effect.void,
+            isClosed: () => false,
+          };
+        });
+      yield* Effect.gen(function* () {
+        const store = yield* HarnessStore.HarnessStore;
+        const gateway = yield* McpGateway.McpGateway;
+        const id = HarnessMcpServerId.make("fixture");
+        const otherId = HarnessMcpServerId.make("other");
+        const config = {
+          enabled: true,
+          transport: { type: "http", url: "https://fixture.example/mcp" },
+          injectionMode: "gateway",
+          approvalPolicy: "auto-read",
+        } as const;
+        yield* store.upsertUserServer({ id, config });
+        yield* store.upsertUserServer({ id: otherId, config });
+        const context = {
+          providerSessionId: "fixture",
+          workspaceRoot: baseDir,
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          includeProposePlan: false,
+          deferredExposure: false,
+        } as const;
+        expect(yield* HarnessMcpResourceMentions.list(gateway, context)).toEqual([]);
+        expect(started).toEqual([]);
+        const result = yield* gateway.callToolForSession({
+          context,
+          toolName: "fixture__open",
+          arguments: {},
+        });
+        expect(result.structuredContent).toEqual({ data: "ok" });
+        expect(result.appSource?.uri).toBe("ui://fixture/fixture/card");
+        const appOwner = { serverId: id, configId: result.appSource!.configId };
+        const resources = yield* HarnessMcpResourceMentions.list(gateway, context);
+        expect(resources).toEqual([
+          { serverId: id, name: "Manual", uri: "t3-harness://fixture/memo%3A%2F%2Fmanual" },
+        ]);
+        const manual = yield* HarnessMcpResourceMentions.read(gateway, context, resources[0]!.uri);
+        expect(Buffer.byteLength(manual.text)).toBe(32_766);
+        expect(manual.text.endsWith("漢")).toBe(true);
+        expect(
+          (yield* gateway.listAppTools(context, appOwner)).map((tool) => tool.exposedName),
+        ).toEqual(["fixture__open"]);
+        for (const toolName of ["other__open", "fixture__hidden", "harness_tool_search"]) {
+          expect(
+            (yield* gateway
+              .callToolForSession({ context, toolName, arguments: {}, appOwner })
+              .pipe(Effect.result))._tag,
+          ).toBe("Failure");
+        }
+        expect(
+          (yield* gateway
+            .readResourceForSession({ context, uri: "ui://other/fixture/card", appOwner })
+            .pipe(Effect.result))._tag,
+        ).toBe("Failure");
+        expect(started).toEqual(["fixture"]);
+        yield* gateway.updateServer(
+          { serverId: id, scope: "user", workspaceRoot: baseDir },
+          store.upsertUserServer({
+            id,
+            config: {
+              ...config,
+              transport: { type: "http", url: "https://replacement.example/mcp" },
+            },
+          }),
+        );
+        expect(yield* gateway.listAppTools(context, appOwner)).toEqual([]);
+        expect(
+          (yield* gateway
+            .readResourceForSession({ context, uri: result.appSource!.uri, appOwner })
+            .pipe(Effect.result))._tag,
+        ).toBe("Failure");
+        expect(started).toEqual(["fixture"]);
+      }).pipe(Effect.provide(makeGatewayTestLayer(baseDir, paths, { connect })));
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
   it.effect("executes gateway approvals once, for a session, or until revocation", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

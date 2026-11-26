@@ -427,6 +427,16 @@ export function useComposerContextImport(input: {
           rewritten.set(record.contextId, imported.contextId);
           break;
         }
+        case "mcp-resource": {
+          if (questionAttachmentTarget !== null || record.environmentId !== environmentId) break;
+          const store = useComposerDraftStore.getState();
+          const records = store.getComposerDraft(composerDraftTarget)?.mcpResourceContexts ?? [];
+          if (!records.some((entry) => entry.contextId === record.contextId)) {
+            store.setMcpResourceContexts(composerDraftTarget, [...records, record]);
+          }
+          rewritten.set(record.contextId, record.contextId);
+          break;
+        }
         case "environment": {
           // A machine means the same machine from any thread, so a pasted one is kept,
           // but not in an answer to an agent's question, which carries no machines.

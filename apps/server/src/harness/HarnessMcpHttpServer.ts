@@ -26,6 +26,7 @@ import { parseBearerToken } from "../auth/EnvironmentAuth.ts";
 import { HARNESS_MCP_HTTP_PATH } from "../httpCors.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import { isLiveCallerShell } from "../mcp/threadAccess.ts";
+import * as GatewayMcpAppCapture from "../mcpApps/GatewayMcpAppCapture.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
@@ -103,6 +104,7 @@ const forbiddenResponse = (message: string) =>
 const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* (deps: {
   readonly registry: McpSessionRegistry.McpSessionRegistry["Service"];
   readonly gateway: McpGateway.McpGateway["Service"];
+  readonly appCapture: Option.Option<GatewayMcpAppCapture.GatewayMcpAppCapture["Service"]>;
   readonly libraryStore: Option.Option<HarnessLibraryStore.HarnessLibraryStore["Service"]>;
   readonly memoryStore: Option.Option<HarnessMemoryStore.HarnessMemoryStore["Service"]>;
   readonly oauthNotice: Option.Option<HarnessMcpOAuthNotice.HarnessMcpOAuthNotice["Service"]>;
@@ -1427,12 +1429,30 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
             Effect.as({
               isError: true as const,
               content: [{ type: "text", text: error.detail }],
+              appSource: undefined,
             }),
           );
         }),
       );
     yield* emitPostToolHook(result.isError === true);
-    return jsonRpcSuccess(rpc.id, result, sessionId);
+    const { appSource, ...response } = result;
+    if (
+      appSource !== undefined &&
+      run &&
+      !state.interruptRequested &&
+      Option.isSome(deps.appCapture)
+    ) {
+      yield* deps.appCapture.value.publish({
+        threadId,
+        run,
+        context: callContext,
+        tool: toolName,
+        source: appSource,
+        arguments: toolArgs,
+        result: response,
+      });
+    }
+    return jsonRpcSuccess(rpc.id, response, sessionId);
   }
 
   return jsonRpcError(
@@ -1467,6 +1487,7 @@ export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const registry = yield* McpSessionRegistry.McpSessionRegistry;
     const gateway = yield* McpGateway.McpGateway;
+    const appCapture = yield* Effect.serviceOption(GatewayMcpAppCapture.GatewayMcpAppCapture);
     const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
     const memoryStore = yield* Effect.serviceOption(HarnessMemoryStore.HarnessMemoryStore);
     const oauthNotice = yield* Effect.serviceOption(HarnessMcpOAuthNotice.HarnessMcpOAuthNotice);
@@ -1481,6 +1502,7 @@ export const layer = Layer.unwrap(
     const handlePost = makeHarnessPostHandler({
       registry,
       gateway,
+      appCapture,
       libraryStore,
       memoryStore,
       oauthNotice,

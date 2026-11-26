@@ -142,6 +142,7 @@ import * as McpGateway from "./harness/McpGateway.ts";
 import * as HarnessApprovalAuditStore from "./harness/HarnessApprovalAuditStore.ts";
 import * as HarnessHooksService from "./harness/HarnessHooksService.ts";
 import * as HarnessMemoryStore from "./harness/HarnessMemoryStore.ts";
+import * as HarnessMcpResourceMentions from "./harness/HarnessMcpResourceMentions.ts";
 import * as HarnessSyncService from "./harness/HarnessSyncService.ts";
 import * as PluginHost from "./harness/PluginHost.ts";
 import { compileAndValidateDeclarativeWorkflow } from "./harness/DeclarativeWorkflowCompiler.ts";
@@ -1578,6 +1579,39 @@ export const layerWsRpc = (
             detail: `${name} is not available in this server configuration.`,
           }),
         );
+      const mcpResourceContext = Effect.fn("HarnessMcpResourceMentions.rpcContext")(function* (
+        input: typeof import("@t3tools/contracts").HarnessMcpResourceListInput.Type,
+      ) {
+        if (Option.isNone(mcpGatewayOption)) return yield* harnessUnavailable("McpGateway");
+        const project = Option.getOrUndefined(
+          yield* projectStore.get(input.projectId).pipe(Effect.orElseSucceed(() => Option.none())),
+        );
+        const shell =
+          input.threadId === undefined
+            ? null
+            : yield* threadManagement
+                .getThreadShell(input.threadId)
+                .pipe(Effect.orElseSucceed(() => null));
+        if (
+          project === undefined ||
+          project.deletedAt !== null ||
+          (shell !== null &&
+            (shell.projectId !== project.projectId ||
+              shell.deletedAt !== null ||
+              shell.archivedAt !== null))
+        ) {
+          return yield* new HarnessError({
+            code: "not_found",
+            detail: "The composer workspace is not available.",
+          });
+        }
+        const context = yield* HarnessMcpResourceMentions.resolveContext(
+          shell?.worktreePath ?? project.workspaceRoot,
+          shell,
+          Option.getOrUndefined(harnessLibraryStoreOption),
+        );
+        return { gateway: mcpGatewayOption.value, context };
+      });
       const analytics = yield* AnalyticsService.AnalyticsService;
       const originProps = clientAnalyticsProps;
       const recordClientCommandAnalytics = (command: OrchestrationV2Command) => {
@@ -3844,6 +3878,18 @@ export const layerWsRpc = (
             onNone: () => harnessUnavailable("McpGateway"),
             onSome: (gateway) => gateway.getSnapshot(input.workspaceRoot),
           }),
+        [WS_METHODS.harnessMcpListResources]: (input) =>
+          mcpResourceContext(input).pipe(
+            Effect.flatMap(({ gateway, context }) =>
+              HarnessMcpResourceMentions.list(gateway, context),
+            ),
+          ),
+        [WS_METHODS.harnessMcpReadResource]: (input) =>
+          mcpResourceContext(input).pipe(
+            Effect.flatMap(({ gateway, context }) =>
+              HarnessMcpResourceMentions.read(gateway, context, input.uri),
+            ),
+          ),
         [WS_METHODS.harnessMcpUpsert]: (input) =>
           Option.isSome(harnessStoreOption) && Option.isSome(mcpGatewayOption)
             ? mcpGatewayOption.value.updateServer(

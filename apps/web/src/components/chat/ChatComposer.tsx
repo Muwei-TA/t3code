@@ -162,6 +162,7 @@ import {
 } from "../../lib/terminalContext";
 import {
   formatComposerContextReference,
+  mcpResourceContextRecord,
   threadContextRecord,
   toKindScopedComposerContextId,
 } from "@t3tools/shared/composerContextReferences";
@@ -359,6 +360,9 @@ export interface ChatComposerHandle {
     reviewComments: ReviewCommentContext[];
     threadContexts: ThreadContextRecord[];
     environmentContexts: EnvironmentContextRecord[];
+    mcpResourceContexts?:
+      | ReadonlyArray<import("@t3tools/contracts").McpResourceContextRecord>
+      | undefined;
     selectedPromptEffort: string | null;
     selectedModelSelection: ModelSelection;
     multipleModelSelections: ReadonlyArray<ModelSelection> | null;
@@ -758,6 +762,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerReviewComments = composerDraft.reviewComments;
   const composerThreadContexts = attachmentDraft.threadContexts;
   const composerEnvironmentContexts = composerDraft.environmentContexts;
+  const composerMcpResourceContexts = composerDraft.mcpResourceContexts;
   const {
     pendingSnapShotAnimations,
     pendingSnapShotIds,
@@ -848,6 +853,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     previewAnnotations: composerPreviewAnnotations,
     threadContexts: composerThreadContexts,
     environmentContexts: composerEnvironmentContexts,
+    mcpResourceContexts: composerMcpResourceContexts,
     images: composerImages,
     files: composerFiles,
     existingAttachments: activeEditingQueuedAttachments ?? undefined,
@@ -1235,6 +1241,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     linkedEnvironments,
     gitCwd,
     activeThreadId,
+    activeProjectId,
     pullRequestProjectId,
     pullRequestRepository,
     threadPullRequests,
@@ -2078,6 +2085,34 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
     const { snapshot, trigger } = resolveActiveComposerTrigger();
     if (!trigger) return;
+    if (item.type === "mcp-resource") {
+      if (
+        activeProjectId === null ||
+        trigger.kind !== "path" ||
+        !composerMenuItems.some((candidate) => candidate.id === item.id)
+      )
+        return;
+      const record = mcpResourceContextRecord(environmentId, activeProjectId, item.uri, item.label);
+      const replacement = `${formatComposerContextReference(record)} `;
+      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+        snapshot.value,
+        trigger.rangeEnd,
+        replacement,
+      );
+      if (
+        applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
+          expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+        })
+      ) {
+        const store = useComposerDraftStore.getState();
+        const existing = store.getComposerDraft(composerDraftTarget)?.mcpResourceContexts ?? [];
+        if (!existing.some(({ contextId }) => contextId === record.contextId)) {
+          store.setMcpResourceContexts(composerDraftTarget, [...existing, record]);
+        }
+        setComposerHighlightedItemId(null);
+      }
+      return;
+    }
     if (item.type === "path") {
       if (!isPathSuggestionCurrent(item.searchTarget, trigger, environmentId, gitCwd)) return;
       const replacement = `${serializeComposerFileLink(item.path)} `;
@@ -2369,6 +2404,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       reviewComments: latestDraft.reviewComments,
                       threadContexts: latestDraft.threadContexts,
                       environmentContexts: latestDraft.environmentContexts,
+                      mcpResourceContexts: latestDraft.mcpResourceContexts,
                     }
                   : {}),
                 prompt: transcribedText,
@@ -3602,6 +3638,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         reviewComments: composerReviewComments,
         threadContexts: composerThreadContexts,
         environmentContexts: composerEnvironmentContexts,
+        mcpResourceContexts: composerMcpResourceContexts,
         selectedPromptEffort,
         selectedModelSelection,
         multipleModelSelections:

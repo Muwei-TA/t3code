@@ -25,7 +25,7 @@ import {
   type ThreadContextRecord,
 } from "@t3tools/contracts";
 import { type ReviewCommentContext } from "../../reviewCommentContext";
-import { composerTargetKey } from "../../composerDraftStore";
+import { composerTargetKey, useComposerDraftStore } from "../../composerDraftStore";
 import {
   type ComposerListEdit,
   listContinuationForEnter,
@@ -156,6 +156,9 @@ export function composerCommandKeyHandler(input: {
     setComposerDraftPrompt(composerDraftTarget, nextPrompt);
     setComposerDraftThreadContexts(composerDraftTarget, mentions.threadContexts);
     setComposerDraftEnvironmentContexts(composerDraftTarget, mentions.environmentContexts);
+    useComposerDraftStore
+      .getState()
+      .setMcpResourceContexts(composerDraftTarget, mentions.mcpResourceContexts ?? []);
     setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
     setComposerTrigger(null);
     setComposerHighlightedItemId(null);

@@ -11,6 +11,7 @@ import {
 } from "./htmlRender.ts";
 import {
   claudeMcpToolName,
+  HARNESS_MCP_APP_SERVER,
   MCP_APP_OUTPUT_KEY,
   readMcpAppReference,
   type McpAppReference,
@@ -257,8 +258,14 @@ export function previewRecordingIdFromToolItem(item: {
 export function mcpAppFromToolItem(item: {
   readonly toolName: string | null | undefined;
   readonly output?: unknown;
+  readonly nativeItemRef?: unknown;
 }): McpAppReference | undefined {
   const app = compactDynamicToolOutput(item.output)?.[MCP_APP_OUTPUT_KEY];
+  if (app?.server === HARNESS_MCP_APP_SERVER) {
+    return item.nativeItemRef === null && item.toolName === `${app.server}.${app.tool}`
+      ? app
+      : undefined;
+  }
   return app !== undefined &&
     (item.toolName === `${app.server}.${app.tool}` ||
       item.toolName === claudeMcpToolName(app.server, app.tool))

@@ -5,6 +5,7 @@ import {
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
+  ProjectId,
   ProviderSessionId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -875,6 +876,27 @@ export const HarnessMcpListInput = Schema.Struct({
   workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type HarnessMcpListInput = typeof HarnessMcpListInput.Type;
+
+export const HarnessMcpResourceUri = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(4_096),
+  Schema.isPattern(/^t3-harness:\/\//),
+);
+export const HarnessMcpResourceListInput = Schema.Struct({
+  projectId: ProjectId,
+  threadId: Schema.optionalKey(ThreadId),
+});
+export const HarnessMcpResourceReadInput = Schema.Struct({
+  ...HarnessMcpResourceListInput.fields,
+  uri: HarnessMcpResourceUri,
+});
+export const HarnessMcpResourceSummary = Schema.Struct({
+  uri: HarnessMcpResourceUri,
+  serverId: HarnessMcpServerId,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+});
+export type HarnessMcpResourceSummary = typeof HarnessMcpResourceSummary.Type;
+export const HarnessMcpResourceListResult = Schema.Array(HarnessMcpResourceSummary);
+export const HarnessMcpResourceReadResult = Schema.Struct({ text: Schema.String });
 
 export const HarnessMcpUpsertInput = Schema.Struct({
   id: HarnessMcpServerId,

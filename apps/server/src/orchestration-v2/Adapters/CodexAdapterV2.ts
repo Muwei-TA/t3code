@@ -138,6 +138,7 @@ import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import {
+  HARNESS_MCP_APP_SERVER,
   MCP_APP_EXTENSION_ID,
   MCP_APP_MIME_TYPE,
   MCP_APP_OUTPUT_KEY,
@@ -605,7 +606,7 @@ class CodexAppServerRetiredError extends Schema.TaggedError<CodexAppServerRetire
 }
 
 function codexMcpAppResourceUri(item: CodexDynamicToolItem): string | undefined {
-  if (item.type !== "mcpToolCall") return undefined;
+  if (item.type !== "mcpToolCall" || item.server === HARNESS_MCP_APP_SERVER) return undefined;
   const uri = item.mcpAppUi?.resourceUri ?? item.mcpAppResourceUri ?? item.appContext?.resourceUri;
   return typeof uri === "string" && uri.startsWith(MCP_APP_RESOURCE_SCHEME) ? uri : undefined;
 }

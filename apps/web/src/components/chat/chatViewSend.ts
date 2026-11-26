@@ -269,6 +269,13 @@ export async function rewindToMessage(input: {
     store.addEnvironmentContexts(draftTarget, mentions.environmentContexts, {
       appendReference: false,
     });
+    if (mentions.mcpResourceContexts?.length) {
+      const current = store.getComposerDraft(draftTarget)?.mcpResourceContexts ?? [];
+      store.setMcpResourceContexts(
+        draftTarget,
+        withRestored(current, mentions.mcpResourceContexts, (record) => record.contextId),
+      );
+    }
     const images: ComposerImageAttachment[] = [];
     const restoredFiles: ComposerFileAttachment[] = [];
     files.forEach((file, index) => {
@@ -344,6 +351,14 @@ export function restoreComposerDraft(
     withRestored(
       current?.environmentContexts,
       snapshot.environmentContexts,
+      (record) => record.contextId,
+    ),
+  );
+  store.setMcpResourceContexts(
+    draftTarget,
+    withRestored(
+      current?.mcpResourceContexts,
+      snapshot.mcpResourceContexts,
       (record) => record.contextId,
     ),
   );

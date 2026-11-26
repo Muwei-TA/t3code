@@ -181,6 +181,19 @@ describe("tool metadata", () => {
 });
 
 describe("mcpAppFromToolItem", () => {
+  it("only renders a gateway app on a gateway-owned tool item", async () => {
+    const { mcpAppFromToolItem } = await import("./toolOutput.ts");
+    const app = {
+      attachmentId: "thread-1-abc-html",
+      server: "t3-harness",
+      tool: "fixture__open",
+      resourceUri: "ui://fixture/app",
+    };
+    const item = { toolName: "t3-harness.fixture__open", output: { t3McpApp: app } };
+    expect(mcpAppFromToolItem(item)).toBeUndefined();
+    expect(mcpAppFromToolItem({ ...item, nativeItemRef: { nativeId: "tool-1" } })).toBeUndefined();
+    expect(mcpAppFromToolItem({ ...item, nativeItemRef: null })).toEqual(app);
+  });
   it("reads the app from both the stored output and its compact wire form", async () => {
     const { compactDynamicToolOutput, mcpAppFromToolItem } = await import("./toolOutput.ts");
     const app = {

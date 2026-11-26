@@ -109,6 +109,7 @@ import * as McpGateway from "./harness/McpGateway.ts";
 import * as HarnessContextService from "./harness/HarnessContextService.ts";
 import * as HarnessMcpHttpServer from "./harness/HarnessMcpHttpServer.ts";
 import * as HarnessMcpOAuthNotice from "./harness/HarnessMcpOAuthNotice.ts";
+import * as GatewayMcpAppCapture from "./mcpApps/GatewayMcpAppCapture.ts";
 import * as HarnessMcpOAuthHttp from "./harness/harnessMcpOAuthHttp.ts";
 import * as HarnessMcpOAuthService from "./harness/HarnessMcpOAuthService.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
@@ -969,7 +970,7 @@ const layerMakeRoutes = Layer.mergeAll(
   ),
   HarnessMcpHttpServer.layer.pipe(
     Layer.provide(
-      HarnessMcpOAuthNotice.layer.pipe(
+      Layer.merge(HarnessMcpOAuthNotice.layer, GatewayMcpAppCapture.layer).pipe(
         Layer.provide(
           Layer.mergeAll(
             ProjectionStoreV2.layer,

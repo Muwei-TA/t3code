@@ -20,6 +20,7 @@ const NO_LINKED_ENVIRONMENTS: ReadonlyMap<EnvironmentId, string> = new Map();
 import { COMPOSER_CONTEXT_MAX_RECORDS } from "@t3tools/contracts";
 import {
   formatComposerContextReference,
+  mcpResourceContextRecord,
   threadContextRecord,
 } from "@t3tools/shared/composerContextReferences";
 import { environmentComposerContext, pullRequestComposerContext } from "../../lib/composerContext";
@@ -261,6 +262,8 @@ export function useComposerCommandMenu({
   linkedEnvironments = NO_LINKED_ENVIRONMENTS,
   currentThreadId = null,
   projectCwd,
+  projectId,
+  supportsMcpResources = false,
   pullRequestProjectId = null,
   pullRequestRepository = null,
   threadPullRequests,
@@ -286,6 +289,8 @@ export function useComposerCommandMenu({
   readonly linkedEnvironments?: ReadonlyMap<EnvironmentId, string>;
   readonly currentThreadId?: ThreadId | null;
   readonly projectCwd: string | null;
+  readonly projectId?: ProjectId;
+  readonly supportsMcpResources?: boolean;
   readonly pullRequestProjectId?: ProjectId | null;
   readonly pullRequestRepository?: string | null;
   readonly threadPullRequests?: ReadonlyArray<ThreadPullRequestLink>;
@@ -356,6 +361,20 @@ export function useComposerCommandMenu({
     return detectComposerTrigger(draftMessage, selection.end);
   })();
   const isHarnessMenuTrigger = trigger?.kind === "slash-command" || trigger?.kind === "skill";
+  const resources = useEnvironmentQuery(
+    trigger?.kind === "path" &&
+      environmentId !== null &&
+      projectId !== undefined &&
+      supportsMcpResources
+      ? harnessEnvironment.listMcpResources({
+          environmentId,
+          input: {
+            projectId,
+            ...(currentThreadId === null ? {} : { threadId: currentThreadId }),
+          },
+        })
+      : null,
+  );
   const harnessLibraryQuery = useEnvironmentQuery(
     isHarnessMenuTrigger && environmentId
       ? harnessEnvironment.libraryQuery({
@@ -565,6 +584,18 @@ export function useComposerCommandMenu({
         ...threadItems,
         ...environmentItems,
         ...modelItems,
+        ...(resources.data ?? [])
+          .filter(({ name, serverId }) =>
+            `${serverId} ${name}`.toLowerCase().includes(trigger.query.trim().toLowerCase()),
+          )
+          .slice(0, 10)
+          .map(({ uri, name, serverId }) => ({
+            id: uri,
+            type: "mcp-resource" as const,
+            uri,
+            label: name,
+            description: serverId,
+          })),
         ...pathSearch.entries.map((entry) => {
           const parts = entry.path.normalize("NFC").split("/");
           return {
@@ -584,9 +615,19 @@ export function useComposerCommandMenu({
 
   const onSelect = (item: ComposerCommandItem) => {
     if (!trigger) return;
-    if (item.type === "environment") {
+    if (item.type === "environment" || item.type === "mcp-resource") {
       if (!ownerKey || trigger.kind !== "path") return;
-      const record = environmentComposerContext(item.environmentId, item.label);
+      if (
+        item.type === "mcp-resource" &&
+        (environmentId === null ||
+          projectId === undefined ||
+          !items.some((candidate) => candidate.id === item.id))
+      )
+        return;
+      const record =
+        item.type === "environment"
+          ? environmentComposerContext(item.environmentId, item.label)
+          : mcpResourceContextRecord(environmentId!, projectId!, item.uri, item.label);
       const existing = getComposerDraftSnapshot(ownerKey).context?.records ?? [];
       const alreadyAttached = existing.some((entry) => entry.contextId === record.contextId);
       if (!alreadyAttached && existing.length >= COMPOSER_CONTEXT_MAX_RECORDS) {
@@ -717,7 +758,9 @@ export function useComposerCommandMenu({
     items,
     skills,
     isLoading:
-      trigger?.kind === "pull-request" ? pullRequestSearch.isPending : pathSearch.isPending,
+      trigger?.kind === "pull-request"
+        ? pullRequestSearch.isPending
+        : pathSearch.isPending || resources.isPending,
     error:
       trigger?.kind === "pull-request"
         ? pullRequestProjectId === null || pullRequestRepository === null

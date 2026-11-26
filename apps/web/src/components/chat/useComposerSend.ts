@@ -583,6 +583,7 @@ export function useComposerSend(input: ComposerSendInput) {
           reviewComments: draftAfterHold.reviewComments,
           threadContexts: draftAfterHold.threadContexts,
           environmentContexts: draftAfterHold.environmentContexts,
+          mcpResourceContexts: draftAfterHold.mcpResourceContexts,
         };
       }
     }
@@ -819,6 +820,7 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
       environmentContexts: composerEnvironmentContexts,
+      mcpResourceContexts: draftMcpResourceContexts,
       selectedProvider: ctxSelectedProvider,
       selectedModel: ctxSelectedModel,
       selectedProviderModels: ctxSelectedProviderModels,
@@ -842,6 +844,12 @@ export function useComposerSend(input: ComposerSendInput) {
     const replyTo =
       useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.replyTo ?? null;
     const promptForSend = withReplyReference(draftPrompt, replyTo);
+    const referencedResources = draftMcpResourceContexts?.length
+      ? new Set(collectInlineContextIds(promptForSend))
+      : null;
+    const composerMcpResourceContexts = referencedResources
+      ? draftMcpResourceContexts!.filter((record) => referencedResources.has(record.contextId))
+      : [];
     if (warnStrandedThreadContext(promptForSend, composerThreadContexts)) return;
     if (queuedRunEdit.isEditing) {
       // A queued message stays in its thread, so saving `/side` would send it to main.
@@ -869,6 +877,7 @@ export function useComposerSend(input: ComposerSendInput) {
           previewAnnotations: composerPreviewAnnotations,
           threadContexts: composerThreadContexts,
           environmentContexts: composerEnvironmentContexts,
+          mcpResourceContexts: composerMcpResourceContexts,
           replyTo,
         },
         setThreadError,
@@ -961,6 +970,7 @@ export function useComposerSend(input: ComposerSendInput) {
       composerReviewComments.length === 0 &&
       composerThreadContexts.length === 0 &&
       composerEnvironmentContexts.length === 0 &&
+      composerMcpResourceContexts.length === 0 &&
       replyTo === null;
     if (freshSessionAvailable && composerHoldsOnlyText && isClearComposerCommand(trimmed)) {
       armFreshSession(routeThreadKey);
@@ -1010,6 +1020,7 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
       environmentContexts: composerEnvironmentContexts,
+      mcpResourceContexts: composerMcpResourceContexts,
       replyTo,
     });
     const {
@@ -1020,6 +1031,7 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewCommentsSnapshot,
       threadContexts: composerThreadContextsSnapshot,
       environmentContexts: composerEnvironmentContextsSnapshot,
+      mcpResourceContexts: composerMcpResourceContextsSnapshot,
       messageText: messageTextForSend,
     } = sendSnapshot;
     const {
@@ -1197,6 +1209,7 @@ export function useComposerSend(input: ComposerSendInput) {
         previewAnnotations: composerPreviewAnnotationsSnapshot,
         threadContexts: composerThreadContextsSnapshot,
         environmentContexts: composerEnvironmentContextsSnapshot,
+        mcpResourceContexts: composerMcpResourceContextsSnapshot,
         replyTo,
         attachments: composerAttachmentsSnapshot.map((attachment, index) => ({
           attachment,

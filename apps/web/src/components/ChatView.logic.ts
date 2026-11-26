@@ -1381,6 +1381,9 @@ export interface ComposerSendContents {
   readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
   readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
   readonly environmentContexts: ReadonlyArray<EnvironmentContextRecord>;
+  readonly mcpResourceContexts?:
+    | ReadonlyArray<import("@t3tools/contracts").McpResourceContextRecord>
+    | undefined;
   /** The response the message replies to. `prompt` already leads with its reference. */
   readonly replyTo: ResponseContextRecord | null;
 }
@@ -1411,6 +1414,7 @@ export function snapshotComposerSend(contents: ComposerSendContents) {
     reviewComments: [...contents.reviewComments],
     threadContexts: [...contents.threadContexts],
     environmentContexts: [...contents.environmentContexts],
+    mcpResourceContexts: [...(contents.mcpResourceContexts ?? [])],
     replyTo: contents.replyTo,
     messageText,
     /** What a failed send puts back in the composer: the reply returns above it, not in the text. */

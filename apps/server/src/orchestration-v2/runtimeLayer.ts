@@ -406,6 +406,7 @@ const layerMcpAppRequestsProvided = McpAppRequests.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       McpAppModelContext.layer,
+      ProviderAdapterRegistry.layerFromProviderInstanceRegistry,
       layerOrchestratorProvided,
       layerThreadManagementProvided,
       layerProviderSessionManagerProvided,

@@ -79,6 +79,7 @@ import {
   claudeMcpToolName,
   claudeMcpToolNamePart,
   claudeMcpToolPrefix,
+  HARNESS_MCP_APP_SERVER,
   MCP_APP_OUTPUT_KEY,
   mcpAppToolResourceUri,
 } from "@t3tools/shared/mcpApp";
@@ -9154,7 +9155,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               toolCall.toolName,
             );
             const resourceUri = mcpAppToolResourceUri(match?.tool._meta);
-            if (match === undefined || resourceUri === undefined) return undefined;
+            if (
+              match === undefined ||
+              match.server === HARNESS_MCP_APP_SERVER ||
+              resourceUri === undefined
+            ) {
+              return undefined;
+            }
             const { contents } = yield* liveQuery.query.readMcpResource({
               server: match.server,
               uri: resourceUri,
