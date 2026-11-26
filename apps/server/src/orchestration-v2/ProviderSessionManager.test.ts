@@ -494,6 +494,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
     readonly hasPendingBackgroundWorkForThread?: Effect.Effect<boolean>;
     readonly backgroundTasksEndWithProcess?: boolean;
+    readonly canResumeAfterRestart?: boolean;
     readonly hangSessionScopeClose?: boolean;
     readonly startTurn?: Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>;
     readonly interruptTurn?: Effect.Effect<void>;
@@ -604,6 +605,9 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
           ...(options.backgroundTasksEndWithProcess === false
             ? {}
             : { backgroundTasksEndWithProcess: true as const }),
+          ...(options.canResumeAfterRestart === undefined
+            ? {}
+            : { canResumeAfterRestart: options.canResumeAfterRestart }),
           ...(options.hasPendingBackgroundWork === undefined
             ? {}
             : { hasPendingBackgroundWork: options.hasPendingBackgroundWork }),
@@ -682,6 +686,7 @@ function layerTest(input: {
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
   readonly hasPendingBackgroundWorkForThread?: Effect.Effect<boolean>;
   readonly backgroundTasksEndWithProcess?: boolean;
+  readonly canResumeAfterRestart?: boolean;
   readonly hangSessionScopeClose?: boolean;
   readonly startTurn?: Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>;
   readonly interruptTurn?: Effect.Effect<void>;
@@ -733,6 +738,9 @@ function layerTest(input: {
       ...(input.backgroundTasksEndWithProcess === undefined
         ? {}
         : { backgroundTasksEndWithProcess: input.backgroundTasksEndWithProcess }),
+      ...(input.canResumeAfterRestart === undefined
+        ? {}
+        : { canResumeAfterRestart: input.canResumeAfterRestart }),
       ...(input.hangSessionScopeClose === undefined
         ? {}
         : { hangSessionScopeClose: input.hangSessionScopeClose }),
@@ -5995,9 +6003,9 @@ it.effect(
     }),
 );
 
-it.effect(
-  "reopens an idle session through T3 Gateway when a native MCP server gains a tool filter",
-  () =>
+it.effect.each([true, false])(
+  "reopens an idle session through T3 Gateway when a native MCP server gains a tool filter (can resume: %s)",
+  (canResumeAfterRestart) =>
     Effect.gen(function* () {
       const state = yield* Ref.make(emptyState);
       const mcpConfigs = yield* Ref.make<
@@ -6054,6 +6062,22 @@ it.effect(
         const nativeToken = native!.authorizationHeader.replace(/^Bearer\s+/, "");
         assert.isDefined(yield* mcpRegistry.resolve(nativeToken));
 
+        if (!canResumeAfterRestart) {
+          const documentationId = HarnessMcpServerId.make("documentation");
+          yield* store.upsertUserServer({
+            id: documentationId,
+            config: {
+              ...config,
+              transport: { type: "http", url: "https://docs.example.test/mcp" },
+              injectionMode: "gateway",
+            },
+          });
+          assert.strictEqual(yield* manager.open(openInput), first);
+          assert.include(yield* Ref.get(state), { openCount: 1, closeCount: 0 });
+          assert.isDefined(yield* mcpRegistry.resolve(nativeToken));
+          yield* store.removeUserServer(documentationId);
+        }
+
         yield* store.upsertUserServer({
           id,
           config: { ...config, allowedTools: ["search_issues"] },
@@ -6074,7 +6098,13 @@ it.effect(
         Effect.provide(
           Layer.merge(
             storeLayer,
-            layerTest({ state, mcpConfigs, capabilities: ExclusiveCapabilities, mcpGatewayLayer }),
+            layerTest({
+              state,
+              mcpConfigs,
+              capabilities: ExclusiveCapabilities,
+              mcpGatewayLayer,
+              canResumeAfterRestart,
+            }),
           ),
         ),
       );

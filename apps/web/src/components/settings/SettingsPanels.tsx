@@ -18,6 +18,7 @@ import {
   IDLE_COMPACTION_MODES,
   type IdleCompactionMode,
   globalIdleCompaction,
+  isManagedSettingPath,
   ProviderDriverKind,
   type ProviderInstanceId,
   type SidebarProjectGroupingMode,
@@ -853,7 +854,9 @@ function PrivacySettings() {
   const { scope, connectedEnvironments, targets } = useSettingsScope();
   const { environments } = useEnvironments();
   const updateSettings = useUpdateScopedSettings(
-    (environment) => environment.serverConfig?.managedPolicy?.limits?.telemetry !== false,
+    ({ serverConfig }) =>
+      serverConfig?.managedPolicy?.limits?.telemetry !== false &&
+      !isManagedSettingPath(serverConfig?.managedPolicy, "productTelemetryEnabled"),
   );
   const canWrite = useScopedSettingsWriteAllowed();
   const relayStatus = useSyncExternalStore(
@@ -869,45 +872,53 @@ function PrivacySettings() {
     connectedEnvironments.every(supportsProductTelemetrySettings);
   const targetSettings = new Map(targets.map((target) => [target.environmentId, target.settings]));
   const telemetryStates = connectedEnvironments.map(({ environmentId, serverConfig }) => {
-    const managed = serverConfig?.managedPolicy?.limits?.telemetry === false;
+    const policy = serverConfig?.managedPolicy;
+    const forcedOff = policy?.limits?.telemetry === false;
+    const managedBy = isManagedSettingPath(policy, "productTelemetryEnabled")
+      ? policy?.organization
+      : undefined;
     const { envOverride, shellDiscoveryPending } = serverConfig?.productTelemetry ?? {};
     const enabled =
-      !managed &&
+      !forcedOff &&
       !shellDiscoveryPending &&
       (envOverride ??
         targetSettings.get(environmentId)?.productTelemetryEnabled ??
         serverConfig?.settings.productTelemetryEnabled ??
         false);
-    return { managed, envOverride, shellDiscoveryPending, enabled };
+    return { forcedOff, managedBy, envOverride, shellDiscoveryPending, enabled };
   });
   const enabled = telemetryStates.some((state) => state.enabled);
   const mixed = enabled && telemetryStates.some((state) => !state.enabled);
   const envOverride = telemetryStates.some((state) => state.envOverride !== undefined);
   const shellDiscoveryPending = telemetryStates.some((state) => state.shellDiscoveryPending);
-  const allManaged = telemetryStates.every((state) => state.managed);
+  const allForcedOff = telemetryStates.every((state) => state.forcedOff);
+  const managedBy = telemetryStates.find((state) => state.managedBy !== undefined)?.managedBy;
   if (!productVisible && relayConfig === null) return null;
   return (
     <SettingsSection id="privacy" title={gt("Privacy")}>
       {productVisible ? (
         <SettingsRow
           serverScoped
+          settingKeys={["productTelemetryEnabled"]}
           mixed={mixed}
           {...setting("product-usage-data")}
           description={gt("Send usage events from the selected machines.")}
           status={
-            projectScope
-              ? gt("Select a machine or All environments to change this setting.")
-              : !selectedMachinesSupportProductTelemetry
-                ? gt("All selected connected machines must support product usage settings.")
-                : envOverride
-                  ? gt("T3CODE_TELEMETRY_ENABLED is explicitly set on a selected machine.")
-                  : shellDiscoveryPending
-                    ? gt("Checking the shell environment on a selected machine.")
-                    : telemetryStates.some((state) => state.managed)
-                      ? gt(
-                          "An administrator has disabled product usage data on a selected machine.",
-                        )
-                      : undefined
+            managedBy !== undefined
+              ? gt("Managed by {organization}.", { organization: managedBy })
+              : projectScope
+                ? gt("Select a machine or All environments to change this setting.")
+                : !selectedMachinesSupportProductTelemetry
+                  ? gt("All selected connected machines must support product usage settings.")
+                  : envOverride
+                    ? gt("T3CODE_TELEMETRY_ENABLED is explicitly set on a selected machine.")
+                    : shellDiscoveryPending
+                      ? gt("Checking the shell environment on a selected machine.")
+                      : telemetryStates.some((state) => state.forcedOff)
+                        ? gt(
+                            "An administrator has disabled product usage data on a selected machine.",
+                          )
+                        : undefined
           }
           control={
             <Switch
@@ -918,7 +929,8 @@ function PrivacySettings() {
                 !canWrite ||
                 projectScope ||
                 !selectedMachinesSupportProductTelemetry ||
-                allManaged ||
+                allForcedOff ||
+                managedBy !== undefined ||
                 envOverride ||
                 shellDiscoveryPending
               }

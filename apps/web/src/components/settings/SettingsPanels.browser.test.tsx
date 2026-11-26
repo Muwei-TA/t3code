@@ -1,5 +1,5 @@
 import { PrimaryConnectionTarget } from "@t3tools/client-runtime/connection";
-import { EnvironmentId, ServerConfig } from "@t3tools/contracts";
+import { EnvironmentId, ServerConfig, type ManagedPolicySummary } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { createContext, use } from "react";
@@ -65,7 +65,11 @@ function renderGeneralSettings(environments: EnvironmentPresentation[] = []) {
 function machine(
   label: string,
   enabled: boolean,
-  options?: { override?: boolean; supported?: boolean; managed?: boolean },
+  options?: {
+    override?: boolean;
+    supported?: boolean;
+    managedPolicy?: ManagedPolicySummary;
+  },
 ): EnvironmentPresentation {
   const environmentId = EnvironmentId.make(label);
   return {
@@ -116,15 +120,7 @@ function machine(
       ...(options?.override === undefined
         ? {}
         : { productTelemetry: { envOverride: options.override } }),
-      ...(options?.managed
-        ? {
-            managedPolicy: {
-              organization: "Test administrator",
-              lockedSettings: [],
-              limits: { telemetry: false },
-            },
-          }
-        : {}),
+      ...(options?.managedPolicy === undefined ? {} : { managedPolicy: options.managedPolicy }),
     }),
   };
 }
@@ -138,7 +134,19 @@ it.each([
   async ({ laptopEnabled, serverEnabled, managed, override }) => {
     await using screen = await renderGeneralSettings([
       machine("Laptop", laptopEnabled, override === undefined ? undefined : { override }),
-      machine("Server", serverEnabled, managed === undefined ? undefined : { managed }),
+      machine(
+        "Server",
+        serverEnabled,
+        managed === undefined
+          ? undefined
+          : {
+              managedPolicy: {
+                organization: "Test administrator",
+                lockedSettings: [],
+                limits: { telemetry: false },
+              },
+            },
+      ),
     ]);
     const toggle = screen.getByRole("switch", { name: "Send product usage data" });
     await expect.element(toggle).toHaveAttribute("aria-checked", "mixed");
@@ -146,6 +154,22 @@ it.each([
     else await expect.element(toggle).toBeDisabled();
   },
 );
+
+it.each([false, true])("shows and locks managed product usage data set to %s", async (enabled) => {
+  await using screen = await renderGeneralSettings([
+    machine("Server", enabled, {
+      managedPolicy: {
+        organization: "Test administrator",
+        lockedSettings: ["productTelemetryEnabled"],
+      },
+    }),
+  ]);
+
+  const toggle = screen.getByLabelText("Send product usage data");
+  await expect.element(toggle).toHaveAttribute("aria-checked", String(enabled));
+  await expect.element(toggle).toBeDisabled();
+  await expect.element(screen.getByText("Managed by Test administrator.")).toBeVisible();
+});
 
 it.each([false, true])("shows and locks a telemetry env override of %s", async (override) => {
   await using screen = await renderGeneralSettings([machine("Server", !override, { override })]);

@@ -1,4 +1,4 @@
-import { AuthSettingsWriteScope } from "@t3tools/contracts";
+import { AuthSettingsWriteScope, isManagedSettingPath } from "@t3tools/contracts";
 import * as Application from "expo-application";
 import Constants from "expo-constants";
 import * as Updates from "expo-updates";
@@ -269,7 +269,9 @@ function ProductUsageSettings() {
     <SettingsSection title={gt("Product usage data")}>
       {supported.map((environment) => {
         const { serverConfig } = environment;
-        const managed = serverConfig?.managedPolicy?.limits?.telemetry === false;
+        const policy = serverConfig?.managedPolicy;
+        const forcedOff = policy?.limits?.telemetry === false;
+        const managed = isManagedSettingPath(policy, "productTelemetryEnabled");
         const { envOverride, shellDiscoveryPending } = serverConfig?.productTelemetry ?? {};
         return (
           <SettingsSwitchRow
@@ -277,22 +279,25 @@ function ProductUsageSettings() {
             icon="tray.and.arrow.up"
             label={environment.label}
             subtitle={
-              managed
+              forcedOff
                 ? gt("An administrator has disabled product usage data.")
-                : envOverride !== undefined
-                  ? gt("Controlled by T3CODE_TELEMETRY_ENABLED on this machine.")
-                  : shellDiscoveryPending
-                    ? gt("Checking this machine’s shell environment.")
-                    : undefined
+                : managed
+                  ? gt("Managed by {organization}.", { organization: policy?.organization })
+                  : envOverride !== undefined
+                    ? gt("Controlled by T3CODE_TELEMETRY_ENABLED on this machine.")
+                    : shellDiscoveryPending
+                      ? gt("Checking this machine’s shell environment.")
+                      : undefined
             }
             disabled={
+              forcedOff ||
               managed ||
               envOverride !== undefined ||
               shellDiscoveryPending ||
               !writable.has(environment.environmentId)
             }
             value={
-              !managed &&
+              !forcedOff &&
               !shellDiscoveryPending &&
               (envOverride ?? serverConfig?.settings.productTelemetryEnabled ?? false)
             }
