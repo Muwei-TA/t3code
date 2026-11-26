@@ -20,6 +20,7 @@ import type { SqlError } from "effect/sql/SqlError";
 import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import * as ServerConfig from "../../config.ts";
+import type * as McpGateway from "../../harness/McpGateway.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ManagedPolicy from "../../policy/ManagedPolicy.ts";
@@ -300,6 +301,7 @@ export function layerWithRegistry<Error>(
     readonly wrapProjectionStore?: (
       store: ProjectionStore.ProjectionStoreV2Shape,
     ) => ProjectionStore.ProjectionStoreV2Shape;
+    readonly mcpGatewayLayer?: Layer.Layer<McpGateway.McpGateway>;
     readonly managedPolicy?: ManagedPolicyDocument;
     /** The instances the ingestor reads snapshots from, such as an endpoint behind a hub. */
     readonly providerInstances?: Partial<
@@ -444,7 +446,7 @@ export function layerWithRegistry<Error>(
     Layer.provide(Layer.merge(layerEventSinkProvided, layerStores)),
   );
   const layerProviderSessionManagerProvided = ProviderSessionManager.layerWithOptions({
-    configureMcp: false,
+    configureMcp: options.mcpGatewayLayer !== undefined,
   }).pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -457,6 +459,7 @@ export function layerWithRegistry<Error>(
         layerProviderEventIngestorProvided,
         layerStores,
         ProviderInstallationGate.layer,
+        options.mcpGatewayLayer ?? Layer.empty,
       ),
     ),
   );
