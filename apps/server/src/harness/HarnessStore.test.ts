@@ -73,6 +73,42 @@ describe("HarnessStore", () => {
     expect(Option.isSome(decode("my__custom_server"))).toBe(true);
   });
 
+  it.effect("rejects conflicting tool filters on save and in a batch import", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-harness-filters-" });
+      const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+      yield* Effect.gen(function* () {
+        const store = yield* HarnessStore.HarnessStore;
+        const id = HarnessMcpServerId.make("conflicting");
+        const config = {
+          enabled: true,
+          transport: { type: "http", url: "https://mcp.example.com/docs" },
+          injectionMode: "gateway",
+          approvalPolicy: "auto-read",
+          allowedTools: ["search"],
+        } as const;
+        const conflicting = { id, config: { ...config, disabledTools: ["search"] } };
+
+        const saveError = yield* store.upsertUserServer(conflicting).pipe(Effect.flip);
+        expect(saveError).toMatchObject({ code: "invalid_config", serverId: id });
+        const importError = yield* store
+          .importUserServers({
+            entries: [{ id: HarnessMcpServerId.make("valid"), config }, conflicting],
+          })
+          .pipe(Effect.flip);
+        expect(importError).toMatchObject({ code: "invalid_config", serverId: id });
+        expect(importError.detail).toContain("search");
+        expect((yield* store.loadUserConfig).config.mcpServers).toEqual({});
+        yield* store.upsertUserServer({ id, config });
+        expect(yield* store.importUserServers({ entries: [conflicting] })).toEqual({
+          importedIds: [],
+          skippedIds: [id],
+        });
+      }).pipe(Effect.provide(makeTestLayer(baseDir, paths)));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect(
     "persists harness.json outside userdata, skips malformed and reserved entries, and preserves redacted secrets on edit",
     () =>

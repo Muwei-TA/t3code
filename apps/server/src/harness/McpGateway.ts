@@ -264,6 +264,14 @@ function poolKeyFor(
   return `${server.id}\u0000${runtimeScopeKey(server)}`;
 }
 
+// Discovered metadata is reusable across policy edits. Live connections still use configDigest.
+function discoveryKey(server: HarnessStore.ResolvedHarnessMcpServer) {
+  const digest = NodeCrypto.createHash("sha256")
+    .update(JSON.stringify(HarnessStore.canonicalMcpTransport(server.config.transport)))
+    .digest("hex");
+  return `${runtimeScopePrefix(server)}${digest}`;
+}
+
 interface DigestRuntimeState {
   state: "idle" | "starting" | "connected" | "error" | "auth_required";
   lastError: string | null;
@@ -271,7 +279,7 @@ interface DigestRuntimeState {
 
 interface ServerRuntimeRecord {
   readonly stateByDigest: Map<string, DigestRuntimeState>;
-  readonly toolsByDigest: Map<string, ReadonlyArray<UpstreamMcpTool>>;
+  readonly toolsByUpstream: Map<string, ReadonlyArray<UpstreamMcpTool>>;
   readonly logs: RingLogBuffer;
   readonly lock: Semaphore.Semaphore;
 }
@@ -429,16 +437,26 @@ function providerSupportsNativeTransport(
   return transportType === "http" || transportType === "sse";
 }
 
+export function hasToolFilters(
+  config: Pick<HarnessMcpServerConfig, "allowedTools" | "disabledTools">,
+): boolean {
+  return (config.allowedTools?.length ?? 0) > 0 || (config.disabledTools?.length ?? 0) > 0;
+}
+
 /**
  * Single source of truth deciding whether an enabled MCP server runs over native passthrough
  * or falls back to the T3 Harness HTTP gateway for a given provider's capabilities.
  */
 export function resolveServerChannel(
-  config: Pick<HarnessMcpServerConfig, "injectionMode" | "transport">,
+  config: Pick<
+    HarnessMcpServerConfig,
+    "injectionMode" | "transport" | "allowedTools" | "disabledTools"
+  >,
   harnessCapabilities?: OrchestrationV2HarnessCapabilities,
 ): "native" | "gateway" {
   if (
     config.injectionMode === "native" &&
+    !hasToolFilters(config) &&
     harnessCapabilities !== undefined &&
     providerSupportsNativeTransport(harnessCapabilities, config.transport.type)
   ) {
@@ -856,7 +874,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     if (!record) {
       record = {
         stateByDigest: new Map(),
-        toolsByDigest: new Map(),
+        toolsByUpstream: new Map(),
         logs: new RingLogBuffer(),
         lock: Semaphore.makeUnsafe(1),
       };
@@ -1129,10 +1147,12 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       pool.set(key, pooled);
       unpooledConnection = null;
       setDigestState(record, scopeKey, "connected", null);
-      record.toolsByDigest.set(scopeKey, tools);
-      if (record.toolsByDigest.size > 8) {
-        const oldestDigest = record.toolsByDigest.keys().next().value;
-        if (oldestDigest !== undefined) record.toolsByDigest.delete(oldestDigest);
+      const upstreamKey = discoveryKey(server);
+      record.toolsByUpstream.delete(upstreamKey);
+      record.toolsByUpstream.set(upstreamKey, tools);
+      if (record.toolsByUpstream.size > 8) {
+        const oldestKey = record.toolsByUpstream.keys().next().value;
+        if (oldestKey !== undefined) record.toolsByUpstream.delete(oldestKey);
       }
       return pooled;
     }).pipe(
@@ -1236,8 +1256,10 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       state = "idle";
     }
 
-    const cachedTools = liveConnected ? pooled.tools : (record?.toolsByDigest.get(scopeKey) ?? []);
-    const filteredTools = filterAllowedTools(server.config, cachedTools);
+    const discoveredTools = liveConnected
+      ? pooled.tools
+      : record?.toolsByUpstream.get(discoveryKey(server));
+    const filteredTools = filterAllowedTools(server.config, discoveredTools ?? []);
     const tools: ReadonlyArray<HarnessMcpToolSummary> = filteredTools.map((tool) => ({
       name: tool.name,
       exposedName: canonicalExposedToolName(server.id, tool.name),
@@ -1254,6 +1276,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       state,
       toolCount: tools.length,
       tools,
+      ...(discoveredTools === undefined
+        ? {}
+        : { discoveredToolNames: [...new Set(discoveredTools.map((tool) => tool.name))].sort() }),
       estimatedToolListBytes: estimateToolsBytes(tools),
       lastError,
       needsTrustConfirmation: server.needsTrustConfirmation,

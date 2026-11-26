@@ -252,6 +252,16 @@ function ensureProviderInstanceMutationAllowed(
   return Effect.void;
 }
 
+function makeProductTelemetryConsent(initiallyEnabled = false) {
+  let epoch = 0;
+  let enabled = initiallyEnabled;
+  return (nextEnabled: boolean): number | null => {
+    if (enabled && !nextEnabled) epoch++;
+    enabled = nextEnabled;
+    return enabled ? epoch : null;
+  };
+}
+
 export class ServerSettingsService extends Context.Service<
   ServerSettingsService,
   {
@@ -263,6 +273,9 @@ export class ServerSettingsService extends Context.Service<
     readonly managedPolicy?: ManagedPolicySummary | undefined;
 
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
+
+    /** The current opt-in epoch, or null when usage data is off. */
+    readonly getProductTelemetryConsent: Effect.Effect<number | null, ServerSettingsError>;
 
     readonly updateSettings: (
       patch: ServerSettingsPatch,
@@ -306,6 +319,9 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       : {}),
   });
   const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
+  const productTelemetryConsent = makeProductTelemetryConsent(
+    initialSettings.productTelemetryEnabled,
+  );
   const writeSemaphore = yield* Semaphore.make(1);
   const getSettings = Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider));
 
@@ -316,7 +332,13 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       Ref.get(currentSettingsRef).pipe(
         Effect.flatMap(update),
         Effect.flatMap(normalizeServerSettings),
-        Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
+        Effect.tap((nextSettings) =>
+          Ref.set(currentSettingsRef, nextSettings).pipe(
+            Effect.andThen(
+              Effect.sync(() => productTelemetryConsent(nextSettings.productTelemetryEnabled)),
+            ),
+          ),
+        ),
         Effect.map(resolveTextGenerationProvider),
       ),
     );
@@ -326,6 +348,11 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     start: Effect.void,
     ready: Effect.void,
     getSettings,
+    getProductTelemetryConsent: writeSemaphore.withPermits(1)(
+      getSettings.pipe(
+        Effect.map((settings) => productTelemetryConsent(settings.productTelemetryEnabled)),
+      ),
+    ),
     updateSettings: (patch) =>
       updateTestSettings((currentSettings) =>
         Effect.succeed(applyServerSettingsPatch(currentSettings, patch)),
@@ -730,6 +757,9 @@ const make = Effect.gen(function* () {
       managedProviders.applyLimits(managed.applyLocks(settings)),
       managedProviders.isDriverAllowed,
     );
+  const productTelemetryConsent = makeProductTelemetryConsent();
+  const trackProductTelemetryConsent = (settings: ServerSettings) =>
+    productTelemetryConsent(managed.applyLocks(settings).productTelemetryEnabled);
   const writeSemaphore = yield* Semaphore.make(1);
   const cacheKey = "settings" as const;
   const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
@@ -1289,6 +1319,7 @@ const make = Effect.gen(function* () {
         yield* Cache.set(settingsCache, cacheKey, { settings: next, parseFailure: Option.none() });
         const resolved = toEffective(materializedNext);
         materialized = { source: next, value: resolved };
+        trackProductTelemetryConsent(next);
         yield* emitChange(next);
         return resolved;
       }),
@@ -1300,6 +1331,7 @@ const make = Effect.gen(function* () {
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
     Effect.gen(function* () {
       const { settings } = yield* reloadSettings;
+      trackProductTelemetryConsent(settings);
       yield* emitChange(settings);
     }),
   );
@@ -1440,6 +1472,9 @@ const make = Effect.gen(function* () {
     start,
     ready: Deferred.await(startedDeferred),
     getSettings: getMaterializedSettings,
+    getProductTelemetryConsent: writeSemaphore.withPermits(1)(
+      getSettingsFromCache.pipe(Effect.map(trackProductTelemetryConsent)),
+    ),
     updateSettings: (patch) =>
       updateAndPersistSettings(patch, (current) =>
         ensureSecretProviderWritesAllowed(patch, settingsPath).pipe(

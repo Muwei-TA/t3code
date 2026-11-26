@@ -2,16 +2,23 @@ import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m as resolveMessage } from "~/i18n/messages";
 import { useAtomValue } from "@effect/atom-react";
 import { NotificationSettings } from "./NotificationSettings";
+import {
+  getRelayTracingStatus,
+  resolveRelayTracingConfig,
+  setRelayTracingPreference,
+  subscribeRelayTracingStatus,
+} from "../../cloud/publicConfig";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import { CheckIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import {
   type DesktopUpdateChannel,
   IDLE_COMPACTION_MODES,
   type IdleCompactionMode,
   globalIdleCompaction,
+  isManagedSettingPath,
   ProviderDriverKind,
   type ProviderInstanceId,
   type SidebarProjectGroupingMode,
@@ -63,6 +70,7 @@ import {
 import {
   useScopedSettings,
   useScopedSettingsMixed,
+  useScopedSettingsWriteAllowed,
   useUpdateScopedSettings,
 } from "./useScopedSettings";
 import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
@@ -93,6 +101,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { ScopedSwitch } from "./ScopedSwitch";
+import { supportsProductTelemetrySettings } from "./useAvailableSettingsSearchItems";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -839,6 +848,132 @@ function AutoSettleDaysInput({
   );
 }
 
+function PrivacySettings() {
+  const gt = useGT();
+  const setting = useSearchableSetting();
+  const { scope, connectedEnvironments, targets } = useSettingsScope();
+  const { environments } = useEnvironments();
+  const updateSettings = useUpdateScopedSettings(
+    ({ serverConfig }) =>
+      serverConfig?.managedPolicy?.limits?.telemetry !== false &&
+      !isManagedSettingPath(serverConfig?.managedPolicy, "productTelemetryEnabled"),
+  );
+  const canWrite = useScopedSettingsWriteAllowed();
+  const relayStatus = useSyncExternalStore(
+    subscribeRelayTracingStatus,
+    getRelayTracingStatus,
+    getRelayTracingStatus,
+  );
+  const relayConfig = resolveRelayTracingConfig();
+  const productVisible = environments.some(supportsProductTelemetrySettings);
+  const projectScope = scope.kind === "project" || scope.kind === "checkout";
+  const selectedMachinesSupportProductTelemetry =
+    connectedEnvironments.length > 0 &&
+    connectedEnvironments.every(supportsProductTelemetrySettings);
+  const targetSettings = new Map(targets.map((target) => [target.environmentId, target.settings]));
+  const telemetryStates = connectedEnvironments.map(({ environmentId, serverConfig }) => {
+    const policy = serverConfig?.managedPolicy;
+    const forcedOff = policy?.limits?.telemetry === false;
+    const managedBy = isManagedSettingPath(policy, "productTelemetryEnabled")
+      ? policy?.organization
+      : undefined;
+    const { envOverride, shellDiscoveryPending } = serverConfig?.productTelemetry ?? {};
+    const enabled =
+      !forcedOff &&
+      !shellDiscoveryPending &&
+      (envOverride ??
+        targetSettings.get(environmentId)?.productTelemetryEnabled ??
+        serverConfig?.settings.productTelemetryEnabled ??
+        false);
+    return { forcedOff, managedBy, envOverride, shellDiscoveryPending, enabled };
+  });
+  const enabled = telemetryStates.some((state) => state.enabled);
+  const mixed = enabled && telemetryStates.some((state) => !state.enabled);
+  const envOverride = telemetryStates.some((state) => state.envOverride !== undefined);
+  const shellDiscoveryPending = telemetryStates.some((state) => state.shellDiscoveryPending);
+  const allForcedOff = telemetryStates.every((state) => state.forcedOff);
+  const managedBy = telemetryStates.find((state) => state.managedBy !== undefined)?.managedBy;
+  if (!productVisible && relayConfig === null) return null;
+  return (
+    <SettingsSection id="privacy" title={gt("Privacy")}>
+      {productVisible ? (
+        <SettingsRow
+          serverScoped
+          settingKeys={["productTelemetryEnabled"]}
+          mixed={mixed}
+          {...setting("product-usage-data")}
+          description={gt("Send usage events from the selected machines.")}
+          status={
+            managedBy !== undefined
+              ? gt("Managed by {organization}.", { organization: managedBy })
+              : projectScope
+                ? gt("Select a machine or All environments to change this setting.")
+                : !selectedMachinesSupportProductTelemetry
+                  ? gt("All selected connected machines must support product usage settings.")
+                  : envOverride
+                    ? gt("T3CODE_TELEMETRY_ENABLED is explicitly set on a selected machine.")
+                    : shellDiscoveryPending
+                      ? gt("Checking the shell environment on a selected machine.")
+                      : telemetryStates.some((state) => state.forcedOff)
+                        ? gt(
+                            "An administrator has disabled product usage data on a selected machine.",
+                          )
+                        : undefined
+          }
+          control={
+            <Switch
+              aria-label={gt("Send product usage data")}
+              checked={enabled}
+              mixed={mixed}
+              disabled={
+                !canWrite ||
+                projectScope ||
+                !selectedMachinesSupportProductTelemetry ||
+                allForcedOff ||
+                managedBy !== undefined ||
+                envOverride ||
+                shellDiscoveryPending
+              }
+              onCheckedChange={(value) => updateSettings({ productTelemetryEnabled: value })}
+            />
+          }
+        />
+      ) : null}
+      {relayConfig === null ? null : (
+        <SettingsRow
+          {...setting("relay-connection-diagnostics")}
+          description={
+            relayStatus === "pending"
+              ? gt("Checking whether this desktop host allows T3 Connect diagnostics.")
+              : relayStatus === "host-disabled"
+                ? gt(
+                    "This desktop host has disabled diagnostics. The host requires T3CODE_TELEMETRY_ENABLED=true and must allow diagnostics under administrator policy.",
+                  )
+                : gt("Share relay connection timings from this app.")
+          }
+          control={
+            <Switch
+              aria-label={gt("Send T3 Connect diagnostics")}
+              checked={relayStatus === "enabled"}
+              disabled={relayStatus === "pending" || relayStatus === "host-disabled"}
+              onCheckedChange={(value) => {
+                try {
+                  setRelayTracingPreference(value);
+                } catch {
+                  toastManager.add({
+                    type: "error",
+                    title: gt("Could not save the diagnostics preference."),
+                  });
+                }
+              }}
+            />
+          }
+        />
+      )}
+    </SettingsSection>
+  );
+}
+
 export function GeneralSettingsPanel() {
   const gt = useGT();
   const m = useMessages();
@@ -854,6 +989,7 @@ export function GeneralSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <PrivacySettings />
       <SettingsSection id="notifications" title={gt("Notifications")}>
         <NotificationSettings />
         <SettingsRow

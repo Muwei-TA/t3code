@@ -17,6 +17,20 @@ vi.mock("expo-constants", () => ({
   },
 }));
 
+it("stays opted out after a failed save or stale opt-in completion", () => {
+  const enable = Tracing.beginRelayTracingPreferenceChange(true);
+  expect(Tracing.isRelayTracingEnabled()).toBe(false);
+  enable(true);
+  expect(Tracing.isRelayTracingEnabled()).toBe(true);
+
+  const staleEnable = Tracing.beginRelayTracingPreferenceChange(true);
+  const disable = Tracing.beginRelayTracingPreferenceChange(false);
+  expect(Tracing.isRelayTracingEnabled()).toBe(false);
+  disable(false);
+  staleEnable(true);
+  expect(Tracing.isRelayTracingEnabled()).toBe(false);
+});
+
 it.effect("does not let OTLP serialization failures alter application effects", () => {
   const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }));
   const layerTracing = Tracing.layerFromConfig(

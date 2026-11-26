@@ -2472,6 +2472,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           return yield* new EffectAcpErrors.AcpRequestError({
             code: -32601,
             errorMessage: "ACP agent does not advertise session/load or session/resume support",
+            method: options.resumeMethod === "resume" ? "session/resume" : "session/load",
           });
         }
       } else {

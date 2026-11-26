@@ -2188,6 +2188,46 @@ describe("compact reasoning math", () => {
   });
 });
 
+it("keeps the Plan mode divider on the historical prompt after a Build mode prompt", async () => {
+  setup();
+  const fixture = makeStreamingTimelineFixture();
+  const projected = fixture.visibleTurnItems[0]!;
+  if (projected.item.type !== "user_message") throw new Error("Expected a user message");
+  const original = projected.item;
+  const entries = (modes: ReadonlyArray<"plan" | "default" | undefined>) =>
+    deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: modes.map((mode, index) => {
+        const id = TurnItemId.make(`prompt-${index}`);
+        return {
+          ...projected,
+          position: index,
+          sourceItemId: id,
+          item: {
+            ...original,
+            id,
+            ordinal: index,
+            messageId: MessageId.make(`message-${index}`),
+            text: `Prompt ${index + 1}`,
+            ...(mode === undefined ? {} : { interactionMode: mode }),
+          },
+        };
+      }),
+      optimisticMessages: [],
+    });
+  const props = baseProps();
+  await using screen = await renderTimeline(entries(["plan"]), props);
+  const divider = screen.getByText("Plan mode", { exact: true });
+  await expect.element(divider).toBeVisible();
+
+  await screen.rerender(
+    <MessagesTimeline {...props} timelineEntries={entries(["plan", "default", undefined])} />,
+  );
+  await expect.element(screen.getByText("Prompt 2", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText("Prompt 3", { exact: true })).toBeVisible();
+  await expect.element(divider).toBeVisible();
+  expect(divider.all()).toHaveLength(1);
+});
+
 it("renders automatic compaction as one live divider that finishes with its reason and token delta", async () => {
   setup();
   const fixture = makeStreamingTimelineFixture();

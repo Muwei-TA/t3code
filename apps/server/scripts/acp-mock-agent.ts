@@ -103,6 +103,7 @@ const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
 const terminalOutputBytes = Number(process.env.T3_ACP_EMIT_TERMINAL_OUTPUT_BYTES ?? "0");
 const supportsSessionLifecycle = process.env.T3_ACP_SESSION_LIFECYCLE === "1";
+const nonResumable = process.env.T3_ACP_NON_RESUMABLE === "1";
 const supportsAcpMcp = process.env.T3_ACP_MCP_ACP === "1";
 const supportsHttpMcp = process.env.T3_ACP_MCP_HTTP === "1";
 const supportsV2Management = process.env.T3_ACP_V2_MANAGEMENT === "1";
@@ -116,7 +117,7 @@ const permissionOptionIds = {
   allowAlways: "allow-always",
   rejectOnce: "reject-once",
 };
-const sessionId = "mock-session-1";
+const sessionId = nonResumable ? `mock-session-${process.pid}` : "mock-session-1";
 
 let currentModeId = antigravityProfile
   ? (process.env.T3_ACP_INITIAL_MODE ?? "default")
@@ -556,18 +557,22 @@ const program = Effect.gen(function* () {
         info: { name: "t3-acp-mock-agent", version: agentVersion },
         ...(omitInitializeModelState ? {} : { _meta: { modelState: modelState() } }),
         capabilities: {
-          session: {
-            ...(supportsSessionLifecycle ? { fork: {}, additionalDirectories: {} } : {}),
-            ...(supportsV2Management ? { delete: {} } : {}),
-            ...(supportsAcpMcp || supportsHttpMcp
-              ? {
-                  mcp: {
-                    ...(supportsAcpMcp ? { acp: {} } : {}),
-                    ...(supportsHttpMcp ? { http: {} } : {}),
-                  },
-                }
-              : {}),
-          },
+          ...(nonResumable
+            ? {}
+            : {
+                session: {
+                  ...(supportsSessionLifecycle ? { fork: {}, additionalDirectories: {} } : {}),
+                  ...(supportsV2Management ? { delete: {} } : {}),
+                  ...(supportsAcpMcp || supportsHttpMcp
+                    ? {
+                        mcp: {
+                          ...(supportsAcpMcp ? { acp: {} } : {}),
+                          ...(supportsHttpMcp ? { http: {} } : {}),
+                        },
+                      }
+                    : {}),
+                },
+              }),
           ...(supportsV2Management ? { providers: {} } : {}),
         },
         ...(initializeAuthMethodId

@@ -4283,6 +4283,15 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
               iconColor={iconSubtleColor}
             />
           ) : null}
+          {info.item.type === "message" &&
+          info.item.message.projectedItem?.item.type === "user_message" &&
+          info.item.message.projectedItem.item.interactionMode === "plan" ? (
+            <ThreadContextDivider
+              label={gt("Plan mode")}
+              icon="list.number"
+              iconColor={iconSubtleColor}
+            />
+          ) : null}
           {renderFeedEntry(info, {
             m,
             userMessageGrouping: info.item.userMessageGrouping,

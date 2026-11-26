@@ -167,6 +167,11 @@ export class DesktopTelemetryReceiver extends Context.Service<
   {
     readonly latest: Effect.Effect<Option.Option<DesktopHostTelemetrySnapshot>>;
     readonly changes: Stream.Stream<DesktopHostTelemetrySnapshot>;
+    readonly subscribeShellEnvironmentChanges: Effect.Effect<
+      Stream.Stream<void>,
+      never,
+      Scope.Scope
+    >;
     readonly subscribe: Effect.Effect<
       {
         readonly latest: Option.Option<DesktopHostTelemetrySnapshot>;
@@ -419,6 +424,7 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
     ),
   );
   const changes = yield* PubSub.sliding<DesktopHostTelemetrySnapshot>(8);
+  const shellEnvironmentChanges = yield* PubSub.sliding<void>(1);
   const healthChanges = yield* PubSub.sliding<DesktopTelemetryReceiverHealth>(4);
   const latestUpdateReport = yield* Ref.make(Option.none<DesktopUpdateStatusReport>());
   const updateReportChanges = yield* PubSub.sliding<DesktopUpdateStatusReport>(16);
@@ -599,7 +605,11 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
         }
 
         if (message.type === "shellEnvironment") {
-          return recordContact.pipe(Effect.andThen(applyShellSnapshot(message)));
+          return recordContact.pipe(
+            Effect.andThen(applyShellSnapshot(message)),
+            Effect.andThen(PubSub.publish(shellEnvironmentChanges, undefined)),
+            Effect.asVoid,
+          );
         }
 
         if (message.type === "desktopUpdateStatus") {
@@ -706,6 +716,9 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   return DesktopTelemetryReceiver.of({
     latest: Ref.get(latest),
     changes: Stream.fromPubSub(changes),
+    subscribeShellEnvironmentChanges: PubSub.subscribe(shellEnvironmentChanges).pipe(
+      Effect.map(Stream.fromSubscription),
+    ),
     subscribe: snapshotMutex.withPermits(1)(
       Effect.gen(function* () {
         const initial = yield* Ref.get(latest);
@@ -772,6 +785,8 @@ export const layerTest = (
     DesktopTelemetryReceiver.of({
       latest,
       changes,
+      subscribeShellEnvironmentChanges:
+        overrides.subscribeShellEnvironmentChanges ?? Effect.succeed(Stream.empty),
       subscribe:
         overrides.subscribe ??
         latest.pipe(

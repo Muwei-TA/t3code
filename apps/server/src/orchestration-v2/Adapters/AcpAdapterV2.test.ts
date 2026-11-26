@@ -24,14 +24,18 @@ import * as DocumentText from "../../provider/DocumentText.ts";
 import { assert, beforeAll, describe, it } from "@effect/vitest";
 import {
   CheckpointId,
+  CommandId,
   EnvironmentId,
+  HarnessMcpServerId,
   MessageId,
   type ModelSelection,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
   RunId,
   ThreadId,
+  type HarnessMcpServerConfig,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2TurnItem,
   type OrchestrationV2UserInputQuestion,
@@ -102,6 +106,16 @@ import {
 } from "@t3tools/provider-acp/server/adapter";
 
 import { appendUserInputAttachmentPaths } from "../../provider/userInputAttachments.ts";
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
+import * as ServerConfig from "../../config.ts";
+import * as HarnessStore from "../../harness/HarnessStore.ts";
+import * as McpGateway from "../../harness/McpGateway.ts";
+import * as ManagedPolicy from "../../policy/ManagedPolicy.ts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import * as EventSink from "../EventSink.ts";
+import * as Orchestrator from "../Orchestrator.ts";
+import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
+import * as ProviderReplayHarness from "../testkit/ProviderReplayHarness.ts";
 
 import { makeGrokAcpAdapterFlavor } from "@t3tools/provider-grok/testing";
 import {
@@ -5643,6 +5657,178 @@ describe("AcpAdapterV2", () => {
       const methods = yield* pollProtocolMethods(protocolEvents);
       assert.equal(methods.filter((method) => method === "session/new").length, 2);
     }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.live("completes the next ACP turn through T3 Gateway after native MCP access is revoked", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const mockAgentPath = yield* bundledMockAgentPath;
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-native-mcp-revocation");
+      const threadId = ThreadId.make("thread-acp-native-mcp-revocation");
+      const modelSelection = { instanceId, model: "default" } as const;
+      const adapterLayer = Layer.unwrap(
+        Effect.gen(function* () {
+          const adapter = yield* makeAcpAdapterV2({
+            instanceId,
+            flavor: {
+              driver: ACP_TEST_DRIVER,
+              capabilities: AcpProviderCapabilitiesV2,
+              makeRuntime: makeMockRuntime({
+                childProcessSpawner,
+                mockAgentPath,
+                protocolEvents,
+                environment: { T3_ACP_NON_RESUMABLE: "1" },
+              }),
+            },
+            selfInvocation: yield* resolveSelfInvocation(),
+          });
+          return ProviderAdapterRegistry.layerSingle(adapter);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(layerHost, NodeServices.layer, NodeCrypto.layer, IdAllocator.layer),
+          ),
+        ),
+      );
+      const storeLayer = HarnessStore.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            ServerConfig.layerTest(process.cwd(), { prefix: "t3-acp-native-mcp-revocation-" }),
+            ManagedPolicy.layerTest(),
+          ),
+        ),
+        Layer.provide(NodeServices.layer),
+        Layer.orDie,
+      );
+      const mcpGatewayLayer = McpGateway.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            storeLayer,
+            Layer.mock(SecretResolver.SecretResolver)({}),
+            Layer.mock(ServerSecretStore.ServerSecretStore)({}),
+          ),
+        ),
+      );
+      const decodeMcpServers = Schema.decodeUnknownEffect(
+        Schema.Array(Schema.Struct({ name: Schema.String })),
+      );
+      const registrations = Queue.takeAll(protocolEvents).pipe(
+        Effect.flatMap((events) =>
+          Effect.forEach(
+            events.filter((event) => rawProtocolMethod(event) === "session/new"),
+            (event) =>
+              decodeMcpServers(rawProtocolRequestParam(event, "mcpServers")).pipe(
+                Effect.map((servers) => servers.map(({ name }) => name)),
+              ),
+          ),
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const store = yield* HarnessStore.HarnessStore;
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const id = HarnessMcpServerId.make("issue_tracker");
+        const config = {
+          enabled: true,
+          transport: { type: "stdio", command: "issue-tracker" },
+          injectionMode: "native",
+          approvalPolicy: "auto-read",
+        } satisfies HarnessMcpServerConfig;
+        yield* store.upsertUserServer({ id, config });
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("create"),
+          threadId,
+          projectId: ProjectId.make("project:acp-native-mcp-revocation"),
+          title: "ACP native MCP revocation",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const send = Effect.fn("test.sendAcpTurn")(function* (text: string) {
+          const afterSequence = yield* eventSink.latestSequence({ threadId });
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`send:${text}`),
+            threadId,
+            messageId: MessageId.make(`message:${text}`),
+            text,
+            attachments: [],
+            modelSelection,
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          return yield* eventSink.stream({ threadId, afterSequence }).pipe(
+            Stream.map(({ event }) => event),
+            Stream.takeUntil(
+              (event) =>
+                event.type === "run.updated" &&
+                (event.payload.status === "completed" || event.payload.status === "failed"),
+            ),
+            Stream.runCollect,
+          );
+        });
+
+        const firstEvents = yield* send("first prompt");
+        assert.include(firstEvents.at(-1)?.payload, { status: "completed" });
+        const first = yield* orchestrator.getThreadProjection(threadId);
+        const firstThread = first.providerThreads[0];
+        assert.isString(firstThread?.nativeThreadRef?.nativeId);
+        assert.deepEqual(yield* registrations, [["t3-code", id]]);
+
+        yield* store.upsertUserServer({
+          id,
+          config: { ...config, allowedTools: ["search_issues"] },
+        });
+        const secondEvents = yield* send("second prompt");
+        assert.isTrue(
+          secondEvents.some(
+            (event) =>
+              event.type === "provider-session.updated" && event.payload.status === "stopped",
+          ),
+        );
+        assert.include(secondEvents.at(-1)?.payload, { status: "completed" });
+        const second = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(
+          second.providerTurns.map((turn) => turn.status),
+          ["completed", "completed"],
+        );
+        assert.lengthOf(second.providerThreads, 1);
+        assert.equal(second.providerThreads[0]?.id, firstThread?.id);
+        assert.isString(second.providerThreads[0]?.nativeThreadRef?.nativeId);
+        assert.notEqual(
+          second.providerThreads[0]?.nativeThreadRef?.nativeId,
+          firstThread?.nativeThreadRef?.nativeId,
+        );
+        assert.isTrue(
+          second.turnItems.some(
+            (item) => item.type === "handoff" && item.title === "Recovered context",
+          ),
+        );
+        const gatewayRegistrations = yield* registrations;
+        assert.isNotEmpty(gatewayRegistrations);
+        for (const names of gatewayRegistrations) {
+          assert.deepEqual(names, ["t3-code", "t3-harness"]);
+        }
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            storeLayer,
+            ProviderReplayHarness.layerWithRegistry(
+              { name: "acp-native-mcp-revocation" },
+              adapterLayer,
+              { mcpGatewayLayer },
+            ),
+          ),
+        ),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.live("preserves new-session fallback when an eager ACP session load is stale", () =>

@@ -335,6 +335,18 @@ export type ClientOs = typeof ClientOs.Type;
 export const ClientDeviceType = Schema.Literals(["desktop", "phone", "tablet", "unknown"]);
 export type ClientDeviceType = typeof ClientDeviceType.Type;
 
+export const ClientBrowser = Schema.Literals([
+  "Edge",
+  "Opera",
+  "Samsung Internet",
+  "Firefox",
+  "Chrome",
+  "Safari",
+  "other",
+  "unknown",
+]);
+export type ClientBrowser = typeof ClientBrowser.Type;
+
 export const ClientWebDeployment = Schema.Literals(["hosted", "server"]);
 export type ClientWebDeployment = typeof ClientWebDeployment.Type;
 

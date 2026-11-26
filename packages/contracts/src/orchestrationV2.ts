@@ -1962,6 +1962,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     context: Schema.optional(OrchestrationMessageContext),
     attachments: Schema.Array(ChatAttachment),
     modelSwitch: Schema.optional(OrchestrationV2ModelSwitch),
+    interactionMode: Schema.optionalKey(ProviderInteractionMode),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -2864,6 +2865,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     context: Schema.optional(OrchestrationMessageContext),
     attachments: Schema.Array(ChatAttachment),
     modelSwitch: Schema.optional(OrchestrationV2ModelSwitch),
+    interactionMode: Schema.optionalKey(ProviderInteractionMode),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,

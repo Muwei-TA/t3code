@@ -296,6 +296,18 @@ describe("Harness security, RPC authorization, native passthrough, and plan.prop
         expect(proposedPlans.filter((p) => p.status === "active")).toHaveLength(1);
         expect(proposedPlans.find((p) => p.status === "active")?.markdown).toContain("Plan v2");
 
+        yield* orchestrator.dispatch({
+          type: "thread.interaction-mode.set",
+          commandId: CommandId.make("cmd:exit-plan-mode"),
+          threadId: planThreadId,
+          interactionMode: "default",
+        });
+        const planHistory = yield* projections.getThreadRecords(planThreadId, ["turnItems"]);
+        expect(planHistory.turnItems.find((item) => item.type === "user_message")).toMatchObject({
+          messageId: "msg:plan-1",
+          interactionMode: "plan",
+        });
+
         // 5. Thread in Default mode MUST reject plan.propose.
         const defaultThreadId = ThreadId.make("thread:default-mode");
         yield* orchestrator.dispatch({

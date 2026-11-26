@@ -559,24 +559,23 @@ describe("McpGateway", () => {
           const store = yield* HarnessStore.HarnessStore;
           const gateway = yield* McpGateway.McpGateway;
 
-          // Server with `__` in its own ID to verify unambiguous tool-name routing (P2).
-          yield* store.upsertUserServer({
-            id: HarnessMcpServerId.make("my__echo"),
-            config: {
-              enabled: true,
-              transport: {
-                type: "stdio",
-                command: process.execPath,
-                args: ["-e", ECHO_STDIO_MCP_SCRIPT],
-                env: {
-                  MY_TOKEN: "${secret:ECHO_SECRET}",
-                  LITERAL_KEY: "super-literal-secret",
-                },
+          // Use an ID containing `__` to exercise unambiguous tool-name routing.
+          const serverId = HarnessMcpServerId.make("my__echo");
+          const config = {
+            enabled: true,
+            transport: {
+              type: "stdio",
+              command: process.execPath,
+              args: ["-e", ECHO_STDIO_MCP_SCRIPT],
+              env: {
+                MY_TOKEN: "${secret:ECHO_SECRET}",
+                LITERAL_KEY: "super-literal-secret",
               },
-              injectionMode: "gateway",
-              approvalPolicy: "auto-read",
             },
-          });
+            injectionMode: "gateway",
+            approvalPolicy: "auto-read",
+          } as const;
+          yield* store.upsertUserServer({ id: serverId, config });
 
           // Server attempting to read an un-prefixed internal ServerSecretStore key MUST fail!
           yield* store.upsertUserServer({
@@ -601,6 +600,7 @@ describe("McpGateway", () => {
           const echoView = passive.servers.find((s) => s.id === "my__echo");
           expect(echoView?.state).toBe("idle");
           expect(echoView?.toolCount).toBe(0);
+          expect(echoView?.discoveredToolNames).toBeUndefined();
           expect(
             echoView?.config.transport.type === "stdio" ? echoView.config.transport.env : undefined,
           ).toEqual({
@@ -698,20 +698,47 @@ describe("McpGateway", () => {
             "requires approval",
           );
 
-          // Under `always-ask`, EVEN read-only tools in full-access MUST fail closed!
+          const filteredConfig = { ...config, allowedTools: [], disabledTools: ["mutate_item"] };
+          const conflict = yield* store
+            .upsertUserServer({
+              id: serverId,
+              config: { ...filteredConfig, allowedTools: ["mutate_item"] },
+            })
+            .pipe(Effect.flip);
+          expect(conflict.code).toBe("invalid_config");
+          yield* store.upsertUserServer({ id: serverId, config: filteredConfig });
+          const filtered = yield* gateway.getSnapshot();
+          const filteredView = filtered.servers.find(({ id }) => id === serverId);
+          expect(filteredView?.state).toBe("idle");
+          expect(filteredView?.tools.map(({ name }) => name)).toEqual(["read_env"]);
+          expect(filteredView?.discoveredToolNames).toEqual(["mutate_item", "read_env"]);
+
           yield* store.upsertUserServer({
-            id: HarnessMcpServerId.make("my__echo"),
+            id: serverId,
+            config: { ...filteredConfig, allowedTools: ["missing_tool"] },
+          });
+          const empty = yield* gateway.getSnapshot();
+          const emptyView = empty.servers.find(({ id }) => id === serverId);
+          expect(emptyView?.tools).toEqual([]);
+          expect(emptyView?.discoveredToolNames).toEqual(["mutate_item", "read_env"]);
+          expect(emptyView?.configDigest).not.toBe(filteredView?.configDigest);
+
+          yield* store.upsertUserServer({
+            id: serverId,
             config: {
-              enabled: true,
-              transport: {
-                type: "stdio",
-                command: process.execPath,
-                args: ["-e", ECHO_STDIO_MCP_SCRIPT],
-                env: { MY_TOKEN: "${secret:ECHO_SECRET}" },
-              },
-              injectionMode: "gateway",
-              approvalPolicy: "always-ask",
+              ...filteredConfig,
+              transport: { ...filteredConfig.transport, args: ["other-script.js"] },
             },
+          });
+          const retargeted = yield* gateway.getSnapshot();
+          expect(
+            retargeted.servers.find(({ id }) => id === serverId)?.discoveredToolNames,
+          ).toBeUndefined();
+
+          // Under `always-ask`, even read-only tools in full-access require approval.
+          yield* store.upsertUserServer({
+            id: serverId,
+            config: { ...config, approvalPolicy: "always-ask" },
           });
           const readBlockedByAlwaysAsk = yield* gateway.callToolForSession({
             context: {
@@ -908,6 +935,46 @@ describe("McpGateway", () => {
           });
           expect(String(nativeCatalogSearch.content[0]?.text ?? "")).not.toContain(
             "direct_native__search_issues",
+          );
+
+          yield* store.upsertUserServer({
+            id: HarnessMcpServerId.make("direct_native"),
+            config: {
+              enabled: true,
+              transport: { type: "http", url: "https://direct.example.com/mcp" },
+              injectionMode: "native",
+              approvalPolicy: "auto-read",
+              allowedTools: ["search_issues"],
+            },
+          });
+          const nativeCapabilities = {
+            ...DEFAULT_HARNESS_CAPABILITIES,
+            mcpPassthrough: "http",
+          } as const;
+          const filteredInjection = yield* gateway.resolveSessionInjection({
+            interactionMode: "default",
+            emitsProposedPlan: true,
+            supportsMcpTools: true,
+            harnessCapabilities: nativeCapabilities,
+          });
+          expect(filteredInjection.nativeMcpServers).toEqual([]);
+          const filteredSearch = yield* gateway.callToolForSession({
+            context: {
+              providerSessionId: "sess-filtered",
+              interactionMode: "default",
+              runtimeMode: "full-access",
+              includeProposePlan: false,
+              deferredExposure: true,
+              harnessCapabilities: nativeCapabilities,
+            },
+            toolName: "harness_tool_search",
+            arguments: { query: "direct_native" },
+          });
+          expect(String(filteredSearch.content[0]?.text ?? "")).toContain(
+            "direct_native__search_issues",
+          );
+          expect(String(filteredSearch.content[0]?.text ?? "")).not.toContain(
+            "direct_native__tool_",
           );
 
           // Concurrent connect + invalidate is serialized by the per-server lifecycle lock.
@@ -1813,6 +1880,7 @@ describe("McpGateway", () => {
           expect(projectSameDigest?.state).toBe("untrusted");
           expect(projectSameDigest?.lastError).toBeNull();
           expect(projectSameDigest?.tools).toEqual([]);
+          expect(projectSameDigest?.discoveredToolNames).toBeUndefined();
 
           // Removing `a_` MUST NOT allow `a_`'s cached exposedName to execute `a:_b`!
           yield* store.removeUserServer(HarnessMcpServerId.make("a_"));

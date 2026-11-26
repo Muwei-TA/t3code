@@ -45,6 +45,7 @@ import {
   WorkflowRequestError,
   AuthSessionId,
   ClientConnectionMethod,
+  ClientBrowser,
   ClientDeviceType,
   ClientOs,
   ClientSurface,
@@ -370,6 +371,9 @@ export const withLateConfigDiscovery = <E, R>(
   launcher: EditorDiscovery,
   remoteOpenTargets: RemoteOpenTargets.RemoteOpenTargets["Service"],
   directEndpoints: Pick<DirectEndpoints.DirectEndpoints["Service"], "resolve">,
+  productTelemetryUpdates: Stream.Stream<
+    NonNullable<ClientServerConfig["productTelemetry"]>
+  > = Stream.empty,
 ) => {
   const lateEditorConfig = Stream.fromEffect(launcher.resolveAvailableEditors()).pipe(
     Stream.filter(
@@ -403,7 +407,15 @@ export const withLateConfigDiscovery = <E, R>(
   );
 
   return Stream.merge(
-    liveUpdates,
+    Stream.merge(
+      liveUpdates,
+      productTelemetryUpdates.pipe(
+        Stream.map((productTelemetry) => ({
+          type: "productTelemetryResolved" as const,
+          productTelemetry,
+        })),
+      ),
+    ),
     Stream.merge(lateEditorConfig, Stream.merge(lateRemoteOpenTargets, lateDirectEndpoints)),
   ).pipe(
     Stream.mapAccum(
@@ -436,7 +448,27 @@ export const withLateConfigDiscovery = <E, R>(
           case "providerStatuses":
             return [{ ...current, providers: event.payload.providers }, [event]];
           case "settingsUpdated":
-            return [{ ...current, settings: event.payload.settings }, [event]];
+            return [{ ...current, ...event.payload }, [event]];
+          case "productTelemetryResolved": {
+            const { productTelemetry } = event;
+            if (
+              current.productTelemetry?.envOverride === productTelemetry.envOverride &&
+              current.productTelemetry?.shellDiscoveryPending ===
+                productTelemetry.shellDiscoveryPending
+            ) {
+              return [current, []];
+            }
+            return [
+              { ...current, productTelemetry },
+              [
+                {
+                  version: 1,
+                  type: "settingsUpdated",
+                  payload: { settings: current.settings, productTelemetry },
+                },
+              ],
+            ];
+          }
           // Themes and usage-limit sources survive snapshots because snapshots never include them.
           default:
             return [current, [event]];
@@ -818,12 +850,13 @@ function toAuthAccessStreamEvent(
 
 const isClientSurface = Schema.is(ClientSurface);
 const isClientConnectionMethod = Schema.is(ClientConnectionMethod);
+const isClientBrowser = Schema.is(ClientBrowser);
 const isClientDeviceType = Schema.is(ClientDeviceType);
 const isClientOs = Schema.is(ClientOs);
 const isClientWebDeployment = Schema.is(ClientWebDeployment);
 const MAX_CLIENT_APP_VERSION_LENGTH = 64;
-const MAX_CLIENT_BROWSER_LENGTH = 64;
-const MAX_CLIENT_DEVICE_MODEL_LENGTH = 80;
+const CLIENT_APP_VERSION_PATTERN =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
 function hasCompatibleOrchestrationProtocol(url: URL): boolean {
   return (
@@ -845,31 +878,26 @@ function shouldUseBoundedThreadSnapshot(input: {
 }
 
 // Keep telemetry per socket; several client types can connect simultaneously.
-function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) {
+export function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) {
   const url = requestUrl(request);
   if (Option.isNone(url)) {
     return {};
   }
 
   const surface = url.value.searchParams.get("clientSurface");
-  const appVersion = url.value.searchParams.get("clientAppVersion")?.trim() ?? "";
+  const appVersion = url.value.searchParams.get("clientAppVersion");
   const deviceType = url.value.searchParams.get("clientDeviceType");
   const os = url.value.searchParams.get("clientOs");
   const webDeployment = url.value.searchParams.get("clientWebDeployment");
-  const browser = url.value.searchParams.get("clientBrowser")?.trim() ?? "";
+  const browser = url.value.searchParams.get("clientBrowser");
   const connectionMethod = url.value.searchParams.get("connectionMethod");
-  const rawOsMajorVersion = url.value.searchParams.get("clientOsMajorVersion") ?? "";
-  const osMajorVersion = Number(rawOsMajorVersion);
-  const deviceModel = url.value.searchParams.get("clientDeviceModel")?.trim() ?? "";
   const isMobile = surface === "mobile";
-  const hasOsMajorVersion =
-    isMobile && rawOsMajorVersion !== "" && Number.isInteger(osMajorVersion) && osMajorVersion > 0;
-  const hasDeviceModel =
-    isMobile && deviceModel !== "" && deviceModel.length <= MAX_CLIENT_DEVICE_MODEL_LENGTH;
 
   return {
     ...(isClientSurface(surface) ? { surface } : {}),
-    ...(appVersion !== "" && appVersion.length <= MAX_CLIENT_APP_VERSION_LENGTH
+    ...(appVersion !== null &&
+    appVersion.length <= MAX_CLIENT_APP_VERSION_LENGTH &&
+    CLIENT_APP_VERSION_PATTERN.test(appVersion)
       ? { appVersion, clientAppVersion: appVersion }
       : {}),
     ...(isClientOs(os)
@@ -880,11 +908,7 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
       : {}),
     ...(isClientDeviceType(deviceType) ? { clientDeviceType: deviceType } : {}),
     ...(surface === "web" && isClientWebDeployment(webDeployment) ? { webDeployment } : {}),
-    ...(surface === "web" && browser !== "" && browser.length <= MAX_CLIENT_BROWSER_LENGTH
-      ? { clientBrowser: browser }
-      : {}),
-    ...(hasOsMajorVersion ? { osMajorVersion, clientOsMajorVersion: osMajorVersion } : {}),
-    ...(hasDeviceModel ? { deviceModel, clientDeviceModel: deviceModel } : {}),
+    ...(surface === "web" && isClientBrowser(browser) ? { clientBrowser: browser } : {}),
     ...(isClientConnectionMethod(connectionMethod) ? { connectionMethod } : {}),
   };
 }
@@ -2080,6 +2104,7 @@ export const layerWsRpc = (
             otlpLogsEnabled: config.otlpLogsUrl !== undefined,
           },
           settings,
+          productTelemetry: yield* analytics.productTelemetryStatus,
           ...(serverSettings.managedPolicy === undefined
             ? {}
             : { managedPolicy: serverSettings.managedPolicy }),
@@ -3666,6 +3691,7 @@ export const layerWsRpc = (
               // Buffer changes through discovery and the initial snapshot's send.
               const keybindingsChanges = yield* keybindings.subscribeChanges;
               const settingsChanges = yield* serverSettings.subscribeChanges;
+              const productTelemetryUpdates = yield* analytics.subscribeProductTelemetryStatus;
               const remoteTargets = yield* Effect.forkScoped(remoteOpenTargets.resolveTargets(), {
                 startImmediately: true,
               });
@@ -3789,6 +3815,7 @@ export const layerWsRpc = (
                   resolveTargets: () => Fiber.join(remoteTargets),
                 },
                 { resolve: () => Fiber.join(directResult) },
+                productTelemetryUpdates,
               );
               return Stream.concat(
                 rpcInitialItems([

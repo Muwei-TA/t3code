@@ -169,9 +169,41 @@ describe("searchSettings", () => {
       "days-before-auto-settle",
       "linked-environments",
       "agent-feedback",
+      "product-usage-data",
+      "relay-connection-diagnostics",
     ]);
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
   });
+
+  it.each([
+    [false, false, []],
+    [true, false, ["relay-connection-diagnostics"]],
+    [false, true, ["product-usage-data"]],
+    [true, true, ["product-usage-data", "relay-connection-diagnostics"]],
+  ])(
+    "finds only available Privacy controls (relay tracing: %s, product telemetry: %s)",
+    (hasRelayTracingConfig, hasProductTelemetrySettingsEnvironment, expectedIds) => {
+      const available = filterAvailableSettingsSearchItems({
+        hasCloudPublicConfig: false,
+        hasEnvironment: true,
+        hasProviderSettingsEnvironment: true,
+        canManageLocalBackend: false,
+        isWslSettingsRowVisible: false,
+        hasThreadAutoSettlement: false,
+        hasRelayTracingConfig,
+        hasProductTelemetrySettingsEnvironment,
+      });
+      const translate = (message: string) =>
+        decodeMsg(message).startsWith("privacy telemetry ") ? "隐私 遥测" : decodeMsg(message);
+
+      for (const query of ["privacy", "隐私"]) {
+        const matches = searchSettings(query, available, translate).filter(
+          (item) => item.to === "/settings/general" && item.targetId === "privacy",
+        );
+        expect(matches.map((item) => item.id)).toEqual(expectedIds);
+      }
+    },
+  );
 
   it("finds linked environments on a remote host without local maintenance access", () => {
     const availability = {

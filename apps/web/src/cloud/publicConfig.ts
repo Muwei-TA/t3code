@@ -61,20 +61,85 @@ export function resolveCloudPublicConfig(): CloudPublicConfig {
   };
 }
 
-let desktopRelayTelemetry: boolean | null = null;
+const RELAY_TRACING_PREFERENCE = "t3code.relay-tracing-enabled";
+const desktopRelayTelemetry = new WeakMap<NonNullable<Window["desktopBridge"]>, boolean>();
+let relayTracingOptedOutForSession = false;
+const relayTracingListeners = new Set<() => void>();
+
+function readRelayTracingPreference(): boolean | undefined {
+  if (relayTracingOptedOutForSession) return false;
+  try {
+    const value = window.localStorage.getItem(RELAY_TRACING_PREFERENCE);
+    return value === "true" ? true : value === "false" ? false : undefined;
+  } catch {
+    return false;
+  }
+}
+
+function desktopRelayTelemetryAllowed() {
+  const bridge = typeof window === "undefined" ? undefined : window.desktopBridge;
+  if (bridge === undefined) return undefined;
+  const cached = desktopRelayTelemetry.get(bridge);
+  if (cached !== undefined) return cached;
+  const allowed = bridge.getRelayTelemetryEnabled();
+  if (allowed !== null) desktopRelayTelemetry.set(bridge, allowed);
+  return allowed;
+}
+
+export function setRelayTracingPreference(enabled: boolean) {
+  if (enabled) {
+    const hostAllowed = desktopRelayTelemetryAllowed();
+    if (hostAllowed === false || hostAllowed === null) return;
+  }
+  if (!enabled) relayTracingOptedOutForSession = true;
+  try {
+    window.localStorage.setItem(RELAY_TRACING_PREFERENCE, String(enabled));
+    relayTracingOptedOutForSession = false;
+  } finally {
+    for (const listener of relayTracingListeners) listener();
+  }
+}
 
 /** Whether relay spans may be exported now; the desktop host may not know yet at startup. */
 export function relayTelemetryEnabled(): boolean | null {
-  if (typeof window === "undefined" || !window.desktopBridge) return true;
-  desktopRelayTelemetry ??= window.desktopBridge.getRelayTelemetryEnabled();
-  return desktopRelayTelemetry;
+  if (typeof window === "undefined") return false;
+  const preference = readRelayTracingPreference();
+  if (preference === false) return false;
+  const hostAllowed = desktopRelayTelemetryAllowed();
+  return hostAllowed === undefined ? preference === true : hostAllowed;
+}
+
+export function getRelayTracingStatus() {
+  const hostAllowed = desktopRelayTelemetryAllowed();
+  if (hostAllowed === null) return "pending";
+  if (hostAllowed === false) return "host-disabled";
+  return relayTelemetryEnabled() ? "enabled" : "disabled";
+}
+
+export function subscribeRelayTracingStatus(onChange: () => void) {
+  relayTracingListeners.add(onChange);
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === RELAY_TRACING_PREFERENCE || event.key === null) onChange();
+  };
+  window.addEventListener("storage", onStorage);
+
+  // The synchronous bridge reports null until login shell discovery settles.
+  const timer =
+    desktopRelayTelemetryAllowed() === null
+      ? window.setInterval(() => {
+          if (desktopRelayTelemetryAllowed() === null) return;
+          window.clearInterval(timer);
+          onChange();
+        }, 250)
+      : undefined;
+  return () => {
+    relayTracingListeners.delete(onChange);
+    window.removeEventListener("storage", onStorage);
+    window.clearInterval(timer);
+  };
 }
 
 export function resolveRelayTracingConfig() {
-  // The relay exporter is created during module initialization, so this must be synchronous.
-  if (relayTelemetryEnabled() === false) {
-    return null;
-  }
   const { relayTracing } = resolveCloudPublicConfig();
   return relayTracing.tracesUrl && relayTracing.tracesDataset && relayTracing.tracesToken
     ? {
