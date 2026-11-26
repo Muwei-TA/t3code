@@ -235,6 +235,7 @@ export const make = Effect.gen(function* () {
       sideChats: true,
       vcsBranchStatus: true,
       inlineMessageContext: true,
+      workflowChat: true,
       requiredWorktreeBootstrap: true,
       threadSettlement: true,
       threadAutoSettlement: true,

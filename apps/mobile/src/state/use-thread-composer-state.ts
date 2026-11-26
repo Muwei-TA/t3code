@@ -137,6 +137,9 @@ import {
 import { useThreadSelection } from "./use-thread-selection";
 import { enqueueThreadOutboxMessage } from "./thread-outbox";
 import { dispatchingQueuedMessageIdsAtom, useThreadOutboxMessages } from "./use-thread-outbox";
+import { readChatWorkflowMode } from "./chat-workflows";
+import { serverEnvironment } from "./server";
+import { makeTurnCommandMetadata } from "../lib/commandMetadata";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 
@@ -255,6 +258,11 @@ export function useThreadComposerState(input: {
   const [isSavingQueuedEdit, setIsSavingQueuedEdit] = useState(false);
   const savingQueuedEditRef = useRef(false);
   const startingSideChatRef = useRef(false);
+  const startingWorkflowRef = useRef(false);
+  const workflowAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
+  const startWorkflow = useAtomCommand(serverEnvironment.startWorkflowRun, {
+    reportFailure: false,
+  });
 
   const selectedThreadKey = selectedThreadShell
     ? scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id)
@@ -710,6 +718,55 @@ export function useThreadComposerState(input: {
     }
 
     // A redirect's text answers its approval, so `/side` there is that text, not the command.
+    const workflow =
+      beforeDispatch === undefined ? readChatWorkflowMode(threadKey, thread.environmentId) : null;
+    if (workflow !== null) {
+      if (startingWorkflowRef.current) return null;
+      if (!text || attachments.length > 0 || (draft.context?.records.length ?? 0) > 0) {
+        Dialog.alert(
+          m(msg("Could not start the workflow.")),
+          m(msg("Workflow Mode starts with a text prompt and one model.")),
+        );
+        return null;
+      }
+      const fingerprint = JSON.stringify([threadKey, workflow.name, workflow.version, text]);
+      const key =
+        workflowAttempt.current?.fingerprint === fingerprint
+          ? workflowAttempt.current.key
+          : makeTurnCommandMetadata().messageId;
+      workflowAttempt.current = { fingerprint, key };
+      startingWorkflowRef.current = true;
+      const started = await startWorkflow({
+        environmentId: thread.environmentId,
+        input: {
+          workflow: workflow.name,
+          version: workflow.version,
+          threadId: thread.id,
+          projectId: thread.projectId,
+          prompt: text,
+          idempotencyKey: key,
+        },
+      }).finally(() => {
+        startingWorkflowRef.current = false;
+      });
+      if (started._tag === "Failure") {
+        Dialog.alert(
+          m(msg("Could not start the workflow.")),
+          errorDisplayMessage(squashAtomCommandFailure(started), m) ?? undefined,
+        );
+        return null;
+      }
+      workflowAttempt.current = null;
+      const currentDraft = getComposerDraftSnapshot(threadKey);
+      if (
+        currentDraft.text === draft.text &&
+        currentDraft.attachments.length === 0 &&
+        !currentDraft.context?.records.length
+      ) {
+        setComposerDraftText(threadKey, "");
+      }
+      return MessageId.make(key);
+    }
     const sideChatCommand = beforeDispatch === undefined ? parseSideChatCommand(text) : null;
     if (sideChatCommand) {
       if (sideChatUnavailableReason !== null) {

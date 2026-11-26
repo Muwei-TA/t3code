@@ -44,7 +44,7 @@ export type WorkflowRunParams = {
   readonly runId: string;
 };
 
-function QuestionCard(props: {
+export function WorkflowQuestionCard(props: {
   readonly environmentId: EnvironmentId;
   readonly question: WorkflowQuestion;
   readonly canAnswer: boolean;
@@ -210,7 +210,7 @@ function RunBody(props: { readonly environmentId: EnvironmentId; readonly node: 
     (question) => !beats.some((beat) => questionOf(beat) === question),
   );
   const question = (asked: WorkflowQuestion, inline = false) => (
-    <QuestionCard
+    <WorkflowQuestionCard
       inline={inline}
       key={`question:${asked.name}`}
       environmentId={environmentId}

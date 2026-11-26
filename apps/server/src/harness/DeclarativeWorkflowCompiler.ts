@@ -1,5 +1,7 @@
 import {
   HarnessModeId,
+  ModelSelection,
+  RuntimeMode,
   type HarnessWorkflowStepFailurePolicy,
   type HarnessWorkflowStepKind,
   type HarnessWorkflowStepSpec,
@@ -10,10 +12,16 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 import { parse as parseYaml } from "yaml";
 
-import { stop, workflow, type WorkflowDefinition } from "../workflows/workflow.ts";
-import { agent, type AgentOptions, type AgentThread } from "../workflows/workflowAgent.ts";
+import {
+  pauseBeforeStage,
+  stop,
+  workflow,
+  type WorkflowDefinition,
+} from "../workflows/workflow.ts";
+import { agent, ask, type AgentOptions, type AgentThread } from "../workflows/workflowAgent.ts";
 
 const decodeModeId = Schema.decodeUnknownOption(HarnessModeId);
 const STEP_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
@@ -28,6 +36,14 @@ const DeclarativeWorkflowPayload = Schema.Struct({
     }),
   ),
   input: Schema.optional(Schema.String),
+  host: Schema.optionalKey(
+    Schema.Struct({
+      modelSelection: ModelSelection,
+      runtimeMode: RuntimeMode,
+      worktreePath: Schema.NullOr(Schema.String),
+      branch: Schema.NullOr(Schema.String),
+    }),
+  ),
 });
 type DeclarativeWorkflowPayloadType = typeof DeclarativeWorkflowPayload.Type;
 
@@ -39,9 +55,19 @@ function renderCompiledWorkflowPreview(input: {
   readonly executionOrder: ReadonlyArray<string>;
 }): string {
   const byId = new Map(input.steps.map((step) => [step.id, step]));
-  const stepLines = input.executionOrder.flatMap((stepId) => {
+  const stepLines = input.executionOrder.flatMap((stepId, index) => {
     const step = byId.get(stepId);
     if (!step) return [];
+    const result = `step_${index}`;
+    if (step.kind === "ask") {
+      const timeout =
+        step.timeoutSeconds === undefined
+          ? ""
+          : `, timeout: ${JSON.stringify(`${step.timeoutSeconds} seconds`)}`;
+      return [
+        `    const ${result} = yield* T3.ask(${JSON.stringify(step.id)}, { title: ${JSON.stringify(step.prompt)}, choices: ${JSON.stringify(step.choices)}${timeout} });`,
+      ];
+    }
     const optParts: Array<string> = [`brief: ${JSON.stringify(step.prompt)}`];
     if (step.kind === "in-thread") {
       optParts.push(
@@ -60,30 +86,26 @@ function renderCompiledWorkflowPreview(input: {
     const opts = `{ ${optParts.join(", ")} }`;
     const header = `    // Step ${step.id} (${step.kind}, onFailure: ${step.onFailure}${step.dependsOn.length > 0 ? `, after: ${step.dependsOn.join(", ")}` : ""})`;
     if (step.onFailure === "pause") {
-      const assign = step.kind === "in-thread" ? "const res = " : "";
+      const assign = step.kind === "in-thread" ? `const ${result} = ` : "";
       return [
         header,
         `    ${assign}yield* T3.agent(${JSON.stringify(step.id)}, ${opts});`,
-        ...(step.kind === "in-thread" ? ["    currentThread = res.thread;"] : []),
+        ...(step.kind === "in-thread" ? [`    currentThread = ${result}.thread;`] : []),
       ];
     }
     if (step.onFailure === "fail") {
       return [
         header,
-        `    const res_${step.id.replace(/[^a-zA-Z0-9_]/gu, "_")} = yield* T3.agent.try(${JSON.stringify(step.id)}, ${opts});`,
-        `    if (res_${step.id.replace(/[^a-zA-Z0-9_]/gu, "_")}.outcome === "failed") return yield* T3.stop(res_${step.id.replace(/[^a-zA-Z0-9_]/gu, "_")}.reason);`,
-        ...(step.kind === "in-thread"
-          ? [`    currentThread = res_${step.id.replace(/[^a-zA-Z0-9_]/gu, "_")}.thread;`]
-          : []),
+        `    const ${result} = yield* T3.agent.try(${JSON.stringify(step.id)}, ${opts});`,
+        `    if (${result}.outcome === "failed") return yield* T3.stop(${result}.reason);`,
+        ...(step.kind === "in-thread" ? [`    currentThread = ${result}.thread;`] : []),
       ];
     }
     return [
       header,
-      `    const res_${step.id.replace(/[^a-zA-Z0-9_]/gu, "_")} = yield* T3.agent.try(${JSON.stringify(step.id)}, ${opts});`,
+      `    const ${result} = yield* T3.agent.try(${JSON.stringify(step.id)}, ${opts});`,
       ...(step.kind === "in-thread"
-        ? [
-            `    if (res_${step.id.replace(/[^a-zA-Z0-9_]/gu, "_")}.outcome === "done") currentThread = res_${step.id.replace(/[^a-zA-Z0-9_]/gu, "_")}.thread;`,
-          ]
+        ? [`    if (${result}.outcome === "done") currentThread = ${result}.thread;`]
         : []),
     ];
   });
@@ -94,13 +116,15 @@ function renderCompiledWorkflowPreview(input: {
     `  ${JSON.stringify(input.name)},`,
     `  {`,
     `    version: ${input.version},`,
+    `    chat: {},`,
     `    payload: Schema.Struct({`,
+    `      thread: Schema.optional(Schema.Struct({ threadId: Schema.String })),`,
     `      project: Schema.optional(Schema.String),`,
     `      input: Schema.optional(Schema.String),`,
     `    }),`,
     `  },`,
     `  Effect.fn(function* (payload) {`,
-    `    let currentThread = undefined;`,
+    `    let currentThread = payload.thread;`,
     ...stepLines,
     `  }),`,
     `);`,
@@ -234,13 +258,13 @@ export function compileAndValidateDeclarativeWorkflow(
 
     const rawKind = obj.kind ?? "in-thread";
     let kind: HarnessWorkflowStepKind = "in-thread";
-    if (rawKind === "in-thread" || rawKind === "child") {
+    if (rawKind === "in-thread" || rawKind === "child" || rawKind === "ask") {
       kind = rawKind;
     } else {
       issues.push({
         severity: "error",
         path: `${stepPath}.kind`,
-        message: `Step '${rawId}' has invalid kind "${String(rawKind)}". Expected "in-thread" or "child".`,
+        message: `Step '${rawId}' has invalid kind "${String(rawKind)}". Expected "in-thread", "child", or "ask".`,
       });
     }
 
@@ -250,6 +274,23 @@ export function compileAndValidateDeclarativeWorkflow(
         severity: "error",
         path: `${stepPath}.prompt`,
         message: `Step '${rawId}' requires a non-empty 'prompt'.`,
+      });
+    }
+
+    const choices = Array.isArray(obj.choices)
+      ? obj.choices.map((choice: unknown) => (typeof choice === "string" ? choice.trim() : ""))
+      : [];
+    if (
+      kind === "ask" &&
+      (choices.length < 2 ||
+        choices.length > 12 ||
+        choices.some((choice) => !choice || choice.length > 160) ||
+        new Set(choices).size !== choices.length)
+    ) {
+      issues.push({
+        severity: "error",
+        path: `${stepPath}.choices`,
+        message: `Step '${rawId}' requires 2 to 12 distinct, non-empty choices of up to 160 characters each.`,
       });
     }
 
@@ -341,6 +382,7 @@ export function compileAndValidateDeclarativeWorkflow(
       ...(stepName ? { name: stepName } : {}),
       kind,
       prompt,
+      ...(kind === "ask" ? { choices } : {}),
       ...(modeId ? { modeId } : {}),
       dependsOn,
       ...(timeoutSeconds ? { timeoutSeconds } : {}),
@@ -458,6 +500,7 @@ export function compileDeclarativeWorkflowToDefinition(
     {
       version: workflowVersion,
       payload: DeclarativeWorkflowPayload,
+      chat: validation.description === undefined ? {} : { description: validation.description },
     },
     Effect.fn("DeclarativeWorkflow.run")(function* (payload: DeclarativeWorkflowPayloadType) {
       let currentThread: AgentThread | undefined = payload.thread
@@ -474,6 +517,7 @@ export function compileDeclarativeWorkflowToDefinition(
       > = {};
 
       for (const step of orderedSteps) {
+        if (payload.thread !== undefined) yield* pauseBeforeStage(step.id);
         const depContext = step.dependsOn
           .map((depId) => {
             const depOut = outputs[depId];
@@ -484,6 +528,25 @@ export function compileDeclarativeWorkflowToDefinition(
           })
           .filter((entry): entry is string => entry !== null)
           .join("\n\n");
+
+        if (step.kind === "ask") {
+          const answer = yield* ask(step.id, {
+            title: step.prompt,
+            choices: step.choices ?? [],
+            ...(depContext ? { data: { body: depContext } } : {}),
+            ...(step.timeoutSeconds === undefined
+              ? {}
+              : { timeout: `${step.timeoutSeconds} seconds` as const }),
+          });
+          if (Option.isSome(answer)) {
+            outputs[step.id] = { outcome: "done", value: answer.value.choice };
+          } else if (step.onFailure === "continue") {
+            outputs[step.id] = { outcome: "failed", reason: "No answer before the deadline." };
+          } else {
+            return yield* stop(`Question "${step.id}" was not answered before the deadline.`);
+          }
+          continue;
+        }
 
         const briefParts = [
           ...(payload.input ? [`[Workflow input]\n${payload.input}`] : []),
@@ -499,7 +562,25 @@ export function compileDeclarativeWorkflowToDefinition(
             : {
                 ...(payload.project !== undefined ? { project: payload.project } : {}),
                 ...(step.kind === "child"
-                  ? { title: `${workflowName}: ${step.name ?? step.id}` }
+                  ? {
+                      title: `${workflowName}: ${step.name ?? step.id}`,
+                      ...(payload.host === undefined
+                        ? {}
+                        : {
+                            model: payload.host.modelSelection,
+                            runtimeMode: payload.host.runtimeMode,
+                            workspace:
+                              payload.host.worktreePath === null
+                                ? { type: "root" as const }
+                                : {
+                                    type: "existing_worktree" as const,
+                                    worktreePath: payload.host.worktreePath,
+                                    ...(payload.host.branch === null
+                                      ? {}
+                                      : { branch: payload.host.branch }),
+                                  },
+                          }),
+                    }
                   : {}),
               }),
           ...(step.modeId === undefined ? {} : { modeId: step.modeId }),
@@ -534,5 +615,11 @@ export function compileDeclarativeWorkflowToDefinition(
     }),
   );
 
-  return { ok: true, definition, validation };
+  const stages = orderedSteps.map(({ id, name, kind, modeId }) => ({
+    id,
+    ...(name === undefined ? {} : { name }),
+    kind,
+    ...(modeId === undefined ? {} : { modeId }),
+  }));
+  return { ok: true, definition: { ...definition, stages }, validation };
 }

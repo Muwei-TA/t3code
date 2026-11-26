@@ -4245,6 +4245,7 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   modeId: Schema.optional(HarnessModeId),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  awaitWorkspacePreparation: Schema.optionalKey(Schema.Boolean),
   initialMessage: Schema.optional(
     Schema.Struct({
       messageId: Schema.optional(MessageId),

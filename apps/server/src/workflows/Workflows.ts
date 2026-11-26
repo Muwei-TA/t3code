@@ -1,8 +1,12 @@
 import {
+  type OrchestrationV2ThreadShell,
+  type ThreadId,
   type WorkflowCounts,
+  type WorkflowStartInput,
   type WorkflowHook,
   WorkflowQuestion,
   type WorkflowRunReference,
+  type WorkflowStage,
   type WorkflowRunsSnapshot,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -61,6 +65,11 @@ export type WorkflowError =
   | WorkflowRunNotFoundError
   | WorkflowInputError;
 
+export type WorkflowChatHost = Pick<
+  OrchestrationV2ThreadShell,
+  "modelSelection" | "runtimeMode" | "worktreePath" | "branch"
+>;
+
 export class Workflows extends Context.Service<
   Workflows,
   {
@@ -72,9 +81,14 @@ export class Workflows extends Context.Service<
         readonly idempotencyKey: string;
         /** The run that waits for this one. A run started with a key has one parent or none. */
         readonly parent?: WorkflowStore.RunParent;
+        readonly hostThreadId?: ThreadId;
         /** The version to run, when the caller holds a definition. Without it, the newest. */
         readonly version?: number;
       },
+    ) => Effect.Effect<{ readonly runId: string }, WorkflowError>;
+    readonly startFromChat: (
+      input: WorkflowStartInput,
+      host?: WorkflowChatHost,
     ) => Effect.Effect<{ readonly runId: string }, WorkflowError>;
     /**
      * Say that something a run waits on happened. `delivered` woke a wait; `buffered` is kept for
@@ -95,11 +109,13 @@ export class Workflows extends Context.Service<
       value: Schema.Json,
     ) => Effect.Effect<void, WorkflowInputError>;
     /** Run a paused run's failed step again. */
+    readonly pause: (runId: string) => Effect.Effect<void, WorkflowError>;
     readonly resume: (runId: string) => Effect.Effect<void, WorkflowError>;
     readonly cancel: (runId: string, reason?: string) => Effect.Effect<void, WorkflowError>;
     readonly get: (runId: string) => Effect.Effect<
       {
         readonly run: WorkflowStore.WorkflowRun;
+        readonly stages?: ReadonlyArray<WorkflowStage>;
         readonly steps: ReadonlyArray<WorkflowStore.WorkflowStep>;
         readonly references: ReadonlyArray<WorkflowRunReference>;
       },
@@ -143,6 +159,7 @@ export class Workflows extends Context.Service<
     readonly storeDelete: (key: string) => Effect.Effect<void, WorkflowInputError>;
     /** Recent runs and open questions, now and again after every change. */
     readonly watch: Stream.Stream<WorkflowRunsSnapshot>;
+    readonly watchChat: (threadId?: ThreadId) => Stream.Stream<WorkflowRunsSnapshot>;
     /** How much is going on, now and again whenever a count changes. */
     readonly counts: Stream.Stream<WorkflowCounts>;
     /**
@@ -163,8 +180,10 @@ const refuse = Effect.fn("Workflows.disabled")(function* () {
 /** The service with nothing registered and no engine behind it. */
 export const disabled = Workflows.of({
   start: refuse,
+  startFromChat: refuse,
   signal: refuse,
   answer: refuse,
+  pause: refuse,
   resume: refuse,
   cancel: refuse,
   get: Effect.fn("Workflows.get")(function* (runId) {
@@ -188,13 +207,15 @@ export const disabled = Workflows.of({
   storeSet: refuse,
   storeDelete: refuse,
   watch: Stream.concat(Stream.make({ workflows: [], runs: [], questions: [] }), Stream.never),
+  watchChat: () =>
+    Stream.concat(Stream.make({ workflows: [], runs: [], questions: [] }), Stream.never),
   counts: Stream.concat(Stream.make({ needsYou: 0, active: 0, total: 0 }), Stream.never),
   sweep: Effect.void,
 });
 export const layerDisabled = Layer.succeed(Workflows, disabled);
 
 export const OFF =
-  'Workflows are off on this server. Turn them on in its Settings → Labs → Workflows, or without a desktop, set "workflowsEnabled": true in userdata/settings.json in its T3 home (~/.t3 by default).';
+  'Workflows are off on this server. Turn them on in its Settings → Scheduled tasks → Workflows, or without a desktop, set "workflowsEnabled": true in userdata/settings.json in its T3 home (~/.t3 by default).';
 
 const refuseOff = Effect.fn("Workflows.off")(function* () {
   return yield* new WorkflowInputError({ problem: OFF });
@@ -207,8 +228,10 @@ const refuseOff = Effect.fn("Workflows.off")(function* () {
 export const off = Workflows.of({
   ...disabled,
   start: refuseOff,
+  startFromChat: refuseOff,
   signal: refuseOff,
   answer: refuseOff,
+  pause: refuseOff,
   resume: refuseOff,
   cancel: refuseOff,
   get: refuseOff,

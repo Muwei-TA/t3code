@@ -13,7 +13,7 @@ import { scopedProjectKey } from "../../lib/scopedEntities";
 import { connectionTone } from "../connection/connectionTone";
 import { runtimeConnectionErrorText } from "../connection/environmentStatusText";
 import { AppBar } from "../../components/ui/AppBar";
-import { ThreadId } from "@t3tools/contracts";
+import { CommandId, ThreadId } from "@t3tools/contracts";
 
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
@@ -68,6 +68,10 @@ import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
 import { useProjectClone } from "../../state/projectClones";
 import { projectEnvironment } from "../../state/projects";
 import { sourceControlEnvironment } from "../../state/sourceControl";
+import { threadEnvironment } from "../../state/threads";
+import { serverEnvironment } from "../../state/server";
+import { readChatWorkflowMode, setChatWorkflowMode } from "../../state/chat-workflows";
+import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProjectCloneBanner } from "./ProjectCloneBanner";
 import {
@@ -165,6 +169,12 @@ export function NewTaskDraftScreen(props: {
   const gt = useGT();
   const m = useMessages();
   const [creationMetadata] = useState(makeTurnCommandMetadata);
+  const launchWorkflowHost = useAtomCommand(threadEnvironment.launch, { reportFailure: false });
+  const startWorkflow = useAtomCommand(serverEnvironment.startWorkflowRun, {
+    reportFailure: false,
+  });
+  const draftWorkflowBusy = useRef(false);
+  const attempt = useRef<{ fingerprint: string; key: string } | null>(null);
   const projects = useProjects();
   const flow = useNewTaskFlow();
   const navigation = useNavigation();
@@ -683,6 +693,113 @@ export function NewTaskDraftScreen(props: {
     });
     if (!message) {
       return null;
+    }
+    const workflow = readChatWorkflowMode(draftKey, message.environmentId);
+    if (workflow !== null && message.creation !== undefined) {
+      if (draftWorkflowBusy.current) return null;
+      if (
+        !initialMessageText ||
+        draft.attachments.length > 0 ||
+        (draft.context?.records.length ?? 0) > 0
+      ) {
+        Dialog.alert(
+          gt("Could not start the workflow."),
+          gt("Workflow Mode starts with a text prompt and one model."),
+        );
+        return null;
+      }
+      if (!environmentConnected) {
+        Dialog.alert(
+          gt("Could not start the workflow."),
+          gt("Reconnect to the environment and try again."),
+        );
+        return null;
+      }
+      const creation = message.creation;
+      const fingerprint = JSON.stringify([
+        message.environmentId,
+        message.threadId,
+        workflow.name,
+        workflow.version,
+        initialMessageText,
+      ]);
+      const key =
+        attempt.current?.fingerprint === fingerprint
+          ? attempt.current.key
+          : makeTurnCommandMetadata().messageId;
+      attempt.current = { fingerprint, key };
+      draftWorkflowBusy.current = true;
+      flow.setSubmitting(true);
+      const submission = await settlePromise(async () => {
+        const launch = await launchWorkflowHost({
+          environmentId: message.environmentId,
+          input: {
+            commandId: CommandId.make(`workflow-host:${message.threadId}`),
+            threadId: message.threadId,
+            projectId: creation.projectId,
+            title: deriveThreadTitleSeed({ text: initialMessageText, attachments: [] }, m),
+            modelSelection,
+            runtimeMode: message.runtimeMode ?? flow.runtimeMode,
+            interactionMode: message.interactionMode ?? "default",
+            ...(message.modeId === undefined ? {} : { modeId: message.modeId }),
+            creationSource: "mobile",
+            awaitWorkspacePreparation: true,
+            workspaceStrategy:
+              creation.workspaceMode === "worktree"
+                ? {
+                    type: "worktree",
+                    baseRef: creation.branch ?? "HEAD",
+                    ...(creation.startFromOrigin ? { startFromOrigin: true } : {}),
+                    ...(creation.repositories
+                      ? { repositories: creation.repositories.map((path) => ({ path })) }
+                      : {}),
+                  }
+                : creation.worktreePath === null
+                  ? {
+                      type: "root",
+                      ...(creation.branch === null ? {} : { branch: creation.branch }),
+                    }
+                  : { type: "existing_worktree", worktreePath: creation.worktreePath },
+          },
+        });
+        if (launch._tag === "Failure") throw squashAtomCommandFailure(launch);
+        const started = await startWorkflow({
+          environmentId: message.environmentId,
+          input: {
+            workflow: workflow.name,
+            version: workflow.version,
+            projectId: creation.projectId,
+            threadId: message.threadId,
+            prompt: initialMessageText,
+            idempotencyKey: key,
+          },
+        });
+        if (started._tag === "Failure") throw squashAtomCommandFailure(started);
+      });
+      draftWorkflowBusy.current = false;
+      flow.setSubmitting(false);
+      if (submission._tag === "Failure") {
+        Dialog.alert(
+          gt("Could not start the workflow."),
+          errorDisplayMessage(squashAtomCommandFailure(submission), m) ?? undefined,
+        );
+        return null;
+      }
+      attempt.current = null;
+      setChatWorkflowMode(draftKey, message.environmentId, null);
+      if (getComposerDraftSnapshot(draftKey).text === draft.text) {
+        clearComposerDraftContent(draftKey, {
+          clearModelSelection: true,
+          clearWorkspaceSelection: true,
+        });
+      }
+      promptInputRef.current?.blur();
+      navigation.dispatch(
+        CommonActions.setParams(
+          submittedThreadParams(String(message.environmentId), String(message.threadId)),
+        ),
+      );
+      return message.messageId;
     }
     // Persist locally before clearing or leaving the draft; server setup runs on the thread.
     flow.setSubmitting(true);

@@ -55,7 +55,7 @@ export function WorkflowsPage() {
   const connectedIds = useConnectedEnvironmentIds();
   const { environments } = useEnvironments();
   const workflowIds = useWorkflowEnvironmentIds();
-  // Only servers with workflows on in Labs can be picked; a connected one with them off says so.
+  // Only servers with workflows enabled can be picked; a connected one with them off says so.
   const connected = environments.filter((environment) =>
     workflowIds.includes(environment.environmentId),
   );
@@ -276,8 +276,8 @@ export function WorkflowsPage() {
               description={
                 <T>
                   Turn them on for this server in{" "}
-                  <Link to="/settings/labs" className="underline underline-offset-2">
-                    Settings → Labs
+                  <Link to="/settings/scheduled-tasks" className="underline underline-offset-2">
+                    Settings → Scheduled tasks
                   </Link>
                   .
                 </T>

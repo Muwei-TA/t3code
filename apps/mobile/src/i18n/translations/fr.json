@@ -6010,5 +6010,15 @@
   "5ccdd85b584946ab": "URL du serveur d’autorisation OAuth",
   "4f40598caa97ab7b": "Connexion requise",
   "7a45e9a9f2f0b41d": "Autorisez l’accès dans votre navigateur. Si la page de retour ne s’ouvre pas, collez son adresse ici.",
-  "b3d555b9f91c09ab": "Paramètres OAuth (facultatif)"
+  "b3d555b9f91c09ab": "Paramètres OAuth (facultatif)",
+  "ace14b0e7b0e4adf": "Impossible de démarrer le workflow.",
+  "ccbe87ff82dd3e3f": "Le mode Workflow commence avec un message texte et un modèle.",
+  "99d24c2de2bb4c26": "Modes de workflow",
+  "abb04a05e7d483c0": "Configurer un workflow",
+  "dab68249367141dc": "Afficher les exécutions précédentes",
+  "cc9987c906218558": "Impossible de mettre l’exécution en pause",
+  "674bcf1bb284d4f7": "{completed}/{total} étapes",
+  "65763fd9556fa033": "Continuer l’exécution",
+  "60ed1918d57cae79": "Mettre en pause après cette étape",
+  "614e5ad58a795fb5": "Arrêter"
 }

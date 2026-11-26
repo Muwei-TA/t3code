@@ -2356,7 +2356,11 @@ export const layerWsRpc = (
                           modelSelection: input.modelSelection,
                           runtimeMode: input.runtimeMode,
                           interactionMode: input.interactionMode,
+                          ...(input.modeId === undefined ? {} : { modeId: input.modeId }),
                           workspaceStrategy: input.workspaceStrategy,
+                          ...(input.awaitWorkspacePreparation === undefined
+                            ? {}
+                            : { awaitWorkspacePreparation: input.awaitWorkspacePreparation }),
                           ...(input.initialMessage === undefined
                             ? {}
                             : {
@@ -2486,7 +2490,10 @@ export const layerWsRpc = (
           ),
         [ORCHESTRATION_V2_WS_METHODS.subscribePromptSuggestion]: (input) =>
           providerSessionManager.subscribePromptSuggestion(input.threadId),
-        [WS_METHODS.workflowsSubscribe]: (_input) => workflows.watch,
+        [WS_METHODS.workflowsSubscribe]: (input) =>
+          input.chat === undefined ? workflows.watch : workflows.watchChat(input.chat.threadId),
+        [WS_METHODS.workflowsStart]: (input) =>
+          workflows.startFromChat(input).pipe(Effect.mapError(toWorkflowRequestError)),
         [WS_METHODS.workflowsCounts]: (_input) => workflows.counts,
         [WS_METHODS.workflowsGet]: (input) =>
           workflows.get(input.runId).pipe(Effect.mapError(toWorkflowRequestError)),
@@ -2497,6 +2504,8 @@ export const layerWsRpc = (
               ...(input.reason === undefined ? {} : { reason: input.reason }),
             })
             .pipe(Effect.mapError(toWorkflowRequestError)),
+        [WS_METHODS.workflowsPause]: (input) =>
+          workflows.pause(input.runId).pipe(Effect.mapError(toWorkflowRequestError)),
         [WS_METHODS.workflowsResume]: (input) =>
           workflows.resume(input.runId).pipe(Effect.mapError(toWorkflowRequestError)),
         [WS_METHODS.workflowsCancel]: (input) =>

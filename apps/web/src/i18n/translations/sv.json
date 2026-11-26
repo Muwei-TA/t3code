@@ -3299,11 +3299,8 @@
   "df1fb90eb9a77fbf": "Scheduled tasks",
   "2d6107cb78382d08": "Arbetsflöden",
   "e34d2e718878f69c": "Multi-step Workflows",
-  "5ed32bdfc0c12a01": "Inspect live runs, pause/resume steps, and edit declarative workflow definitions across connected environments.",
   "ce001ae655cc2154": "Open Workflows studio",
-  "7670acbe41b7819f": "Enable Workflows in Labs",
   "6d6aa856fd2c8c53": "Declarative YAML Workflow Validator",
-  "09b23b9bcdf1b802": "Validate workflows/*.yaml step DAGs (in-thread and child steps) and preview compiled T3 workflows.",
   "77038701cc21dee2": "Validating...",
   "5d30ba3ba997aeea": "Validate YAML",
   "49cc06e79f21f85a": "{seconds} s",
@@ -12492,7 +12489,6 @@
   "d443390c4d2dcfd4": "tillgänglighet a11y skärmläsare nvda jaws voiceover orca skärmläsaren fönstertitel fliktitel alt tab aktivitetsfält trådstatus ordning arbetar godkännande",
   "6826fa9579c22035": "beta dela gäst bjud in länk kollega titta t3 connect tunnel",
   "f10c06cba0cdf7fe": "beta länka en annan dator vps peer agenter arbetar där delegera",
-  "bc0b409d89ce086e": "beta arbetsflöde workflow beständiga körningar automatisering steg schema webhook mapp",
   "4a21cf825a2045b0": "beta tabb autokomplettering förutsäg nästa meddelande claude codex spöktext",
   "fea2dc36585c4a20": "Simlock-enhetsvärdar (alfa)",
   "9d834d178130180e": "beta alpha simlock callstack simulator emulator ios android pool lån gateway",
@@ -13295,16 +13291,6 @@
   "036182ec7e2ee4d4": "Bredvid körningen",
   "16f7df687349b399": "Definitioner",
   "f0a212aadfe1257b": "Läser in redigeraren…",
-  "20f194e003885e95": [
-    "Slå på dem för den här servern i",
-    " ",
-    {
-      "t": "Link",
-      "i": 1,
-      "c": "Inställningar → Labs"
-    },
-    "."
-  ],
   "8367779e149f723b": "Begäran till den primära miljön misslyckades under {operation} (HTTP {status}).",
   "c5cd027743a2b5a6": "Ogiltig parkopplingstoken. Kontrollera token och försök igen.",
   "0e4b49c8203aae81": "Tidsgränsen överskreds i väntan på en autentiserad session efter uppstart.",
@@ -13449,5 +13435,33 @@
   "8f189cff2f574e73": "OAuth-inställningar",
   "a0667ced094dbc02": "OAuth-klient-ID",
   "27c3a89b09fba053": "OAuth-behörigheter (kommaseparerade)",
-  "3e8d634eff0e1578": "URL till OAuth-auktoriseringsservern"
+  "3e8d634eff0e1578": "URL till OAuth-auktoriseringsservern",
+  "48fae08dba62ecf1": "Starta arbetsflöde snabbt",
+  "d354b63d8e35a59f": "Rätta YAML-filen innan du sparar.",
+  "a060876f3634a64e": "{name} finns redan. Öppna Definitioner för att redigera.",
+  "24889a3f2d8e766a": "{name} har sparats.",
+  "f4644da90466c1a3": "Det gick inte att spara arbetsflödet.",
+  "87413530d4d0f903": "Spara YAML",
+  "1840cffc760c1e99": "Öppna pågående körningar och redigera definitioner på en ansluten server.",
+  "0d33ad8339cc6627": "Inställningar för arbetsflöden",
+  "feb292ff8c0ddd69": "Skriv YAML med steg i chatten, i undertrådar och med frågor.",
+  "99d24c2de2bb4c26": "Arbetsflödeslägen",
+  "abb04a05e7d483c0": "Konfigurera ett arbetsflöde",
+  "dab68249367141dc": "Visa tidigare arbetsflödeskörningar",
+  "674bcf1bb284d4f7": "{completed}/{total} steg",
+  "65763fd9556fa033": "Fortsätt köra",
+  "60ed1918d57cae79": "Pausa efter det här steget",
+  "ccbe87ff82dd3e3f": "Arbetsflödesläget startar med en textprompt och en modell.",
+  "ace14b0e7b0e4adf": "Det gick inte att starta arbetsflödet.",
+  "79993e152e5414ac": "arbetsflöde varaktiga körningar automation steg schema webhook mapp",
+  "07be54e34112ac3b": [
+    "Slå på dem för den här servern i",
+    " ",
+    {
+      "t": "Link",
+      "i": 1,
+      "c": "Inställningar → Schemalagda uppgifter"
+    },
+    "."
+  ]
 }

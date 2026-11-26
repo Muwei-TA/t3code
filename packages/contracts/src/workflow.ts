@@ -1,5 +1,7 @@
 import * as Schema from "effect/Schema";
 
+import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { HarnessModeId, HarnessWorkflowStepKind } from "./harness.ts";
 import { IssueRef } from "./issue.ts";
 import { PullRequestRef } from "./pullRequest.ts";
 
@@ -34,6 +36,10 @@ export const WorkflowRun = Schema.Struct({
   parentRunId: Schema.NullOr(Schema.String),
   /** The step of that run this one was invoked as. */
   parentStep: Schema.NullOr(Schema.String),
+  hostThreadId: Schema.optionalKey(ThreadId),
+  supportsStagePause: Schema.optionalKey(Schema.Boolean),
+  pauseRequested: Schema.optionalKey(Schema.Boolean),
+  pausedBeforeStage: Schema.optionalKey(Schema.String),
   startedAt: Schema.String,
   updatedAt: Schema.String,
   endedAt: Schema.NullOr(Schema.String),
@@ -87,6 +93,9 @@ export type WorkflowHook = typeof WorkflowHook.Type;
 export const WorkflowSummary = Schema.Struct({
   name: Schema.String,
   version: Schema.Number,
+  source: Schema.optionalKey(Schema.Literals(["yaml", "ts", "plugin"])),
+  description: Schema.optionalKey(Schema.String),
+  chatModeCompatible: Schema.optionalKey(Schema.Boolean),
   /** In words: "every 1h", "daily at 09:00", "webhook issues". Empty when only started by hand. */
   triggers: Schema.Array(Schema.String),
 });
@@ -165,9 +174,25 @@ export const WorkflowCounts = Schema.Struct({
 export type WorkflowCounts = typeof WorkflowCounts.Type;
 export type WorkflowRunsSnapshot = typeof WorkflowRunsSnapshot.Type;
 
-export const WorkflowRunsSubscribeInput = Schema.Struct({});
+export const WorkflowRunsSubscribeInput = Schema.Struct({
+  chat: Schema.optionalKey(Schema.Struct({ threadId: Schema.optionalKey(ThreadId) })),
+});
 
-export const WorkflowRunGetInput = Schema.Struct({ runId: Schema.String });
+export const WorkflowStartInput = Schema.Struct({
+  workflow: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  version: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+  projectId: ProjectId,
+  threadId: ThreadId,
+  prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(100_000)),
+  idempotencyKey: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+});
+export type WorkflowStartInput = typeof WorkflowStartInput.Type;
+export const WorkflowStartResult = Schema.Struct({ runId: Schema.String });
+
+export const WorkflowRunGetInput = Schema.Struct({
+  runId: Schema.String,
+  hostThreadId: Schema.optionalKey(ThreadId),
+});
 
 /**
  * Something a run touched: an issue, a pull request, or a kind added later. `kind` is open, so a
@@ -194,9 +219,18 @@ export const WorkflowReferenceKind = { issue: "issue", pullRequest: "pullRequest
 export const WorkflowIssueAddress = IssueRef;
 export const WorkflowPullRequestAddress = PullRequestRef;
 
+export const WorkflowStage = Schema.Struct({
+  id: Schema.String,
+  name: Schema.optionalKey(Schema.String),
+  kind: HarnessWorkflowStepKind,
+  modeId: Schema.optionalKey(HarnessModeId),
+});
+export type WorkflowStage = typeof WorkflowStage.Type;
+
 /** One run with its steps, in the order they started, and what it touched. */
 export const WorkflowRunDetail = Schema.Struct({
   run: WorkflowRun,
+  stages: Schema.optionalKey(Schema.Array(WorkflowStage)),
   steps: Schema.Array(WorkflowStep),
   references: Schema.Array(WorkflowRunReference),
 });
@@ -209,6 +243,8 @@ export const WorkflowAnswerInput = Schema.Struct({
   choice: Schema.String,
   reason: Schema.optional(Schema.String),
 });
+
+export const WorkflowRunPauseInput = Schema.Struct({ runId: Schema.String });
 
 export const WorkflowRunResumeInput = Schema.Struct({ runId: Schema.String });
 

@@ -4,7 +4,14 @@ import type { ProviderInstanceEntry } from "../../providerInstances";
 import { type AppModelOption } from "../../modelSelection";
 import { useNavigate } from "@tanstack/react-router";
 import { useGT, useMessages } from "gt-react";
-import { CheckIcon, CircleAlertIcon, CompassIcon, MapIcon, Settings2Icon } from "lucide-react";
+import {
+  CheckIcon,
+  CircleAlertIcon,
+  CompassIcon,
+  MapIcon,
+  Settings2Icon,
+  WorkflowIcon,
+} from "lucide-react";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
 import {
@@ -79,6 +86,9 @@ export function ComposerControlsBar(props: {
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
   interactionMode: ProviderInteractionMode;
   modeId: HarnessModeId;
+  workflowModes: ChatComposerProps["workflowModes"];
+  selectedWorkflow: ChatComposerProps["selectedWorkflow"];
+  onSelectWorkflow: ChatComposerProps["onSelectWorkflow"];
   availableModes: ReadonlyArray<ComposerPortableModeOption>;
   showPlanModeToggle: boolean;
   planReadOnlyEnforcement: "native" | "advisory" | "none";
@@ -285,13 +295,14 @@ export function ComposerControlsBar(props: {
     availableModes.find((mode) => mode.id === (isPlanMode ? "plan" : "build")) ??
     null;
   const activeModeLabel =
-    isPlanMode && planReadOnlyEnforcement === "advisory"
+    props.selectedWorkflow?.name ??
+    (isPlanMode && planReadOnlyEnforcement === "advisory"
       ? `${activeModeOption?.name ?? gt("Plan", { $context: "composer mode toggle" })} (${gt("advisory")})`
       : (activeModeOption?.name ??
         (isPlanMode
           ? gt("Plan", { $context: "composer mode toggle" })
-          : gt("Build", { $context: "composer mode toggle" })));
-  const isNonDefaultMode = modeId !== "build" || isPlanMode;
+          : gt("Build", { $context: "composer mode toggle" }))));
+  const isNonDefaultMode = props.selectedWorkflow != null || modeId !== "build" || isPlanMode;
   const modeTooltip = isPlanMode
     ? planReadOnlyEnforcement === "advisory"
       ? gt(
@@ -323,7 +334,11 @@ export function ComposerControlsBar(props: {
     <>
       {composerModelPicker}
 
-      {!composerControlsHidden && (showPlanModeToggle || availableModes.length > 1) ? (
+      {!composerControlsHidden &&
+      (showPlanModeToggle ||
+        availableModes.length > 1 ||
+        props.workflowModes != null ||
+        props.selectedWorkflow != null) ? (
         <Menu>
           <Tooltip>
             <TooltipTrigger
@@ -335,7 +350,8 @@ export function ComposerControlsBar(props: {
                       size={controlSize}
                       aria-label={gt("Switch portable mode ({mode})", { mode: activeModeLabel })}
                       data-composer-plan-mode={isPlanMode ? "plan" : "default"}
-                      data-composer-mode-id={modeId}
+                      data-composer-mode-id={props.selectedWorkflow == null ? modeId : "workflow"}
+                      data-composer-shortcut="workflow"
                       className={cn("shrink-0", isNonDefaultMode && "bg-accent text-foreground")}
                     />
                   }
@@ -343,7 +359,9 @@ export function ComposerControlsBar(props: {
               }
             >
               <ComposerControlIcon
-                icon={isPlanMode ? MapIcon : CompassIcon}
+                icon={
+                  props.selectedWorkflow != null ? WorkflowIcon : isPlanMode ? MapIcon : CompassIcon
+                }
                 size={controlSize}
                 {...(isNonDefaultMode ? { className: "text-current" } : {})}
               />
@@ -358,7 +376,7 @@ export function ComposerControlsBar(props: {
             </div>
             <MenuSeparator />
             {availableModes.map((mode) => {
-              const selected = mode.id === modeId;
+              const selected = props.selectedWorkflow == null && mode.id === modeId;
               return (
                 <MenuItem
                   key={mode.id}
@@ -385,6 +403,40 @@ export function ComposerControlsBar(props: {
                 </MenuItem>
               );
             })}
+            {props.workflowModes === null || props.workflowModes === undefined ? null : (
+              <>
+                <MenuSeparator />
+                <div className="px-2 py-1 text-2xs text-muted-foreground">
+                  {gt("Workflow Modes")}
+                </div>
+                {props.workflowModes.map((workflow) => (
+                  <MenuItem key={workflow.name} onClick={() => props.onSelectWorkflow?.(workflow)}>
+                    <WorkflowIcon className="size-3.5 text-muted-foreground" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{workflow.name}</span>
+                      {workflow.description ? (
+                        <span className="block truncate text-2xs text-muted-foreground">
+                          {workflow.description}
+                        </span>
+                      ) : null}
+                    </span>
+                    {props.selectedWorkflow?.name === workflow.name ? (
+                      <CheckIcon className="size-3.5" />
+                    ) : null}
+                  </MenuItem>
+                ))}
+                {props.workflowModes.length === 0 ? (
+                  <MenuItem
+                    onClick={() =>
+                      void navigate({ to: "/automations", search: { tab: "workflows" } })
+                    }
+                  >
+                    <WorkflowIcon className="size-3.5 text-muted-foreground" />
+                    <span>{gt("Set up a workflow")}</span>
+                  </MenuItem>
+                ) : null}
+              </>
+            )}
             <MenuSeparator />
             <MenuItem
               onClick={() => {

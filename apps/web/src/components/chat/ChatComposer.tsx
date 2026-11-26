@@ -333,7 +333,7 @@ export interface ChatComposerHandle {
   openModelPicker: () => void;
   stepReasoningEffort: (direction: 1 | -1) => void;
   toggleModelPicker: () => void;
-  openControl: (command: KeybindingCommand) => void;
+  openControl: (command: KeybindingCommand | "workflow") => void;
   isModelPickerOpen: () => boolean;
   isCaretAtStart: () => boolean;
   compactContext: () => void;
@@ -429,6 +429,9 @@ export interface ChatComposerProps {
   defaultRuntimeMode?: RuntimeMode;
   interactionMode: ProviderInteractionMode;
   modeId: HarnessModeId;
+  workflowModes?: ReadonlyArray<import("@t3tools/contracts").WorkflowSummary> | null;
+  selectedWorkflow?: import("@t3tools/contracts").WorkflowSummary | null;
+  onSelectWorkflow?: (workflow: import("@t3tools/contracts").WorkflowSummary | null) => void;
 
   lockedProvider: ProviderDriverKind | null;
   providerStatuses: ServerProvider[];
@@ -611,7 +614,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     getModelDisabledReason,
     handleRuntimeModeChange,
     handleInteractionModeChange,
-    handleModeChange,
+    handleModeChange: changePortableMode,
     focusComposer,
     scheduleComposerFocus,
     setThreadError,
@@ -2629,13 +2632,31 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const availableModes = showPlanModeToggle
     ? rawAvailableModes
     : rawAvailableModes.filter((entry) => entry.baseInteractionMode !== "plan");
+  const workflowModes = props.workflowModes ?? null;
+  const selectedWorkflow = props.selectedWorkflow ?? null;
+  const handleModeChange: ChatComposerProps["handleModeChange"] = (id, interactionMode) => {
+    props.onSelectWorkflow?.(null);
+    changePortableMode(id, interactionMode);
+  };
   const handleCycleMode = () => {
-    if (availableModes.length <= 1) return;
-    const currentIndex = availableModes.findIndex((entry) => entry.id === modeId);
-    const nextMode =
-      availableModes[(currentIndex + 1 + availableModes.length) % availableModes.length];
+    const workflows = workflowModes ?? [];
+    const count = availableModes.length + workflows.length;
+    if (count <= 1 && selectedWorkflow === null) return;
+    if (count === 0) {
+      props.onSelectWorkflow?.(null);
+      return;
+    }
+    const currentIndex =
+      selectedWorkflow === null
+        ? availableModes.findIndex((entry) => entry.id === modeId)
+        : availableModes.length +
+          workflows.findIndex((entry) => entry.name === selectedWorkflow.name);
+    const nextIndex = (currentIndex + 1) % count;
+    const nextMode = availableModes[nextIndex];
     if (nextMode) {
       handleModeChange(nextMode.id, nextMode.baseInteractionMode);
+    } else {
+      props.onSelectWorkflow?.(workflows[nextIndex - availableModes.length] ?? null);
     }
   };
   const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem?: boolean) => {
@@ -2784,6 +2805,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       interactionMode={interactionMode}
       modeId={modeId}
       availableModes={availableModes}
+      workflowModes={workflowModes}
+      selectedWorkflow={selectedWorkflow}
+      onSelectWorkflow={props.onSelectWorkflow}
       showPlanModeToggle={showPlanModeToggle}
       planReadOnlyEnforcement={planReadOnlyEnforcement}
       handleInteractionModeChange={handleInteractionModeChange}

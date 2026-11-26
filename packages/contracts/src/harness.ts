@@ -1137,7 +1137,7 @@ export const HarnessHookExecutionResult = Schema.Struct({
 });
 export type HarnessHookExecutionResult = typeof HarnessHookExecutionResult.Type;
 
-export const HarnessWorkflowStepKind = Schema.Literals(["in-thread", "child"]);
+export const HarnessWorkflowStepKind = Schema.Literals(["in-thread", "child", "ask"]);
 export type HarnessWorkflowStepKind = typeof HarnessWorkflowStepKind.Type;
 
 export const HarnessWorkflowStepFailurePolicy = Schema.Literals(["fail", "continue", "pause"]);
@@ -1148,6 +1148,7 @@ export const HarnessWorkflowStepSpec = Schema.Struct({
   name: Schema.optionalKey(Schema.String),
   kind: HarnessWorkflowStepKind,
   prompt: Schema.String,
+  choices: Schema.optionalKey(Schema.Array(Schema.String)),
   modeId: Schema.optionalKey(HarnessModeId),
   dependsOn: Schema.Array(TrimmedNonEmptyString),
   timeoutSeconds: Schema.optionalKey(PositiveInt),

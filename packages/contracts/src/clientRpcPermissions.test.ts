@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  AuthOrchestrationOperateScope,
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
   AuthTerminalOperateScope,
@@ -16,6 +17,12 @@ it("requires provider management for all managed MCP OAuth operations", () => {
   ]) {
     expect(clientRpcRequiredScopes(method, undefined)).toEqual([AuthProvidersManageScope]);
   }
+});
+
+it("requires thread operation access to start a workflow", () => {
+  expect(clientRpcRequiredScopes(WS_METHODS.workflowsStart, undefined)).toEqual([
+    AuthOrchestrationOperateScope,
+  ]);
 });
 
 describe("clientRpcRequiredScopes for hook changes", () => {

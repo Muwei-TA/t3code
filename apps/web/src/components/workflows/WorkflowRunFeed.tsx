@@ -204,6 +204,7 @@ export function WorkflowRunFeed({
   onSelect,
   onOpenThread,
   onOpenReference,
+  embedded = false,
 }: {
   readonly environmentId: EnvironmentId;
   readonly node: WorkflowRunNode;
@@ -213,6 +214,7 @@ export function WorkflowRunFeed({
   readonly onSelect: (runId: string | null) => void;
   readonly onOpenThread: (thread: WorkflowThreadTarget) => void;
   readonly onOpenReference: (reference: WorkflowRunReference) => void;
+  readonly embedded?: boolean;
 }) {
   const { run } = node;
   const gt = useGT();
@@ -224,7 +226,13 @@ export function WorkflowRunFeed({
   // Steps already there when the run opens are simply shown; only later ones arrive with motion.
   const [openedAtMs] = useState(() => Date.now());
   const detail = useEnvironmentQuery(
-    serverEnvironment.workflowRun({ environmentId, input: { runId: run.runId } }),
+    serverEnvironment.workflowRun({
+      environmentId,
+      input: {
+        runId: run.runId,
+        ...(run.hostThreadId === undefined ? {} : { hostThreadId: run.hostThreadId }),
+      },
+    }),
   );
   const canResume = useAtomValue(serverEnvironment.resumeWorkflowRun.permissionAtom(environmentId));
   const canCancel = useAtomValue(serverEnvironment.cancelWorkflowRun.permissionAtom(environmentId));
@@ -442,16 +450,18 @@ export function WorkflowRunFeed({
         className="mx-auto flex w-full max-w-5xl min-w-0 flex-col px-5 pt-5 pb-10"
       >
         <header className="space-y-1">
-          <Button
-            size="sm"
-            variant="ghost"
-            className="-ms-2.5 md:hidden"
-            onClick={() => onSelect(null)}
-            aria-label={gt("Back to the list of runs")}
-          >
-            <ArrowLeftIcon />
-            <T context="noun, the list of workflow runs">Runs</T>
-          </Button>
+          {embedded ? null : (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="-ms-2.5 md:hidden"
+              onClick={() => onSelect(null)}
+              aria-label={gt("Back to the list of runs")}
+            >
+              <ArrowLeftIcon />
+              <T context="noun, the list of workflow runs">Runs</T>
+            </Button>
+          )}
           {parent === null ? null : (
             <button
               type="button"
@@ -1789,7 +1799,7 @@ function WorkflowPauseCard({
         }
       />
       {reason ? <p className="mt-3 text-sm break-words whitespace-pre-wrap">{reason}</p> : null}
-      {kept ? (
+      {kept && run.pausedBeforeStage === undefined ? (
         <p className="mt-2 text-xs text-muted-foreground">
           <T>Only the failed step runs again; what finished before it is kept.</T>
         </p>
@@ -1798,7 +1808,7 @@ function WorkflowPauseCard({
   );
 }
 
-function WorkflowQuestionCard({
+export function WorkflowQuestionCard({
   environmentId,
   question,
   onOpenThread,

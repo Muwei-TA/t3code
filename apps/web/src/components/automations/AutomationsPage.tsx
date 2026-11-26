@@ -1,11 +1,23 @@
-import type { HarnessWorkflowValidateResult } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import type {
+  EnvironmentId,
+  HarnessWorkflowValidateResult,
+  WorkflowDefinitionFile,
+} from "@t3tools/contracts";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { T, useGT } from "gt-react";
 import { CheckCircle2Icon, Clock3Icon, WorkflowIcon } from "lucide-react";
 import { useState } from "react";
 
 import { isElectron } from "~/env";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import {
+  useConnectedEnvironmentIds,
+  useEnvironments,
+  usePrimaryEnvironmentId,
+} from "../../state/environments";
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { harnessEnvironment } from "../../state/harness";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ScheduledTasksSettings } from "../settings/ScheduledTasksSettings";
@@ -29,11 +41,16 @@ steps:
     kind: in-thread
     modeId: plan
     prompt: Inspect the codebase and draft a concise implementation plan.
+  - id: approve
+    kind: ask
+    dependsOn: [plan]
+    prompt: What should implementation prioritize?
+    choices: [Simplest change, Broader coverage]
   - id: implement
     kind: child
     modeId: build
-    dependsOn: [plan]
-    prompt: Implement the approved plan and run unit tests.
+    dependsOn: [plan, approve]
+    prompt: Implement the plan with the chosen priority and run unit tests.
   - id: review
     kind: in-thread
     modeId: review
@@ -47,13 +64,79 @@ export function AutomationsPage() {
   const gt = useGT();
   const workflowEnvIds = useWorkflowEnvironmentIds();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const connected = useConnectedEnvironmentIds();
+  const { environments } = useEnvironments();
+  const [selected, setSelected] = useState<EnvironmentId | null>(null);
+  const environmentId =
+    selected !== null && connected.includes(selected)
+      ? selected
+      : primaryEnvironmentId !== null && connected.includes(primaryEnvironmentId)
+        ? primaryEnvironmentId
+        : (connected[0] ?? null);
+  const enabled = environmentId !== null && workflowEnvIds.includes(environmentId);
+  const maySave = useAtomValue(
+    serverEnvironment.saveWorkflowDefinition.permissionAtom(environmentId),
+  );
+  const definitions = useEnvironmentQuery(
+    enabled && maySave && environmentId !== null && search.tab === "workflows"
+      ? serverEnvironment.workflowDefinition({ environmentId, input: {} })
+      : null,
+  );
+  const saveWorkflow = useAtomCommand(serverEnvironment.saveWorkflowDefinition);
   const validateWorkflow = useAtomCommand(harnessEnvironment.validateWorkflow, {
     reportFailure: false,
   });
   const [yamlText, setYamlText] = useState(SAMPLE_WORKFLOW_YAML);
   const [validating, setValidating] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState<{ text: string; error: boolean } | null>(null);
   const [validation, setValidation] = useState<HarnessWorkflowValidateResult | null>(null);
   const activeTab = search.tab === "workflows" ? "workflows" : "scheduled-tasks";
+
+  const check = async () => {
+    if (environmentId === null) return null;
+    const result = await validateWorkflow({ environmentId, input: { yaml: yamlText } });
+    if (result._tag === "Failure") return null;
+    setValidation(result.value);
+    return result.value;
+  };
+
+  const saveChecked = async (
+    environmentId: EnvironmentId,
+    files: ReadonlyArray<WorkflowDefinitionFile>,
+  ) => {
+    const checked = await check();
+    if (checked === null || !checked.valid || checked.name === undefined) {
+      setSaveFeedback({ text: gt("Fix the YAML before saving."), error: true });
+      return;
+    }
+    const name = `${checked.name.replaceAll(" ", "-")}.yaml`;
+    if (files.some((file) => file.name === name)) {
+      setSaveFeedback({
+        text: gt("{name} already exists. Open Definitions to edit it.", { name }),
+        error: true,
+      });
+      return;
+    }
+    const result = await saveWorkflow({ environmentId, input: { name, source: yamlText } });
+    if (result._tag === "Success") {
+      const problem = result.value.problems[0]?.message;
+      setSaveFeedback({
+        text:
+          problem ??
+          (result.value.changed
+            ? gt("Saved {name}.", { name })
+            : gt("The workflow could not be saved.")),
+        error: problem !== undefined || !result.value.changed,
+      });
+    }
+  };
+  const save = async () => {
+    if (environmentId === null || definitions.data === null || saving) return;
+    setSaving(true);
+    setSaveFeedback(null);
+    await saveChecked(environmentId, definitions.data.files).finally(() => setSaving(false));
+  };
 
   const setTab = (tab: "scheduled-tasks" | "workflows") => {
     void navigate({ to: "/automations", search: { tab }, replace: true });
@@ -102,19 +185,56 @@ export function AutomationsPage() {
                   <T>Multi-step Workflows</T>
                 </h2>
                 <p className="mt-1.5 text-sm text-muted-foreground">
-                  <T>
-                    Inspect live runs, pause/resume steps, and edit declarative workflow definitions
-                    across connected environments.
-                  </T>
+                  <T>Open live runs and edit workflow definitions on a connected server.</T>
                 </p>
                 <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <Button render={<Link to="/workflows" />} size="sm">
+                  {connected.length > 1 ? (
+                    <Select value={environmentId} onValueChange={(id) => setSelected(id)}>
+                      <SelectTrigger
+                        size="sm"
+                        aria-label={gt("Environment", { $context: "a T3 Code server to pick" })}
+                      >
+                        <SelectValue>
+                          {
+                            environments.find(
+                              (environment) => environment.environmentId === environmentId,
+                            )?.label
+                          }
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectPopup>
+                        {environments
+                          .filter((environment) => connected.includes(environment.environmentId))
+                          .map((environment) => (
+                            <SelectItem
+                              key={environment.environmentId}
+                              value={environment.environmentId}
+                            >
+                              {environment.label}
+                            </SelectItem>
+                          ))}
+                      </SelectPopup>
+                    </Select>
+                  ) : null}
+                  <Button
+                    render={
+                      <Link
+                        to="/workflows"
+                        search={environmentId === null ? {} : { env: environmentId }}
+                      />
+                    }
+                    size="sm"
+                  >
                     <WorkflowIcon className="size-3.5" />
                     <T>Open Workflows studio</T>
                   </Button>
-                  {workflowEnvIds.length === 0 ? (
-                    <Button render={<Link to="/settings/labs" />} size="sm" variant="outline">
-                      <T>Enable Workflows in Labs</T>
+                  {environmentId !== null && !enabled ? (
+                    <Button
+                      render={<Link to="/settings/scheduled-tasks" />}
+                      size="sm"
+                      variant="outline"
+                    >
+                      <T>Workflow settings</T>
                     </Button>
                   ) : null}
                 </div>
@@ -127,38 +247,62 @@ export function AutomationsPage() {
                       <T>Declarative YAML Workflow Validator</T>
                     </h3>
                     <p className="text-xs text-muted-foreground">
-                      <T>
-                        Validate workflows/*.yaml step DAGs (in-thread and child steps) and preview
-                        compiled T3 workflows.
-                      </T>
+                      <T>Write YAML with in-thread, child, and question steps.</T>
                     </p>
                   </div>
-                  <Button
-                    size="sm"
-                    disabled={validating || primaryEnvironmentId === null}
-                    onClick={async () => {
-                      if (!primaryEnvironmentId) return;
-                      setValidating(true);
-                      const res = await validateWorkflow({
-                        environmentId: primaryEnvironmentId,
-                        input: { yaml: yamlText },
-                      });
-                      setValidating(false);
-                      if (res._tag === "Success") {
-                        setValidation(res.value);
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      disabled={validating || saving || environmentId === null}
+                      onClick={async () => {
+                        setValidating(true);
+                        await check().finally(() => setValidating(false));
+                      }}
+                    >
+                      <CheckCircle2Icon className="size-3.5" />
+                      {validating ? <T>Validating...</T> : <T>Validate YAML</T>}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void save()}
+                      disabled={
+                        !enabled ||
+                        !maySave ||
+                        definitions.data === null ||
+                        definitions.data.single ||
+                        saving ||
+                        validating
                       }
-                    }}
-                  >
-                    <CheckCircle2Icon className="size-3.5" />
-                    {validating ? <T>Validating...</T> : <T>Validate YAML</T>}
-                  </Button>
+                    >
+                      {saving ? gt("Saving…") : gt("Save YAML")}
+                    </Button>
+                  </div>
                 </div>
 
                 <Textarea
                   rows={12}
                   value={yamlText}
-                  onChange={(e) => setYamlText(e.target.value)}
+                  disabled={saving || validating}
+                  onChange={(e) => {
+                    setYamlText(e.target.value);
+                    setValidation(null);
+                    setSaveFeedback(null);
+                  }}
                 />
+
+                {saveFeedback === null ? null : (
+                  <p
+                    role="status"
+                    className={
+                      saveFeedback.error
+                        ? "text-sm text-destructive"
+                        : "text-sm text-muted-foreground"
+                    }
+                  >
+                    {saveFeedback.text}
+                  </p>
+                )}
 
                 {validation ? (
                   <div className="space-y-2 rounded-lg border border-border/70 p-3 text-xs">

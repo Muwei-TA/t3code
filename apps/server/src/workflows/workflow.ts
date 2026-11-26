@@ -77,6 +77,12 @@ export type InRun =
   | WorkflowEngine.WorkflowEngine
   | WorkflowEngine.WorkflowInstance;
 
+export const pauseBeforeStage = Effect.fn("Workflow.pauseBeforeStage")(function* (name: string) {
+  const run = yield* RunContext;
+  const instance = yield* WorkflowEngine.WorkflowInstance;
+  if (yield* run.store.pauseAtStage(run.runId, name)) return yield* Workflow.suspend(instance);
+});
+
 /** Takes `name` for one step of the run. Step results and the step list are both kept by name. */
 export const claim = (name: string, cleanup = false) =>
   Effect.flatMap(RunContext, (run) => {
@@ -612,6 +618,9 @@ export interface WorkflowDefinition<P = never, A = unknown> {
   readonly name: string;
   readonly version: number;
   readonly payload: Schema.Codec<unknown, unknown>;
+  readonly chat?: { readonly description?: string };
+  readonly stages?: ReadonlyArray<import("@t3tools/contracts").WorkflowStage>;
+  readonly source?: "yaml" | "ts" | "plugin";
   readonly returns: Schema.Codec<unknown, unknown>;
   /** How long a paused run rests before it is resumed by itself, per pause in a row. */
   readonly resumeAfter: ReadonlyArray<Duration.Input>;
@@ -723,6 +732,7 @@ export const workflow = <P, PI, A = void, AI = void, EndError = never>(
   options: {
     readonly version: number;
     readonly payload: Schema.Codec<P, PI>;
+    readonly chat?: { readonly description?: string };
     readonly returns?: Schema.Codec<A, AI>;
     readonly resumeAfter?: ReadonlyArray<Duration.Input>;
     /** What starts a run by itself. Each must give what `payload` takes. */
@@ -742,6 +752,7 @@ export const workflow = <P, PI, A = void, AI = void, EndError = never>(
   checkOptions(`workflow("${name}")`, options, [
     "version",
     "payload",
+    "chat",
     "returns",
     "resumeAfter",
     "triggers",
@@ -761,6 +772,7 @@ const definitionOf = <P, PI, A, AI, EndError>(
 ): WorkflowDefinition<P, A> => ({
   name,
   version: options.version,
+  ...(options.chat === undefined ? {} : { chat: options.chat }),
   // Erased here, once: the registry holds workflows of every payload and result type.
   payload: options.payload as Schema.Codec<unknown, unknown>,
   // Without a schema the result is whatever JSON the body returned: dropping it would be a

@@ -6010,5 +6010,15 @@
   "5ccdd85b584946ab": "URL del servidor de autorización de OAuth",
   "4f40598caa97ab7b": "Inicio de sesión obligatorio",
   "7a45e9a9f2f0b41d": "Autoriza el acceso en el navegador. Si la página de retorno no se abre, pega aquí su dirección.",
-  "b3d555b9f91c09ab": "Configuración de OAuth (opcional)"
+  "b3d555b9f91c09ab": "Configuración de OAuth (opcional)",
+  "ace14b0e7b0e4adf": "No se pudo iniciar el workflow.",
+  "ccbe87ff82dd3e3f": "El modo de workflow empieza con un mensaje de texto y un modelo.",
+  "99d24c2de2bb4c26": "Modos de workflow",
+  "abb04a05e7d483c0": "Configurar un workflow",
+  "dab68249367141dc": "Mostrar ejecuciones anteriores",
+  "cc9987c906218558": "No se pudo pausar la ejecución",
+  "674bcf1bb284d4f7": "{completed}/{total} etapas",
+  "65763fd9556fa033": "Seguir ejecutando",
+  "60ed1918d57cae79": "Pausar después de esta etapa",
+  "614e5ad58a795fb5": "Detener"
 }

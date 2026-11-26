@@ -3299,11 +3299,8 @@
   "df1fb90eb9a77fbf": "Scheduled tasks",
   "2d6107cb78382d08": "Flujos de trabajo",
   "e34d2e718878f69c": "Multi-step Workflows",
-  "5ed32bdfc0c12a01": "Inspect live runs, pause/resume steps, and edit declarative workflow definitions across connected environments.",
   "ce001ae655cc2154": "Open Workflows studio",
-  "7670acbe41b7819f": "Enable Workflows in Labs",
   "6d6aa856fd2c8c53": "Declarative YAML Workflow Validator",
-  "09b23b9bcdf1b802": "Validate workflows/*.yaml step DAGs (in-thread and child steps) and preview compiled T3 workflows.",
   "77038701cc21dee2": "Validating...",
   "5d30ba3ba997aeea": "Validate YAML",
   "49cc06e79f21f85a": "{seconds} s",
@@ -12479,7 +12476,6 @@
   "d443390c4d2dcfd4": "accesibilidad a11y lector de pantalla nvda jaws voiceover orca narrador título de ventana título de pestaña alt tab barra de tareas estado del hilo orden en curso aprobación",
   "6826fa9579c22035": "beta compartir invitado invitar enlace compañero ver t3 connect túnel",
   "f10c06cba0cdf7fe": "beta vincular otra máquina vps agentes pares trabajar allí delegar",
-  "bc0b409d89ce086e": "beta flujo de trabajo workflow ejecuciones duraderas automatización pasos programación webhook carpeta",
   "4a21cf825a2045b0": "beta tab autocompletar predecir siguiente mensaje claude codex texto fantasma",
   "fea2dc36585c4a20": "Hosts de dispositivos Simlock (alfa)",
   "9d834d178130180e": "beta alfa simlock callstack simulador emulador ios android grupo préstamo gateway",
@@ -13282,16 +13278,6 @@
   "036182ec7e2ee4d4": "Junto a la ejecución",
   "16f7df687349b399": "Definiciones",
   "f0a212aadfe1257b": "Cargando el editor…",
-  "20f194e003885e95": [
-    "Actívalos para este servidor en",
-    " ",
-    {
-      "t": "Link",
-      "i": 1,
-      "c": "Ajustes → Labs"
-    },
-    "."
-  ],
   "8367779e149f723b": "Falló una solicitud al entorno principal durante {operation} (HTTP {status}).",
   "c5cd027743a2b5a6": "El token de emparejamiento no es válido. Revísalo e inténtalo de nuevo.",
   "0e4b49c8203aae81": "Se agotó el tiempo de espera de la sesión autenticada tras el arranque.",
@@ -13437,5 +13423,33 @@
   "8f189cff2f574e73": "Configuración de OAuth",
   "a0667ced094dbc02": "ID de cliente de OAuth",
   "27c3a89b09fba053": "Permisos de OAuth separados por comas",
-  "3e8d634eff0e1578": "URL del servidor de autorización de OAuth"
+  "3e8d634eff0e1578": "URL del servidor de autorización de OAuth",
+  "48fae08dba62ecf1": "Inicio rápido de workflow",
+  "d354b63d8e35a59f": "Corrige el YAML antes de guardarlo.",
+  "a060876f3634a64e": "{name} ya existe. Abre Definiciones para editarlo.",
+  "24889a3f2d8e766a": "Se guardó {name}.",
+  "f4644da90466c1a3": "No se pudo guardar el workflow.",
+  "87413530d4d0f903": "Guardar YAML",
+  "1840cffc760c1e99": "Abre ejecuciones activas y edita definiciones en un servidor conectado.",
+  "0d33ad8339cc6627": "Configuración de workflows",
+  "feb292ff8c0ddd69": "Escribe YAML con pasos en el chat, en hilos secundarios y con preguntas.",
+  "99d24c2de2bb4c26": "Modos de workflow",
+  "abb04a05e7d483c0": "Configurar un workflow",
+  "dab68249367141dc": "Mostrar ejecuciones anteriores",
+  "674bcf1bb284d4f7": "{completed}/{total} etapas",
+  "65763fd9556fa033": "Seguir ejecutando",
+  "60ed1918d57cae79": "Pausar después de esta etapa",
+  "ccbe87ff82dd3e3f": "El modo de workflow empieza con un mensaje de texto y un modelo.",
+  "ace14b0e7b0e4adf": "No se pudo iniciar el workflow.",
+  "79993e152e5414ac": "workflow ejecuciones duraderas automatización pasos programación webhook carpeta",
+  "07be54e34112ac3b": [
+    "Actívalos para este servidor en",
+    " ",
+    {
+      "t": "Link",
+      "i": 1,
+      "c": "Ajustes → Tareas programadas"
+    },
+    "."
+  ]
 }

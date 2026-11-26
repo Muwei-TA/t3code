@@ -1,5 +1,6 @@
 // The workflow service on Effect's workflow engine. Loaded only when workflows are enabled: the
 // engine's modules are not worth their load time on a server that registers none.
+import { ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import {
   ClusterWorkflowEngine,
@@ -168,6 +169,11 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
     resumesAt: resumes,
     parentRunId: row.parent_run_id,
     parentStep: row.parent_wait,
+    ...(row.host_thread_id === null ? {} : { hostThreadId: ThreadId.make(row.host_thread_id) }),
+    ...(row.host_thread_id === null || !definitionByTag.get(row.engine_tag)?.stages?.length
+      ? {}
+      : { supportsStagePause: true, pauseRequested: row.manual_pause_stage === "" }),
+    ...(row.manual_pause_stage ? { pausedBeforeStage: row.manual_pause_stage } : {}),
     startedAt: row.started_at,
     updatedAt: row.updated_at,
     endedAt: row.ended_at,
@@ -211,7 +217,14 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
       const [definition, engine] = found;
       // A key is one run of the workflow: the engine's own id also counts the version, so a
       // start after a new version would otherwise begin the same work again.
+      const validateHost = (row: WorkflowStore.RunRow) =>
+        row.host_thread_id === (options.hostThreadId ?? null)
+          ? Effect.void
+          : Effect.fail(
+              new WorkflowInputError({ problem: "This key belongs to a different chat." }),
+            );
       const other = Effect.fnUntraced(function* (earlier: WorkflowStore.RunRow) {
+        yield* validateHost(earlier);
         if (
           options.parent !== undefined &&
           (earlier.parent_run_id !== options.parent.runId ||
@@ -245,6 +258,10 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
       ) {
         return yield* other(earlier);
       }
+      if (earlier !== undefined) {
+        yield* validateHost(earlier);
+        if (options.hostThreadId !== undefined) return yield* other(earlier);
+      }
       const payloadCodec = Schema.toCodecJson(definition.payload);
       const encode = Schema.encodeUnknownEffect(payloadCodec);
       const encoded = yield* encode(input).pipe(
@@ -267,10 +284,15 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
         idempotencyKey: options.idempotencyKey,
         input: payload.input,
         parent: options.parent,
+        hostThreadId: options.hostThreadId,
       });
       // The key is unique, so the row holding it is the run, even one another version started.
       const holder = yield* store.runByKey(name, options.idempotencyKey);
-      if (holder !== undefined && holder.run_id !== runId) return yield* other(holder);
+      if (holder !== undefined) {
+        yield* validateHost(holder);
+        if (holder.run_id !== runId || options.hostThreadId !== undefined)
+          return yield* other(holder);
+      }
       yield* withEngine(engine.execute(payload, { discard: true }));
       if (options.parent !== undefined) {
         // The key named a run that someone else started: it would never tell this parent.
@@ -285,6 +307,48 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
         }
       }
       return { runId };
+    },
+  );
+
+  const startFromChat: Workflows["Service"]["startFromChat"] = Effect.fn("Workflows.startFromChat")(
+    function* (input, host) {
+      const idempotencyKey = `chat:${WorkflowStore.jsonText([input.threadId, input.idempotencyKey])}`;
+      const earlier = yield* store.runByKey(input.workflow, idempotencyKey);
+      if (earlier?.host_thread_id === input.threadId) {
+        if (earlier.ended_at !== null || !byTag.has(earlier.engine_tag)) {
+          return { runId: earlier.run_id };
+        }
+        return yield* start(input.workflow, null, {
+          idempotencyKey,
+          version: Number(earlier.version),
+          hostThreadId: input.threadId,
+        });
+      }
+      const definition = latest(input.workflow)?.[0];
+      if (definition?.chat === undefined || definition.version !== input.version) {
+        return yield* new WorkflowInputError({
+          problem: "This workflow has changed or is unavailable in chat. Select it again.",
+        });
+      }
+      return yield* start(
+        input.workflow,
+        {
+          input: input.prompt,
+          project: input.projectId,
+          thread: { threadId: input.threadId },
+          ...(host === undefined || definition.source === "ts" || definition.source === undefined
+            ? {}
+            : {
+                host: {
+                  modelSelection: host.modelSelection,
+                  runtimeMode: host.runtimeMode,
+                  worktreePath: host.worktreePath,
+                  branch: host.branch,
+                },
+              }),
+        },
+        { idempotencyKey, version: input.version, hostThreadId: input.threadId },
+      );
     },
   );
 
@@ -536,11 +600,23 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
     },
   );
 
+  const pause: Workflows["Service"]["pause"] = Effect.fn("Workflows.pause")(function* (runId) {
+    const row = yield* requireRun(runId);
+    if (row.ended_at !== null || row.status === "paused") return;
+    if (row.host_thread_id === null || !definitionByTag.get(row.engine_tag)?.stages?.length) {
+      return yield* new WorkflowInputError({
+        problem: "This run does not support pausing between stages.",
+      });
+    }
+    yield* store.requestStagePause(runId);
+  });
+
   /** With `pause`, the sweep's own resume, which only resumes that pause and not a later one. */
   const resumeRun = Effect.fn("WorkflowEngine.resumeRun")(function* (
     runId: string,
     pause?: WorkflowStore.RunRow,
   ) {
+    if (pause === undefined && (yield* store.clearStagePauseRequest(runId))) return;
     const row = yield* requireRun(runId);
     const engine = byTag.get(row.engine_tag);
     if (engine === undefined) {
@@ -754,7 +830,18 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
       const found = latest(name);
       return found === undefined
         ? []
-        : [{ name, version: found[0].version, triggers: found[0].triggers.map(triggerText) }];
+        : [
+            {
+              name,
+              version: found[0].version,
+              triggers: found[0].triggers.map(triggerText),
+              source: found[0].source ?? "ts",
+              chatModeCompatible: found[0].chat !== undefined,
+              ...(found[0].chat?.description === undefined
+                ? {}
+                : { description: found[0].chat.description }),
+            },
+          ];
     },
   );
   const snapshot = Effect.all({
@@ -776,6 +863,33 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
       );
     }),
   );
+
+  const watchChat: Workflows["Service"]["watchChat"] = (threadId) => {
+    const catalog = { workflows: summaries, runs: [], questions: [] };
+    if (threadId === undefined) return Stream.concat(Stream.make(catalog), Stream.never);
+    const read = Effect.gen(function* () {
+      const rows = yield* store.runsInThread(threadId);
+      const ids = new Set(rows.filter((row) => row.ended_at === null).map((row) => row.run_id));
+      const openQuestions =
+        ids.size === 0 ? [] : (yield* questions).filter((question) => ids.has(question.runId));
+      return { ...catalog, runs: rows.map(toRun), questions: openQuestions };
+    });
+    return Stream.unwrap(
+      Effect.gen(function* () {
+        const changes = yield* PubSub.subscribe(store.changes);
+        return Stream.concat(
+          Stream.fromEffect(read),
+          Stream.fromSubscription(changes).pipe(
+            Stream.filterEffect((runId) =>
+              Effect.map(store.run(runId), (row) => row?.host_thread_id === threadId),
+            ),
+            Stream.debounce(WATCH_SETTLE),
+            Stream.mapEffect(() => read),
+          ),
+        );
+      }),
+    );
+  };
 
   const counts: Workflows["Service"]["counts"] = Stream.unwrap(
     Effect.gen(function* () {
@@ -970,13 +1084,16 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
     deliver,
     signal,
     answer,
+    pause,
     resume,
     cancel,
     get: Effect.fn("Workflows.get")(function* (runId) {
       const row = yield* requireRun(runId);
       const steps = yield* store.steps(runId);
+      const stages = definitionByTag.get(row.engine_tag)?.stages;
       return {
         run: toRun(row),
+        ...(stages === undefined ? {} : { stages }),
         references: yield* store.references(runId),
         steps: steps.map((step) => ({
           name: step.name,
@@ -1020,6 +1137,8 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
       yield* keyValues.delete(key);
     }),
     watch,
+    watchChat,
+    startFromChat,
     sweep,
   });
 });

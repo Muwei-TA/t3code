@@ -6016,5 +6016,15 @@
   "5ccdd85b584946ab": "URL till OAuth-auktoriseringsservern",
   "4f40598caa97ab7b": "Inloggning krävs",
   "7a45e9a9f2f0b41d": "Godkänn åtkomsten i webbläsaren. Klistra in adressen här om återanropssidan inte går att öppna.",
-  "b3d555b9f91c09ab": "OAuth-inställningar (valfritt)"
+  "b3d555b9f91c09ab": "OAuth-inställningar (valfritt)",
+  "ace14b0e7b0e4adf": "Det gick inte att starta arbetsflödet.",
+  "ccbe87ff82dd3e3f": "Arbetsflödesläget startar med en textprompt och en modell.",
+  "99d24c2de2bb4c26": "Arbetsflödeslägen",
+  "abb04a05e7d483c0": "Konfigurera ett arbetsflöde",
+  "dab68249367141dc": "Visa tidigare arbetsflödeskörningar",
+  "cc9987c906218558": "Det gick inte att pausa körningen",
+  "674bcf1bb284d4f7": "{completed}/{total} steg",
+  "65763fd9556fa033": "Fortsätt köra",
+  "60ed1918d57cae79": "Pausa efter det här steget",
+  "614e5ad58a795fb5": "Stoppa"
 }

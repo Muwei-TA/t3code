@@ -3300,11 +3300,8 @@
   "df1fb90eb9a77fbf": "Scheduled tasks",
   "2d6107cb78382d08": "Workflows",
   "e34d2e718878f69c": "Multi-step Workflows",
-  "5ed32bdfc0c12a01": "Inspect live runs, pause/resume steps, and edit declarative workflow definitions across connected environments.",
   "ce001ae655cc2154": "Open Workflows studio",
-  "7670acbe41b7819f": "Enable Workflows in Labs",
   "6d6aa856fd2c8c53": "Declarative YAML Workflow Validator",
-  "09b23b9bcdf1b802": "Validate workflows/*.yaml step DAGs (in-thread and child steps) and preview compiled T3 workflows.",
   "77038701cc21dee2": "Validating...",
   "5d30ba3ba997aeea": "Validate YAML",
   "49cc06e79f21f85a": "{seconds} s",
@@ -12486,7 +12483,6 @@
   "d443390c4d2dcfd4": "barrierefreiheit a11y screenreader nvda jaws voiceover orca sprachausgabe fenstertitel tab-titel alt tab taskleiste thread status reihenfolge arbeitet genehmigung",
   "6826fa9579c22035": "beta teilen gast einladen link teammitglied zuschauen t3 connect tunnel",
   "f10c06cba0cdf7fe": "beta anderen rechner verknüpfen vps peer agenten dort arbeiten delegieren",
-  "bc0b409d89ce086e": "beta workflow dauerhafte läufe automatisierung schritte zeitplan webhook ordner",
   "4a21cf825a2045b0": "beta tab autovervollständigung nächste nachricht vorhersagen claude codex ghost text",
   "fea2dc36585c4a20": "Simlock-Geräte-Hosts (Alpha)",
   "9d834d178130180e": "beta alpha simlock callstack simulator emulator ios android pool lease gateway",
@@ -13289,16 +13285,6 @@
   "036182ec7e2ee4d4": "Neben der Ausführung",
   "16f7df687349b399": "Definitionen",
   "f0a212aadfe1257b": "Editor wird geladen…",
-  "20f194e003885e95": [
-    "Aktiviere sie für diesen Server in den",
-    " ",
-    {
-      "t": "Link",
-      "i": 1,
-      "c": "Einstellungen → Labs"
-    },
-    "."
-  ],
   "8367779e149f723b": "Anfrage an die primäre Umgebung während {operation} fehlgeschlagen (HTTP {status}).",
   "c5cd027743a2b5a6": "Ungültiges Kopplungstoken. Prüfe das Token und versuch es erneut.",
   "0e4b49c8203aae81": "Zeitüberschreitung beim Warten auf eine authentifizierte Sitzung nach dem Bootstrap.",
@@ -13442,5 +13428,33 @@
   "8f189cff2f574e73": "OAuth-Einstellungen",
   "a0667ced094dbc02": "OAuth-Client-ID",
   "27c3a89b09fba053": "OAuth-Berechtigungen (kommagetrennt)",
-  "3e8d634eff0e1578": "URL des OAuth-Autorisierungsservers"
+  "3e8d634eff0e1578": "URL des OAuth-Autorisierungsservers",
+  "48fae08dba62ecf1": "Workflow schnell starten",
+  "d354b63d8e35a59f": "Korrigiere das YAML vor dem Speichern.",
+  "a060876f3634a64e": "{name} existiert bereits. Öffne Definitionen zum Bearbeiten.",
+  "24889a3f2d8e766a": "{name} gespeichert.",
+  "f4644da90466c1a3": "Der Workflow konnte nicht gespeichert werden.",
+  "87413530d4d0f903": "YAML speichern",
+  "1840cffc760c1e99": "Öffne laufende Ausführungen und bearbeite Workflow-Definitionen auf einem verbundenen Server.",
+  "0d33ad8339cc6627": "Workflow-Einstellungen",
+  "feb292ff8c0ddd69": "Schreibe YAML mit Schritten im Chat, in untergeordneten Threads und mit Fragen.",
+  "99d24c2de2bb4c26": "Workflow-Modi",
+  "abb04a05e7d483c0": "Workflow einrichten",
+  "dab68249367141dc": "Frühere Workflow-Ausführungen anzeigen",
+  "674bcf1bb284d4f7": "{completed}/{total} Phasen",
+  "65763fd9556fa033": "Weiterlaufen lassen",
+  "60ed1918d57cae79": "Nach dieser Phase pausieren",
+  "ccbe87ff82dd3e3f": "Der Workflow-Modus startet mit einer Texteingabe und einem Modell.",
+  "ace14b0e7b0e4adf": "Der Workflow konnte nicht gestartet werden.",
+  "79993e152e5414ac": "Workflow dauerhafte Ausführungen Automatisierung Schritte Zeitplan Webhook Ordner",
+  "07be54e34112ac3b": [
+    "Aktiviere sie für diesen Server in den",
+    " ",
+    {
+      "t": "Link",
+      "i": 1,
+      "c": "Einstellungen → Geplante Aufgaben"
+    },
+    "."
+  ]
 }

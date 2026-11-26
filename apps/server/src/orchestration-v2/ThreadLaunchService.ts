@@ -115,6 +115,7 @@ export interface ThreadLaunchInput {
   readonly modeId?: import("@t3tools/contracts").HarnessModeId | undefined;
   readonly modeDigest?: string | undefined;
   readonly workspaceStrategy: ThreadLaunchWorkspaceStrategy;
+  readonly awaitWorkspacePreparation?: boolean;
   readonly initialMessage?: ThreadLaunchInitialMessage;
   readonly importedNativeThread?: {
     readonly ref: {
@@ -1623,8 +1624,48 @@ const make = Effect.gen(function* () {
         }
 
         // Fork preparation before the full projection read; it is only part of the reply.
+        const awaitPreparation = runId === null && input.awaitWorkspacePreparation === true;
         const shouldSchedule = runId === null ? Option.isNone(launchReceipt) : true;
-        if (shouldSchedule && (yield* reservePreparation(input.commandId))) {
+        if (awaitPreparation) {
+          const readyCommandId = CommandId.make(`${input.commandId}:workspace-ready`);
+          if (Option.isNone(yield* readReceipt(input, readyCommandId))) {
+            if (!(yield* reservePreparation(input.commandId))) {
+              return yield* mapError(
+                input,
+                "provision-worktree",
+                threadId,
+              )("Workspace preparation is already running.");
+            }
+            const previousPath = committedThread.worktreePath;
+            const previousBranch = committedThread.branch;
+            const reused =
+              Option.isSome(launchReceipt) &&
+              workspaceStrategy.type === "worktree" &&
+              previousPath !== null
+                ? {
+                    workspaceStrategy: {
+                      type: "existing_worktree" as const,
+                      worktreePath: previousPath,
+                      ...(previousBranch === null ? {} : { branch: previousBranch }),
+                    },
+                    reusedWorktree: { baseRef: workspaceStrategy.baseRef },
+                  }
+                : { workspaceStrategy };
+            yield* prepareInBackground({ ...input, ...reused }, threadId, null).pipe(
+              Effect.interruptible,
+              Effect.andThen(
+                threads
+                  .dispatch({
+                    type: "thread.metadata.update",
+                    commandId: readyCommandId,
+                    threadId,
+                  })
+                  .pipe(Effect.mapError(mapError(input, "update-thread", threadId))),
+              ),
+              Effect.ensuring(releasePreparation(input.commandId)),
+            );
+          }
+        } else if (shouldSchedule && (yield* reservePreparation(input.commandId))) {
           yield* Effect.gen(function* () {
             const current =
               runId === null

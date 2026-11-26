@@ -6018,5 +6018,15 @@
   "5ccdd85b584946ab": "OAuth authorization server URL",
   "4f40598caa97ab7b": "Sign-in required",
   "7a45e9a9f2f0b41d": "Approve access in your browser. If the callback page cannot open, paste its address here.",
-  "b3d555b9f91c09ab": "OAuth settings (optional)"
+  "b3d555b9f91c09ab": "OAuth settings (optional)",
+  "ace14b0e7b0e4adf": "Could not start the workflow.",
+  "ccbe87ff82dd3e3f": "Workflow Mode starts with a text prompt and one model.",
+  "99d24c2de2bb4c26": "Workflow Modes",
+  "abb04a05e7d483c0": "Set up a workflow",
+  "dab68249367141dc": "Show earlier workflow runs",
+  "cc9987c906218558": "Could not pause the run",
+  "674bcf1bb284d4f7": "{completed}/{total} stages",
+  "65763fd9556fa033": "Keep running",
+  "60ed1918d57cae79": "Pause after this stage",
+  "614e5ad58a795fb5": "Stop"
 }

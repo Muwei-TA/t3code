@@ -3299,11 +3299,8 @@
   "df1fb90eb9a77fbf": "Scheduled tasks",
   "2d6107cb78382d08": "Workflows",
   "e34d2e718878f69c": "Multi-step Workflows",
-  "5ed32bdfc0c12a01": "Inspect live runs, pause/resume steps, and edit declarative workflow definitions across connected environments.",
   "ce001ae655cc2154": "Open Workflows studio",
-  "7670acbe41b7819f": "Enable Workflows in Labs",
   "6d6aa856fd2c8c53": "Declarative YAML Workflow Validator",
-  "09b23b9bcdf1b802": "Validate workflows/*.yaml step DAGs (in-thread and child steps) and preview compiled T3 workflows.",
   "77038701cc21dee2": "Validating...",
   "5d30ba3ba997aeea": "Validate YAML",
   "49cc06e79f21f85a": "{seconds}s",
@@ -12494,7 +12491,6 @@
   "d443390c4d2dcfd4": "accessibility a11y screen reader nvda jaws voiceover orca narrator window title tab title alt tab taskbar thread status order working approval",
   "6826fa9579c22035": "beta share guest invite link teammate watch t3 connect tunnel",
   "f10c06cba0cdf7fe": "beta link another machine vps peer agents work there delegate",
-  "bc0b409d89ce086e": "beta workflow durable runs automation steps schedule webhook folder",
   "4a21cf825a2045b0": "beta tab autocomplete predict next message claude codex ghost text",
   "fea2dc36585c4a20": "Simlock device hosts (alpha)",
   "9d834d178130180e": "beta alpha simlock callstack simulator emulator ios android pool lease gateway",
@@ -13297,16 +13293,6 @@
   "036182ec7e2ee4d4": "Beside the run",
   "16f7df687349b399": "Definitions",
   "f0a212aadfe1257b": "Loading the editor…",
-  "20f194e003885e95": [
-    "Turn them on for this server in",
-    " ",
-    {
-      "t": "Link",
-      "i": 1,
-      "c": "Settings → Labs"
-    },
-    "."
-  ],
   "8367779e149f723b": "Primary environment request failed during {operation} (HTTP {status}).",
   "c5cd027743a2b5a6": "Invalid pairing token. Check the token and try again.",
   "0e4b49c8203aae81": "Timed out waiting for authenticated session after bootstrap.",
@@ -13451,5 +13437,33 @@
   "8f189cff2f574e73": "OAuth settings",
   "a0667ced094dbc02": "OAuth client ID",
   "27c3a89b09fba053": "OAuth scopes (comma-separated)",
-  "3e8d634eff0e1578": "OAuth authorization server URL"
+  "3e8d634eff0e1578": "OAuth authorization server URL",
+  "48fae08dba62ecf1": "Quick start workflow",
+  "d354b63d8e35a59f": "Fix the YAML before saving.",
+  "a060876f3634a64e": "{name} already exists. Open Definitions to edit it.",
+  "24889a3f2d8e766a": "Saved {name}.",
+  "f4644da90466c1a3": "The workflow could not be saved.",
+  "87413530d4d0f903": "Save YAML",
+  "1840cffc760c1e99": "Open live runs and edit workflow definitions on a connected server.",
+  "0d33ad8339cc6627": "Workflow settings",
+  "feb292ff8c0ddd69": "Write YAML with in-thread, child, and question steps.",
+  "99d24c2de2bb4c26": "Workflow Modes",
+  "abb04a05e7d483c0": "Set up a workflow",
+  "dab68249367141dc": "Show earlier workflow runs",
+  "674bcf1bb284d4f7": "{completed}/{total} stages",
+  "65763fd9556fa033": "Keep running",
+  "60ed1918d57cae79": "Pause after this stage",
+  "ccbe87ff82dd3e3f": "Workflow Mode starts with a text prompt and one model.",
+  "ace14b0e7b0e4adf": "Could not start the workflow.",
+  "79993e152e5414ac": "workflow durable runs automation steps schedule webhook folder",
+  "07be54e34112ac3b": [
+    "Turn them on for this server in",
+    " ",
+    {
+      "t": "Link",
+      "i": 1,
+      "c": "Settings → Scheduled tasks"
+    },
+    "."
+  ]
 }

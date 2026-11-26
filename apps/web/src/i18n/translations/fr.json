@@ -3299,11 +3299,8 @@
   "df1fb90eb9a77fbf": "Scheduled tasks",
   "2d6107cb78382d08": "Workflows",
   "e34d2e718878f69c": "Multi-step Workflows",
-  "5ed32bdfc0c12a01": "Inspect live runs, pause/resume steps, and edit declarative workflow definitions across connected environments.",
   "ce001ae655cc2154": "Open Workflows studio",
-  "7670acbe41b7819f": "Enable Workflows in Labs",
   "6d6aa856fd2c8c53": "Declarative YAML Workflow Validator",
-  "09b23b9bcdf1b802": "Validate workflows/*.yaml step DAGs (in-thread and child steps) and preview compiled T3 workflows.",
   "77038701cc21dee2": "Validating...",
   "5d30ba3ba997aeea": "Validate YAML",
   "49cc06e79f21f85a": "{seconds} s",
@@ -12484,7 +12481,6 @@
   "d443390c4d2dcfd4": "accessibilité a11y lecteur d’écran nvda jaws voiceover orca narrateur titre de fenêtre titre d’onglet alt tab barre des tâches statut du fil ordre en cours approbation",
   "6826fa9579c22035": "bêta partager invité invitation lien coéquipier regarder t3 connect tunnel",
   "f10c06cba0cdf7fe": "bêta associer une autre machine vps pair agents y travaillent déléguer",
-  "bc0b409d89ce086e": "bêta workflow exécutions durables automatisation étapes planification webhook dossier",
   "4a21cf825a2045b0": "bêta tab autocomplétion prédire prochain message claude codex texte fantôme",
   "fea2dc36585c4a20": "Hôtes d’appareils Simlock (alpha)",
   "9d834d178130180e": "bêta alpha simlock callstack simulateur émulateur ios android pool bail passerelle",
@@ -13287,16 +13283,6 @@
   "036182ec7e2ee4d4": "À côté de l’exécution",
   "16f7df687349b399": "Définitions",
   "f0a212aadfe1257b": "Chargement de l’éditeur…",
-  "20f194e003885e95": [
-    "Activez-les pour ce serveur dans",
-    " ",
-    {
-      "t": "Link",
-      "i": 1,
-      "c": "Paramètres → Labs"
-    },
-    "."
-  ],
   "8367779e149f723b": "La requête vers l’environnement principal a échoué pendant {operation} (HTTP {status}).",
   "c5cd027743a2b5a6": "Jeton d’appairage non valide. Vérifiez le jeton et réessayez.",
   "0e4b49c8203aae81": "Délai dépassé en attendant la session authentifiée après l’amorçage.",
@@ -13442,5 +13428,33 @@
   "8f189cff2f574e73": "Paramètres OAuth",
   "a0667ced094dbc02": "Identifiant client OAuth",
   "27c3a89b09fba053": "Autorisations OAuth séparées par des virgules",
-  "3e8d634eff0e1578": "URL du serveur d’autorisation OAuth"
+  "3e8d634eff0e1578": "URL du serveur d’autorisation OAuth",
+  "48fae08dba62ecf1": "Démarrer un workflow",
+  "d354b63d8e35a59f": "Corrigez le YAML avant de l’enregistrer.",
+  "a060876f3634a64e": "{name} existe déjà. Ouvrez Définitions pour le modifier.",
+  "24889a3f2d8e766a": "{name} a été enregistré.",
+  "f4644da90466c1a3": "Impossible d’enregistrer le workflow.",
+  "87413530d4d0f903": "Enregistrer le YAML",
+  "1840cffc760c1e99": "Ouvrez les exécutions en cours et modifiez les définitions sur un serveur connecté.",
+  "0d33ad8339cc6627": "Paramètres des workflows",
+  "feb292ff8c0ddd69": "Écrivez du YAML avec des étapes dans le fil, des sous-fils et des questions.",
+  "99d24c2de2bb4c26": "Modes de workflow",
+  "abb04a05e7d483c0": "Configurer un workflow",
+  "dab68249367141dc": "Afficher les exécutions précédentes",
+  "674bcf1bb284d4f7": "{completed}/{total} étapes",
+  "65763fd9556fa033": "Continuer l’exécution",
+  "60ed1918d57cae79": "Mettre en pause après cette étape",
+  "ccbe87ff82dd3e3f": "Le mode Workflow commence avec un message texte et un modèle.",
+  "ace14b0e7b0e4adf": "Impossible de démarrer le workflow.",
+  "79993e152e5414ac": "workflow exécutions persistantes automatisation étapes planification webhook dossier",
+  "07be54e34112ac3b": [
+    "Activez-les pour ce serveur dans",
+    " ",
+    {
+      "t": "Link",
+      "i": 1,
+      "c": "Paramètres → Tâches planifiées"
+    },
+    "."
+  ]
 }

@@ -36,6 +36,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { compileDeclarativeWorkflowToDefinition } from "../harness/DeclarativeWorkflowCompiler.ts";
 import { engineTag, text, type WorkflowDefinition } from "./workflow.ts";
 import type * as WorkflowEngine from "./WorkflowEngine.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as WorkflowAgentThreads from "./WorkflowAgentThreads.ts";
 import * as WorkflowForge from "./WorkflowForge.ts";
 import * as Workflows from "./Workflows.ts";
@@ -183,9 +184,10 @@ const evaluate = async (url: string, evaluation: Evaluation): Promise<ReadonlyAr
 function loadDeclarativeDefinition(
   module: string,
   source: string,
+  kind: "yaml" | "plugin" = "yaml",
 ): Effect.Effect<ReadonlyArray<WorkflowDefinition>, WorkflowDefinitionsLoadError> {
   const compiled = compileDeclarativeWorkflowToDefinition(source);
-  if (compiled.ok) return Effect.succeed([compiled.definition]);
+  if (compiled.ok) return Effect.succeed([{ ...compiled.definition, source: kind }]);
   return Effect.fail(
     new WorkflowDefinitionsLoadError({
       module,
@@ -512,7 +514,7 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
       const loaded =
         pluginSource === undefined
           ? yield* load(file, name)
-          : yield* loadDeclarativeDefinition(name, pluginSource).pipe(
+          : yield* loadDeclarativeDefinition(name, pluginSource, "plugin").pipe(
               Effect.match({
                 onSuccess: (definitions): LoadedDefinition => ({ definitions }),
                 onFailure: (error): LoadedDefinition => ({
@@ -677,6 +679,9 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
     answer: Effect.fn("Workflows.answer")(function* (...input) {
       return yield* (yield* current).answer(...input);
     }),
+    pause: Effect.fn("Workflows.pause")(function* (...input) {
+      return yield* (yield* current).pause(...input);
+    }),
     resume: Effect.fn("Workflows.resume")(function* (...input) {
       return yield* (yield* current).resume(...input);
     }),
@@ -723,6 +728,13 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
     watch: followed((live) => live.watch).pipe(
       Stream.map(([snapshot, at]) => ({ ...snapshot, definition: at })),
     ),
+    startFromChat: Effect.fn("Workflows.startFromChat")(function* (...input) {
+      return yield* (yield* current).startFromChat(...input);
+    }),
+    watchChat: (threadId) =>
+      followed((live) => live.watchChat(threadId)).pipe(
+        Stream.map(([snapshot, at]) => ({ ...snapshot, definition: at })),
+      ),
     counts: followed((live) => live.counts).pipe(Stream.map(([counts]) => counts)),
     sweep: Effect.flatMap(current, (live) => live.sweep),
   });
@@ -844,7 +856,7 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
 });
 
 /**
- * Workflows behind the Labs switch. While off, `runtime` is not run: no definition file loads and
+ * Workflows behind the server setting. While off, `runtime` is not run: no definition file loads and
  * no engine runs, and every request is refused. Turning on runs it in a scope of its own, which
  * turning off closes; runs stay stored and go on once it is on again. `where` is as for `make`.
  */
@@ -938,6 +950,9 @@ export const gate = Effect.fn("WorkflowRuntime.gate")(function* <E, R>(
     answer: Effect.fn("Workflows.answer")(function* (...input) {
       return yield* (yield* current).answer(...input);
     }),
+    pause: Effect.fn("Workflows.pause")(function* (...input) {
+      return yield* (yield* current).pause(...input);
+    }),
     resume: Effect.fn("Workflows.resume")(function* (...input) {
       return yield* (yield* current).resume(...input);
     }),
@@ -981,6 +996,10 @@ export const gate = Effect.fn("WorkflowRuntime.gate")(function* <E, R>(
       return yield* (yield* current).storeDelete(...input);
     }),
     watch: followed((service) => service.watch),
+    startFromChat: Effect.fn("Workflows.startFromChat")(function* (...input) {
+      return yield* (yield* current).startFromChat(...input);
+    }),
+    watchChat: (threadId) => followed((live) => live.watchChat(threadId)),
     counts: followed((service) => service.counts),
     sweep: Effect.flatMap(current, (service) => service.sweep),
   });
@@ -1016,6 +1035,7 @@ export const layer = Layer.effectContext(
     const forge = Layer.succeed(WorkflowForge.WorkflowForge, yield* WorkflowForge.WorkflowForge);
     const sql = yield* SqlClient.SqlClient;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
     const where = Option.getOrElse(override, () => config.workflowsDir);
     const changes = yield* settings.subscribeChanges;
     const gated = yield* gate(
@@ -1037,7 +1057,7 @@ export const layer = Layer.effectContext(
     );
     const enabled = yield* settings.getSettings.pipe(
       Effect.map((current) => current.workflowsEnabled),
-      Effect.orElseSucceed(() => false),
+      Effect.orElseSucceed(() => true),
     );
     yield* gated.turn(enabled);
     yield* changes.pipe(
@@ -1045,6 +1065,35 @@ export const layer = Layer.effectContext(
       Stream.runForEach(gated.turn),
       Effect.forkScoped,
     );
-    return gated.context;
+    const live = Context.get(gated.context, Workflows.Workflows);
+    return gated.context.pipe(
+      Context.add(
+        Workflows.Workflows,
+        Workflows.Workflows.of({
+          ...live,
+          startFromChat: Effect.fn("Workflows.startFromChat")(function* (input) {
+            const thread = yield* threads.getThreadShell(input.threadId).pipe(
+              Effect.mapError(
+                () =>
+                  new Workflows.WorkflowInputError({
+                    problem: "Could not read the chat thread.",
+                  }),
+              ),
+            );
+            if (
+              thread === null ||
+              thread.deletedAt !== null ||
+              thread.archivedAt !== null ||
+              thread.projectId !== input.projectId
+            ) {
+              return yield* new Workflows.WorkflowInputError({
+                problem: "Select an active chat thread in this project to run a workflow.",
+              });
+            }
+            return yield* live.startFromChat(input, thread);
+          }),
+        }),
+      ),
+    );
   }),
 );

@@ -22,6 +22,8 @@ import {
 import { isUsageLimitsCommand } from "@t3tools/shared/usageLimits";
 import {
   AuthOrchestrationOperateScope,
+  CommandId,
+  type WorkflowSummary,
   DEFAULT_MODEL,
   type EnvironmentId,
   type HarnessModeId,
@@ -96,7 +98,8 @@ import {
   previewAnnotationContextReference,
   responseContextReference,
 } from "../../lib/composerContextRecords";
-import { environmentServerConfigsAtom } from "../../state/server";
+import { environmentServerConfigsAtom, serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { threadEnvironment } from "../../state/threads";
 import { runMobileComposerTransition } from "./draftHeroTransition";
 import { useClientSettingsHydrated } from "../../hooks/useSettings";
@@ -200,6 +203,7 @@ type UsageLimitsPanel = ReturnType<typeof useUsageLimitsPanel>;
 type TimelineFollow = ReturnType<typeof useTimelineFollow>;
 
 interface ComposerSendInput {
+  readonly selectedWorkflow: WorkflowSummary | null;
   readonly environmentId: EnvironmentId;
   readonly routeThreadKey: string;
   readonly currentRouteThreadKeyRef: { readonly current: string | null };
@@ -382,6 +386,11 @@ export function useComposerSend(input: ComposerSendInput) {
     persistThreadSettingsForNextTurn,
     linkCheckoutPullRequest,
   } = input;
+  const launchWorkflowHost = useAtomCommand(threadEnvironment.launch, { reportFailure: false });
+  const startWorkflow = useAtomCommand(serverEnvironment.startWorkflowRun, {
+    reportFailure: false,
+  });
+  const workflowAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
   const linkedEnvironments = useLinkedEnvironments(environmentId);
   const handleNewThread = useNewThreadHandler();
   const navigate = useNavigate();
@@ -1040,6 +1049,114 @@ export function useComposerSend(input: ComposerSendInput) {
         threadIdForSend,
         m(msg("Select a base branch before sending in New worktree mode.")),
       );
+      return;
+    }
+    if (input.selectedWorkflow !== null) {
+      const workflow = input.selectedWorkflow;
+      if (
+        !composerHoldsOnlyText ||
+        !trimmed ||
+        multipleModelSelections !== null ||
+        directAnnotation
+      ) {
+        setThreadError(
+          threadIdForSend,
+          m(msg("Workflow Mode starts with a text prompt and one model.")),
+        );
+        return;
+      }
+      const fingerprint = JSON.stringify([
+        environmentId,
+        threadIdForSend,
+        workflow.name,
+        workflow.version,
+        trimmed,
+      ]);
+      const key =
+        workflowAttempt.current?.fingerprint === fingerprint
+          ? workflowAttempt.current.key
+          : newMessageId();
+      workflowAttempt.current = { fingerprint, key };
+      const target = scopeThreadRef(environmentId, threadIdForSend);
+      sendInFlightRef.current = true;
+      const attempt = await settlePromise(async () => {
+        if (isLocalDraftThread || baseBranchForWorktree) {
+          const launch = await launchWorkflowHost({
+            environmentId,
+            input: {
+              commandId: CommandId.make(`workflow-host:${threadIdForSend}`),
+              threadId: threadIdForSend,
+              ...(isLocalDraftThread ? {} : { reuseExistingThread: true }),
+              projectId: activeProject.id,
+              title: deriveThreadTitleSeed({ text: trimmed, attachments: [] }, m),
+              modelSelection: ctxSelectedModelSelection,
+              runtimeMode,
+              interactionMode,
+              ...(modeId === undefined ? {} : { modeId }),
+              awaitWorkspacePreparation: true,
+              workspaceStrategy: baseBranchForWorktree
+                ? {
+                    type: "worktree",
+                    baseRef: baseBranchForWorktree,
+                    ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                    ...(worktreeRepositories ? { repositories: worktreeRepositories } : {}),
+                  }
+                : activeThread.worktreePath === null
+                  ? {
+                      type: "root",
+                      ...(activeThreadBranch === null ? {} : { branch: activeThreadBranch }),
+                    }
+                  : { type: "existing_worktree", worktreePath: activeThread.worktreePath },
+            },
+          });
+          if (launch._tag === "Failure") throw squashAtomCommandFailure(launch);
+        }
+        const started = await startWorkflow({
+          environmentId,
+          input: {
+            workflow: workflow.name,
+            version: workflow.version,
+            projectId: activeProject.id,
+            threadId: threadIdForSend,
+            prompt: trimmed,
+            idempotencyKey: key,
+          },
+        });
+        if (started._tag === "Failure") throw squashAtomCommandFailure(started);
+      });
+      sendInFlightRef.current = false;
+      if (attempt._tag === "Failure") {
+        setThreadError(
+          threadIdForSend,
+          thrownErrorMessage(squashAtomCommandFailure(attempt), m) ??
+            m(msg("Could not start the workflow.")),
+        );
+        return;
+      }
+      workflowAttempt.current = null;
+      setThreadError(threadIdForSend, null);
+      if (
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ===
+          promptAtSend &&
+        !draftHasNonPromptContent(composerDraftTarget)
+      ) {
+        setComposerDraftPrompt(composerDraftTarget, "");
+        if (isCurrentRouteThread()) {
+          promptRef.current = "";
+          composerRef.current?.resetCursorState();
+        }
+      }
+      if (isLocalDraftThread) {
+        markPromotedDraftThreadByRef(target);
+        if (isCurrentRouteThread()) {
+          void navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(target),
+          });
+        } else {
+          finalizePromotedDraftThreadByRef(target);
+        }
+      }
       return;
     }
     // Records bind attachments by the id each side knows: the local id for the optimistic

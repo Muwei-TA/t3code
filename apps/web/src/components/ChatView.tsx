@@ -159,7 +159,10 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import { AsyncResult } from "effect/reactivity";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/reactivity";
+import { type WorkflowSummary } from "@t3tools/contracts";
+import { ThreadWorkflowRuns } from "./chat/ThreadWorkflowRuns";
 import { isElectron } from "../env";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
 import { composerRequiresModifier } from "../composer-logic";
@@ -417,6 +420,10 @@ import {
   type LocalThreadErrorEntry,
   makeThreadErrorSetter,
 } from "./ChatView.logic";
+
+const EMPTY_CHAT_WORKFLOWS = Atom.make(
+  AsyncResult.initial<import("@t3tools/contracts").WorkflowRunsSnapshot>(),
+);
 
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
@@ -3142,7 +3149,31 @@ export default function ChatView(props: ChatViewProps) {
     scrollToEnd,
     setThreadError,
   });
+  const workflowChatAvailable =
+    serverConfig?.environment.capabilities.workflowChat === true &&
+    serverConfig.settings.workflowsEnabled;
+  const workflowSnapshot = useAtomValue(
+    workflowChatAvailable
+      ? serverEnvironment.workflowsLive({
+          environmentId,
+          input: { chat: isServerThread && activeThread ? { threadId: activeThread.id } : {} },
+        })
+      : EMPTY_CHAT_WORKFLOWS,
+  );
+  const workflowData = Option.getOrNull(AsyncResult.value(workflowSnapshot));
+  const [workflowSelection, setWorkflowSelection] = useState<{
+    threadKey: string | null;
+    workflow: WorkflowSummary;
+  } | null>(null);
+  const selectedWorkflow =
+    workflowSelection?.threadKey === activeThreadKey ? workflowSelection.workflow : null;
+  const selectWorkflow = (workflow: WorkflowSummary | null) => {
+    setWorkflowSelection(workflow === null ? null : { threadKey: activeThreadKey, workflow });
+  };
+  const workflowModes =
+    workflowData?.workflows.filter((item) => item.chatModeCompatible === true) ?? [];
   const { onSend, captureDetachedSend } = useComposerSend({
+    selectedWorkflow,
     environmentId,
     routeThreadKey,
     currentRouteThreadKeyRef,
@@ -3500,8 +3531,12 @@ export default function ChatView(props: ChatViewProps) {
     !hasThreadNow &&
     threadStatusLine === null &&
     pendingGuestMessageCount === 0 &&
-    !hasQueuedTurns ? null : (
+    !hasQueuedTurns &&
+    !workflowData?.runs.length ? null : (
       <>
+        {workflowData && workflowData.runs.length > 0 ? (
+          <ThreadWorkflowRuns environmentId={environmentId} snapshot={workflowData} />
+        ) : null}
         {pendingHandoff === null ? null : (
           <div className="chat-content-lane">
             <HandoffRow
@@ -3995,6 +4030,13 @@ export default function ChatView(props: ChatViewProps) {
                             ) : null}
                             {!composerMounted ? null : (
                               <ChatComposer
+                                workflowModes={
+                                  workflowChatAvailable && workflowData !== null
+                                    ? workflowModes
+                                    : null
+                                }
+                                selectedWorkflow={selectedWorkflow}
+                                onSelectWorkflow={selectWorkflow}
                                 canOperateThread={canOperateThread}
                                 reportedModelSelection={reportedModelSelection}
                                 multipleModelSelections={multipleModelSelections}

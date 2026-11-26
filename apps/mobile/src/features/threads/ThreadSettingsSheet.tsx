@@ -28,6 +28,13 @@ import { harnessEnvironment } from "../../state/harness";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { LegendListRenderItemProps } from "@legendapp/list/react-native";
+import type { WorkflowSummary } from "@t3tools/contracts";
+import {
+  useChatWorkflows,
+  useChatWorkflowMode,
+  setChatWorkflowMode,
+} from "../../state/chat-workflows";
+import { useSelectWorkspaceTab } from "../layout/workspace/useSelectWorkspaceTab";
 import { RegistryContext, useAtomMount, useAtomValue } from "@effect/atom-react";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import {
@@ -332,6 +339,7 @@ const FALLBACK_MOBILE_MODES = [
 ] as const;
 
 type ThreadSettingsSessionProps = {
+  readonly workflowDraftKey?: string | null | undefined;
   readonly environmentId: EnvironmentId | null;
   readonly projectId: ProjectId | null;
   readonly cwd: string | null;
@@ -382,6 +390,9 @@ type ThreadSettingsSessionValue = {
   readonly onUpdateInteractionMode?: ((mode: ProviderInteractionMode) => void) | undefined;
   readonly modeId: HarnessModeId;
   readonly availableModes: ReadonlyArray<MobileModeChoice>;
+  readonly workflowModes: ReadonlyArray<WorkflowSummary> | null;
+  readonly selectedWorkflow: WorkflowSummary | null;
+  readonly selectWorkflow: (workflow: WorkflowSummary | null) => void;
   readonly onUpdateMode?:
     | ((modeId: HarnessModeId, interactionMode: ProviderInteractionMode) => void)
     | undefined;
@@ -692,6 +703,19 @@ function ThreadSettingsSessionProvider(
 
   const m = useMessages();
   const environmentId = props.environmentId;
+  const workflowTarget = props.workflowDraftKey ?? null;
+  const { enabled: workflowChatEnabled, snapshot: workflowSnapshot } = useChatWorkflows(
+    workflowTarget === null ? null : environmentId,
+    props.threadId ?? undefined,
+  );
+  const selectedWorkflow = useChatWorkflowMode(workflowTarget, environmentId);
+  const workflowModes = workflowChatEnabled
+    ? (workflowSnapshot?.workflows.filter((item) => item.chatModeCompatible === true) ?? [])
+    : null;
+  const selectWorkflow = (workflow: WorkflowSummary | null) => {
+    if (workflowTarget !== null && environmentId !== null)
+      setChatWorkflowMode(workflowTarget, environmentId, workflow);
+  };
   const harnessLibraryQuery = useEnvironmentQuery(
     environmentId !== null
       ? harnessEnvironment.libraryQuery({
@@ -741,7 +765,16 @@ function ThreadSettingsSessionProvider(
     onUpdateInteractionMode: props.onUpdateInteractionMode,
     modeId: effectiveModeId,
     availableModes,
-    onUpdateMode: props.onUpdateMode,
+    workflowModes,
+    selectedWorkflow,
+    selectWorkflow,
+    onUpdateMode:
+      props.onUpdateMode === undefined
+        ? undefined
+        : (id: HarnessModeId, mode: ProviderInteractionMode) => {
+            selectWorkflow(null);
+            props.onUpdateMode?.(id, mode);
+          },
     threadId: props.threadId ?? null,
     displayedDescriptors,
     promptTraits,
@@ -1154,6 +1187,7 @@ function ThreadSettingsOptionsItem(props: {
             <DisclosureRow
               label={gt("Mode")}
               value={
+                session.selectedWorkflow?.name ??
                 session.availableModes.find((choice) => choice.id === session.modeId)?.name ??
                 session.modeId
               }
@@ -1430,6 +1464,21 @@ function ThreadSettingsChoiceContent(props: {
         )
       : undefined;
 
+  const selectWorkspaceTab = useSelectWorkspaceTab();
+  const workflowRows =
+    props.submenu.kind !== "mode" || session.workflowModes === null
+      ? null
+      : session.workflowModes.map((workflow) => ({
+          id: workflow.name,
+          label: workflow.name,
+          description: workflow.description,
+          selected: session.selectedWorkflow?.name === workflow.name,
+          onPress: () => {
+            session.selectWorkflow(workflow);
+            props.onSelected();
+          },
+        }));
+
   const submenuContent =
     props.submenu.kind === "mode"
       ? {
@@ -1438,7 +1487,7 @@ function ThreadSettingsChoiceContent(props: {
             label: choice.readonly ? `${choice.name} (${gt("read-only")})` : choice.name,
             description: choice.description,
             disabled: false,
-            selected: choice.id === session.modeId,
+            selected: session.selectedWorkflow === null && choice.id === session.modeId,
             onPress: () => {
               void Haptics.selectionAsync();
               session.onUpdateMode?.(choice.id, choice.baseInteractionMode);
@@ -1528,6 +1577,36 @@ function ThreadSettingsChoiceContent(props: {
           />
         ))}
       </View>
+      {workflowRows === null ? null : (
+        <>
+          <Text className="px-2 pb-2 pt-5 text-sm font-t3-medium text-foreground-muted">
+            {gt("Workflow Modes")}
+          </Text>
+          <View className="overflow-hidden rounded-2xl bg-grouped-card">
+            {workflowRows.map((row, index) => (
+              <ChoiceRow
+                key={row.id}
+                label={row.label}
+                description={row.description}
+                selected={row.selected}
+                isLast={index === workflowRows.length - 1}
+                onPress={row.onPress}
+              />
+            ))}
+            {workflowRows.length > 0 ? null : (
+              <ChoiceRow
+                label={gt("Set up a workflow")}
+                isLast
+                selected={false}
+                onPress={() => {
+                  props.onSelected();
+                  selectWorkspaceTab("workflows");
+                }}
+              />
+            )}
+          </View>
+        </>
+      )}
     </ScrollView>
   );
 }
@@ -1804,6 +1883,7 @@ export function ExistingThreadSettingsRouteScreen({
         })
       }
       modeId={draftSettings.modeId ?? selectedThread.modeId}
+      workflowDraftKey={queuedRunEdit === null ? threadKey : null}
       onUpdateMode={(modeId, interactionMode) =>
         updateComposerDraftSettings(threadKey, { modeId, interactionMode })
       }
@@ -1841,6 +1921,7 @@ export function NewTaskThreadSettingsRouteScreen() {
       interactionMode={flow.interactionMode}
       onUpdateInteractionMode={flow.setInteractionMode}
       modeId={flow.modeId}
+      workflowDraftKey={flow.draftKey}
       onUpdateMode={(modeId, interactionMode) => flow.setMode(modeId, interactionMode)}
       onClose={() => navigation.goBack()}
     />

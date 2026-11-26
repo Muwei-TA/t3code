@@ -436,6 +436,10 @@ function OpenCommandPaletteDialog(props: {
 }) {
   const gt = useGT();
   const messages = useMessages();
+  const composerHandleRef = useComposerHandleContext();
+  const openWorkflowMode = useStableCallback(async () => {
+    requestAnimationFrame(() => composerHandleRef?.current?.openControl("workflow"));
+  });
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { openChildSearch, setOpen } = props;
@@ -1773,6 +1777,16 @@ function OpenCommandPaletteDialog(props: {
   });
 
   if (workflowsReachable) {
+    if (paletteRouteTarget !== null) {
+      actionItems.push({
+        kind: "action",
+        value: "action:quick-start-workflow",
+        title: gt("Quick start workflow"),
+        searchTerms: ["workflow", "mode", "start"],
+        icon: <WorkflowIcon className={ITEM_ICON_CLASS} />,
+        run: openWorkflowMode,
+      });
+    }
     actionItems.push({
       kind: "action",
       value: "action:workflows",

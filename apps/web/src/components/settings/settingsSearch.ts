@@ -563,11 +563,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("beta link another machine vps peer agents work there delegate")],
   },
   {
-    id: "workflows-beta",
+    id: "workflows",
     title: msg("Workflows"),
-    to: "/settings/labs",
+    to: "/settings/scheduled-tasks",
     scope: "environment",
-    searchTerms: [msg("beta workflow durable runs automation steps schedule webhook folder")],
+    searchTerms: [msg("workflow durable runs automation steps schedule webhook folder")],
   },
   {
     id: "prompt-suggestions-beta",

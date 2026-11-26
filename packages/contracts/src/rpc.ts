@@ -422,6 +422,8 @@ import {
 } from "./settings.ts";
 import {
   WorkflowAnswerInput,
+  WorkflowStartInput,
+  WorkflowStartResult,
   WorkflowRequestError,
   WorkflowDefinitionChangeResult,
   WorkflowDefinitionDeleteInput,
@@ -431,6 +433,7 @@ import {
   WorkflowRunCancelInput,
   WorkflowRunDetail,
   WorkflowRunGetInput,
+  WorkflowRunPauseInput,
   WorkflowRunResumeInput,
   WorkflowCounts,
   WorkflowRunsSnapshot,
@@ -708,7 +711,9 @@ export const WS_METHODS = {
   workflowsSubscribe: "workflows.subscribe",
   workflowsCounts: "workflows.counts",
   workflowsGet: "workflows.get",
+  workflowsStart: "workflows.start",
   workflowsAnswer: "workflows.answer",
+  workflowsPause: "workflows.pause",
   workflowsResume: "workflows.resume",
   workflowsCancel: "workflows.cancel",
   workflowsGetDefinition: "workflows.getDefinition",
@@ -2460,8 +2465,19 @@ const WsWorkflowsGetRpc = Rpc.make(WS_METHODS.workflowsGet, {
   error: Schema.Union([WorkflowRequestError, EnvironmentAuthorizationError]),
 });
 
+const WsWorkflowsStartRpc = Rpc.make(WS_METHODS.workflowsStart, {
+  payload: WorkflowStartInput,
+  success: WorkflowStartResult,
+  error: Schema.Union([WorkflowRequestError, EnvironmentAuthorizationError]),
+});
+
 const WsWorkflowsAnswerRpc = Rpc.make(WS_METHODS.workflowsAnswer, {
   payload: WorkflowAnswerInput,
+  error: Schema.Union([WorkflowRequestError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkflowsPauseRpc = Rpc.make(WS_METHODS.workflowsPause, {
+  payload: WorkflowRunPauseInput,
   error: Schema.Union([WorkflowRequestError, EnvironmentAuthorizationError]),
 });
 
@@ -3001,7 +3017,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsWorkflowsSubscribeRpc,
   WsWorkflowsCountsRpc,
   WsWorkflowsGetRpc,
+  WsWorkflowsStartRpc,
   WsWorkflowsAnswerRpc,
+  WsWorkflowsPauseRpc,
   WsWorkflowsResumeRpc,
   WsWorkflowsCancelRpc,
   WsWorkflowsGetDefinitionRpc,

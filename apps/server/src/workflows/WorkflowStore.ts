@@ -1,6 +1,7 @@
 import {
   type MilestoneEvent,
   MilestoneId,
+  type ThreadId,
   type WorkflowCounts,
   WorkflowRun,
   type WorkflowRunReference,
@@ -45,6 +46,9 @@ export interface RunRow {
   readonly input_json: string | null;
   readonly parent_run_id: string | null;
   readonly parent_wait: string | null;
+  readonly host_thread_id: string | null;
+  /** Empty while requested; an id once the run reaches that stage. */
+  readonly manual_pause_stage: string | null;
   readonly pauses: number | bigint;
   /** Paused until a person resumes it, whatever the workflow's `resumeAfter` says. */
   readonly held: number | bigint;
@@ -155,6 +159,7 @@ export class WorkflowStore extends Context.Service<
       readonly idempotencyKey: string;
       readonly input: Schema.Json;
       readonly parent?: RunParent | undefined;
+      readonly hostThreadId?: ThreadId | undefined;
     }) => Effect.Effect<void>;
     readonly runStatus: (
       runId: string,
@@ -172,6 +177,9 @@ export class WorkflowStore extends Context.Service<
      * A paused run is running again. With `current`, only while that is still the pause: the
      * sweep's deadline was worked out from it. False when the run was not changed.
      */
+    readonly requestStagePause: (runId: string) => Effect.Effect<void>;
+    readonly clearStagePauseRequest: (runId: string) => Effect.Effect<boolean>;
+    readonly pauseAtStage: (runId: string, stage: string) => Effect.Effect<boolean>;
     readonly runUnpaused: (
       runId: string,
       current?: { readonly pauses: number; readonly updatedAt: string },
@@ -341,6 +349,7 @@ export class WorkflowStore extends Context.Service<
     readonly run: (runId: string) => Effect.Effect<RunRow | undefined>;
     /** The run a workflow was started as under `key`, of whichever version. */
     readonly runByKey: (workflow: string, key: string) => Effect.Effect<RunRow | undefined>;
+    readonly runsInThread: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<RunRow>>;
     readonly runs: (status: WorkflowRunStatus | undefined) => Effect.Effect<ReadonlyArray<RunRow>>;
     /** Runs by what they are a run of and what they were started as, newest first. */
     readonly runsWhere: (filter: {
@@ -445,12 +454,12 @@ export const make = Effect.gen(function* () {
       const inserted = yield* sql`
           INSERT INTO workflow_runs (
             run_id, workflow, version, engine_tag, idempotency_key, title, status, input_json,
-            parent_run_id, parent_wait, started_at, updated_at
+            parent_run_id, parent_wait, host_thread_id, started_at, updated_at
           ) VALUES (
             ${run.runId}, ${run.workflow}, ${run.version}, ${run.engineTag},
-            ${run.idempotencyKey}, ${`${run.workflow} ${run.idempotencyKey}`}, 'running',
+            ${run.idempotencyKey}, ${run.hostThreadId === undefined ? `${run.workflow} ${run.idempotencyKey}` : run.workflow}, 'running',
             ${jsonText(run.input)}, ${run.parent?.runId ?? null}, ${run.parent?.wait ?? null},
-            ${at}, ${at}
+            ${run.hostThreadId ?? null}, ${at}, ${at}
           )
           ON CONFLICT DO NOTHING
           RETURNING run_id
@@ -506,10 +515,54 @@ export const make = Effect.gen(function* () {
         yield* tell(runId, `${runId}:${at}`, at, { type: "workflow.run_paused", reason });
       }
     }),
+    requestStagePause: Effect.fn("WorkflowStore.requestStagePause")(function* (runId) {
+      const at = yield* now;
+      yield* write(
+        runId,
+        sql`
+        UPDATE workflow_runs SET manual_pause_stage = '', updated_at = ${at}
+        WHERE run_id = ${runId} AND ended_at IS NULL AND status != 'paused'
+          AND manual_pause_stage IS NULL
+      `,
+      );
+    }),
+    clearStagePauseRequest: Effect.fn("WorkflowStore.clearStagePauseRequest")(function* (runId) {
+      const at = yield* now;
+      const rows = yield* sql`
+        UPDATE workflow_runs SET manual_pause_stage = NULL, updated_at = ${at}
+        WHERE run_id = ${runId} AND ended_at IS NULL AND manual_pause_stage = ''
+          AND status != 'paused'
+        RETURNING run_id
+      `.pipe(Effect.orDie);
+      if (rows.length === 0) return false;
+      yield* PubSub.publish(changes, runId);
+      return true;
+    }),
+    pauseAtStage: Effect.fn("WorkflowStore.pauseAtStage")(function* (runId, stage) {
+      const at = yield* now;
+      const reason = `Paused before ${stage}`;
+      const rows = yield* sql`
+        UPDATE workflow_runs
+        SET status = 'paused', detail = ${reason}, manual_pause_stage = ${stage}, held = 1, updated_at = ${at}
+        WHERE run_id = ${runId} AND ended_at IS NULL AND manual_pause_stage = ''
+          AND NOT EXISTS (SELECT 1 FROM workflow_steps WHERE run_id = ${runId} AND name = ${stage})
+        RETURNING run_id
+      `.pipe(Effect.orDie);
+      if (rows.length > 0) {
+        yield* PubSub.publish(changes, runId);
+        yield* tell(runId, `${runId}:${at}`, at, { type: "workflow.run_paused", reason });
+        return true;
+      }
+      const paused = yield* sql<{ readonly held: number }>`
+        SELECT held FROM workflow_runs
+        WHERE run_id = ${runId} AND status = 'paused' AND manual_pause_stage = ${stage}
+      `.pipe(Effect.orDie);
+      return paused.length > 0;
+    }),
     runUnpaused: Effect.fn("WorkflowStore.runUnpaused")(function* (runId, current) {
       const at = yield* now;
       const rows = yield* sql`
-        UPDATE workflow_runs SET status = 'running', detail = NULL, updated_at = ${at}
+        UPDATE workflow_runs SET status = 'running', detail = NULL, manual_pause_stage = NULL, updated_at = ${at}
         WHERE run_id = ${runId} AND ended_at IS NULL AND status = 'paused'
           AND (${current === undefined ? 1 : 0} = 1
             OR (pauses = ${current?.pauses ?? 0} AND updated_at = ${current?.updatedAt ?? ""}))
@@ -537,7 +590,7 @@ export const make = Effect.gen(function* () {
             const rows = yield* sql`
               UPDATE workflow_runs
               SET status = ${status}, detail = ${detail}, result_json = ${resultJson},
-                  pauses = 0, updated_at = ${at}, ended_at = ${at}
+                  pauses = 0, manual_pause_stage = NULL, updated_at = ${at}, ended_at = ${at}
               WHERE run_id = ${runId} AND ended_at IS NULL
               RETURNING run_id
             `;
@@ -1000,6 +1053,12 @@ export const make = Effect.gen(function* () {
             idempotency_key >= ${prefix} AND idempotency_key < ${`${prefix ?? ""}\u{10FFFF}`}
           ))
         ORDER BY started_at DESC, rowid DESC LIMIT 500
+      `.pipe(Effect.orDie);
+    }),
+    runsInThread: Effect.fn("WorkflowStore.runsInThread")(function* (threadId) {
+      return yield* sql<RunRow>`
+        SELECT * FROM workflow_runs WHERE host_thread_id = ${threadId}
+        ORDER BY ended_at IS NULL DESC, started_at DESC LIMIT 500
       `.pipe(Effect.orDie);
     }),
     runs: Effect.fn("WorkflowStore.runs")(function* (status) {

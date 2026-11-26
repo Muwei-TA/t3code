@@ -3297,11 +3297,8 @@
   "df1fb90eb9a77fbf": "Scheduled tasks",
   "2d6107cb78382d08": "ワークフロー",
   "e34d2e718878f69c": "Multi-step Workflows",
-  "5ed32bdfc0c12a01": "Inspect live runs, pause/resume steps, and edit declarative workflow definitions across connected environments.",
   "ce001ae655cc2154": "Open Workflows studio",
-  "7670acbe41b7819f": "Enable Workflows in Labs",
   "6d6aa856fd2c8c53": "Declarative YAML Workflow Validator",
-  "09b23b9bcdf1b802": "Validate workflows/*.yaml step DAGs (in-thread and child steps) and preview compiled T3 workflows.",
   "77038701cc21dee2": "Validating...",
   "5d30ba3ba997aeea": "Validate YAML",
   "49cc06e79f21f85a": "{seconds}秒",
@@ -12435,7 +12432,6 @@
   "d443390c4d2dcfd4": "アクセシビリティ a11y スクリーンリーダー NVDA JAWS VoiceOver Orca ナレーター ウィンドウタイトル タブタイトル Alt+Tab タスクバー スレッド ステータス 順序 作業中 承認 accessibility",
   "6826fa9579c22035": "ベータ 共有 ゲスト 招待 リンク チームメイト 閲覧 T3 Connect トンネル beta share guest",
   "f10c06cba0cdf7fe": "ベータ リンク 別のマシン VPS ピア エージェント そこで作業 委任 beta link machine",
-  "bc0b409d89ce086e": "ベータ ワークフロー 永続 実行 自動化 ステップ スケジュール webhook フォルダー beta workflow",
   "4a21cf825a2045b0": "ベータ Tab 補完 次のメッセージを予測 Claude Codex ゴーストテキスト autocomplete",
   "fea2dc36585c4a20": "Simlock デバイスホスト (アルファ版)",
   "9d834d178130180e": "ベータ アルファ simlock callstack シミュレーター エミュレーター iOS Android プール リース ゲートウェイ simulator",
@@ -13230,16 +13226,6 @@
   "036182ec7e2ee4d4": "実行の横",
   "16f7df687349b399": "定義",
   "f0a212aadfe1257b": "エディターを読み込んでいます…",
-  "20f194e003885e95": [
-    "このサーバーの",
-    " ",
-    {
-      "t": "Link",
-      "i": 1,
-      "c": "設定 → Labs"
-    },
-    " でオンにしてください。"
-  ],
   "8367779e149f723b": "プライマリ環境へのリクエストが {operation} 中に失敗しました (HTTP {status})。",
   "c5cd027743a2b5a6": "ペアリングトークンが無効です。トークンを確認して、もう一度お試しください。",
   "0e4b49c8203aae81": "ブートストラップ後、認証済みセッションの待機がタイムアウトしました。",
@@ -13383,5 +13369,33 @@
   "8f189cff2f574e73": "OAuth 設定",
   "a0667ced094dbc02": "OAuth クライアント ID",
   "27c3a89b09fba053": "OAuth スコープ（カンマ区切り）",
-  "3e8d634eff0e1578": "OAuth 認可サーバーの URL"
+  "3e8d634eff0e1578": "OAuth 認可サーバーの URL",
+  "48fae08dba62ecf1": "ワークフローをすぐに開始",
+  "d354b63d8e35a59f": "保存前に YAML を修正してください。",
+  "a060876f3634a64e": "{name} は既に存在します。定義を開いて編集してください。",
+  "24889a3f2d8e766a": "{name} を保存しました。",
+  "f4644da90466c1a3": "ワークフローを保存できませんでした。",
+  "87413530d4d0f903": "YAML を保存",
+  "1840cffc760c1e99": "接続中のサーバーで実行中のワークフローを開き、定義を編集できます。",
+  "0d33ad8339cc6627": "ワークフロー設定",
+  "feb292ff8c0ddd69": "スレッド内、子スレッド、質問のステップを YAML で記述できます。",
+  "99d24c2de2bb4c26": "ワークフローモード",
+  "abb04a05e7d483c0": "ワークフローを設定",
+  "dab68249367141dc": "過去のワークフローを表示",
+  "674bcf1bb284d4f7": "{completed}/{total} ステージ",
+  "65763fd9556fa033": "実行を続ける",
+  "60ed1918d57cae79": "このステージの後に一時停止",
+  "ccbe87ff82dd3e3f": "ワークフローモードはテキストの指示と 1 つのモデルで開始します。",
+  "ace14b0e7b0e4adf": "ワークフローを開始できませんでした。",
+  "79993e152e5414ac": "ワークフロー 永続化 自動化 ステップ スケジュール Webhook フォルダー",
+  "07be54e34112ac3b": [
+    "このサーバーの",
+    " ",
+    {
+      "t": "Link",
+      "i": 1,
+      "c": "設定 → スケジュール済みタスク"
+    },
+    " でオンにしてください。"
+  ]
 }

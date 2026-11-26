@@ -6016,5 +6016,15 @@
   "5ccdd85b584946ab": "URL des OAuth-Autorisierungsservers",
   "4f40598caa97ab7b": "Anmeldung erforderlich",
   "7a45e9a9f2f0b41d": "Genehmige den Zugriff im Browser. Falls sich die Rückrufseite nicht öffnet, füge ihre Adresse hier ein.",
-  "b3d555b9f91c09ab": "OAuth-Einstellungen (optional)"
+  "b3d555b9f91c09ab": "OAuth-Einstellungen (optional)",
+  "ace14b0e7b0e4adf": "Der Workflow konnte nicht gestartet werden.",
+  "ccbe87ff82dd3e3f": "Der Workflow-Modus startet mit einer Texteingabe und einem Modell.",
+  "99d24c2de2bb4c26": "Workflow-Modi",
+  "abb04a05e7d483c0": "Workflow einrichten",
+  "dab68249367141dc": "Frühere Workflow-Ausführungen anzeigen",
+  "cc9987c906218558": "Die Ausführung konnte nicht pausiert werden",
+  "674bcf1bb284d4f7": "{completed}/{total} Phasen",
+  "65763fd9556fa033": "Weiterlaufen lassen",
+  "60ed1918d57cae79": "Nach dieser Phase pausieren",
+  "614e5ad58a795fb5": "Stoppen"
 }

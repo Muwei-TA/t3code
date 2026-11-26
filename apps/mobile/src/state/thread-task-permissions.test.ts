@@ -91,6 +91,10 @@ vi.mock("react", () => ({
     vi.fn(),
   ],
 }));
+vi.mock("./server", () => ({
+  serverEnvironment: { startWorkflowRun: "start-workflow" },
+}));
+vi.mock("./chat-workflows", () => ({ readChatWorkflowMode: () => null }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => "uuid" }));
 vi.mock("gt-react-native", async (importOriginal) => {
   const gt = await importOriginal<typeof import("gt-react-native")>();

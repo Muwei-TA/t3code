@@ -2,7 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
-import { HarnessPluginId } from "@t3tools/contracts";
+import { HarnessPluginId, ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -17,6 +17,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as PluginHost from "../harness/PluginHost.ts";
 import WorkflowsMigration from "../persistence/Migrations/110_Workflows.ts";
+import WorkflowHostThreadMigration from "../persistence/Migrations/112_WorkflowHostThread.ts";
 import { WorkflowAgents } from "./WorkflowAgents.ts";
 import * as WorkflowEngine from "./WorkflowEngine.ts";
 import * as WorkflowRuntime from "./WorkflowRuntime.ts";
@@ -51,7 +52,7 @@ const setup = Effect.fn("setup")(function* (
   yield* fileSystem.makeDirectory(directory);
   yield* fileSystem.writeFileString(at("hold.ts"), hold);
   const database = NodeSqliteClient.layer({ filename: path.join(home, "state.sqlite") });
-  yield* Effect.provide(WorkflowsMigration, database);
+  yield* Effect.provide(Effect.andThen(WorkflowsMigration, WorkflowHostThreadMigration), database);
   const made = WorkflowRuntime.make(
     Effect.succeed(
       (definitions: ReadonlyArray<WorkflowDefinition>) =>
@@ -68,7 +69,7 @@ const setup = Effect.fn("setup")(function* (
   return { fileSystem, at, directory, made, runtime: Layer.effectContext(made) };
 });
 
-it.effect("executes declarative child and in-thread steps with their non-plan modes", () =>
+it.effect("runs chat-bound YAML stages and answers across an engine restart", () =>
   Effect.gen(function* () {
     const starts: Array<Parameters<WorkflowAgents["Service"]["start"]>[0]> = [];
     const agents = Layer.mock(WorkflowAgents)({
@@ -80,7 +81,16 @@ it.effect("executes declarative child and in-thread steps with their non-plan mo
       result: () => Effect.succeed({ ending: "completed", detail: "", reply: "Done" }),
     });
     const { runtime } = yield* setup(undefined, undefined, agents);
-    yield* Effect.gen(function* () {
+    const threadId = ThreadId.make("existing-thread");
+    const launch = {
+      workflow: "mode-flow",
+      version: 1,
+      prompt: "Review the proposed change",
+      threadId,
+      projectId: ProjectId.make("project-1"),
+      idempotencyKey: "mode-flow",
+    };
+    const started = yield* Effect.gen(function* () {
       const definitions = yield* WorkflowRuntime.WorkflowDefinitions;
       const workflows = yield* Workflows.Workflows;
       const saved = yield* definitions.save(
@@ -91,27 +101,83 @@ steps:
     kind: in-thread
     modeId: review
     prompt: Review this change
+  - id: priority
+    kind: ask
+    prompt: Choose the priority
+    choices: [Correctness, Simplicity]
+    dependsOn: [review]
   - id: audit
     kind: child
     modeId: custom-audit
     prompt: Audit the result
-    dependsOn: [review]
+    dependsOn: [review, priority]
 `,
       );
       assert.deepStrictEqual(saved.problems, []);
-      const run = yield* workflows.start(
-        "mode-flow",
+      const catalog = Option.getOrThrow(yield* Stream.runHead(workflows.watchChat()));
+      assert.deepStrictEqual(
+        catalog.workflows.find((workflow) => workflow.name === launch.workflow),
         {
-          thread: { threadId: "existing-thread" },
-          project: "project-1",
+          name: launch.workflow,
+          version: 1,
+          source: "yaml",
+          triggers: [],
+          chatModeCompatible: true,
         },
-        { idempotencyKey: "mode-flow" },
       );
+
+      const run = yield* workflows.startFromChat(launch);
+      const duplicate = yield* workflows.startFromChat({
+        ...launch,
+        prompt: "Different retry text",
+      });
+      assert.equal(duplicate.runId, run.runId);
+      yield* workflows.waitFor(run.runId, (current) => current.detail === "priority");
+      const snapshot = Option.getOrThrow(
+        yield* workflows.watchChat(threadId).pipe(
+          Stream.filter((current) => current.questions.length === 1),
+          Stream.runHead,
+        ),
+      );
+      assert.equal(snapshot.runs[0]?.hostThreadId, threadId);
+      assert.equal(snapshot.questions[0]?.name, "priority");
+      const other = Option.getOrThrow(
+        yield* Stream.runHead(workflows.watchChat(ThreadId.make("other-thread"))),
+      );
+      assert.deepStrictEqual(other.runs, []);
+      assert.deepStrictEqual(other.questions, []);
+      return run.runId;
+    }).pipe(Effect.provide(runtime), Effect.scoped);
+
+    yield* Effect.gen(function* () {
+      const workflows = yield* Workflows.Workflows;
+      const waiting = Option.getOrThrow(yield* Stream.runHead(workflows.watchChat(threadId)));
+      assert.equal(waiting.runs[0]?.runId, started);
+      assert.equal(waiting.questions[0]?.name, "priority");
+      yield* workflows.pause(started);
+      assert.isTrue((yield* workflows.get(started)).run.pauseRequested);
+      yield* workflows.resume(started);
+      assert.isFalse((yield* workflows.get(started)).run.pauseRequested);
+      yield* workflows.pause(started);
+      yield* workflows.answer(started, "priority", { choice: "Correctness" });
+      const paused = yield* workflows.waitFor(started, (current) => current.status === "paused");
+      assert.equal(paused.detail, "Paused before audit");
+      assert.equal(starts.length, 1);
+      yield* workflows.resume(started);
       const finished = yield* workflows.waitFor(
-        run.runId,
+        started,
         (current) => current.status === "completed",
       );
-      assert.equal(finished.status, "completed");
+      assert.equal(finished.hostThreadId, threadId);
+      const detail = yield* workflows.get(started);
+      assert.deepStrictEqual(
+        detail.stages?.map(({ id, kind }) => [id, kind]),
+        [
+          ["review", "in-thread"],
+          ["priority", "ask"],
+          ["audit", "child"],
+        ],
+      );
       assert.deepStrictEqual(
         starts.map(({ thread, project, launch }) => ({ thread, project, modeId: launch?.modeId })),
         [
@@ -119,7 +185,13 @@ steps:
           { thread: undefined, project: "project-1", modeId: "custom-audit" },
         ],
       );
-    }).pipe(Effect.provide(runtime), Effect.scoped);
+      assert.include(starts[0]?.prompt ?? "", launch.prompt);
+      assert.include(starts[1]?.prompt ?? "", "Correctness");
+    }).pipe(
+      Effect.provide(runtime),
+      Effect.scoped,
+      Effect.raceFirst(Effect.forever(TestClock.adjust("1 second"))),
+    );
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );
 
