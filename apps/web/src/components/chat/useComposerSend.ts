@@ -22,7 +22,7 @@ import {
 import { isUsageLimitsCommand } from "@t3tools/shared/usageLimits";
 import {
   AuthOrchestrationOperateScope,
-  CommandId,
+  workflowHostLaunchCommandId,
   type WorkflowSummary,
   DEFAULT_MODEL,
   type EnvironmentId,
@@ -294,6 +294,7 @@ interface ComposerSendInput {
     threadId: ThreadId;
     createdAt: string;
     branch?: string;
+    modelSelection?: ModelSelection;
     runtimeMode: RuntimeMode;
     interactionMode: ProviderInteractionMode;
     modeId?: HarnessModeId | undefined;
@@ -417,7 +418,7 @@ export function useComposerSend(input: ComposerSendInput) {
     resetLocalDispatch,
     setThreadError,
   });
-  const { sendInFlight: sendInFlightRef } = draftSendState(routeThreadKey);
+  const { sendInFlight: sendInFlightRef, pendingWorkflowHost } = draftSendState(routeThreadKey);
   const composerSendGenerationRef = useRef(0);
   const environmentUnavailableSendToastSlotRef = useRef(0);
   // A send awaits uploads before it declines, so it reads the approvals pending by then.
@@ -1044,7 +1045,11 @@ export function useComposerSend(input: ComposerSendInput) {
       dispatchMode,
       freshContext: freshArm !== undefined,
     });
-    if (missingWorktreeBaseBranch) {
+    const pendingHost =
+      pendingWorkflowHost.current?.threadId === threadIdForSend
+        ? pendingWorkflowHost.current
+        : null;
+    if (missingWorktreeBaseBranch && (input.selectedWorkflow === null || pendingHost === null)) {
       setThreadError(
         threadIdForSend,
         m(msg("Select a base branch before sending in New worktree mode.")),
@@ -1053,6 +1058,9 @@ export function useComposerSend(input: ComposerSendInput) {
     }
     if (input.selectedWorkflow !== null) {
       const workflow = input.selectedWorkflow;
+      const worktreeBase =
+        baseBranchForWorktree ??
+        (draftId !== null && draftThread?.envMode === "worktree" ? draftThread.branch : null);
       if (
         !composerHoldsOnlyText ||
         !trimmed ||
@@ -1080,13 +1088,13 @@ export function useComposerSend(input: ComposerSendInput) {
       const target = scopeThreadRef(environmentId, threadIdForSend);
       sendInFlightRef.current = true;
       const attempt = await settlePromise(async () => {
-        if (isLocalDraftThread || baseBranchForWorktree) {
-          const launch = await launchWorkflowHost({
-            environmentId,
-            input: {
-              commandId: CommandId.make(`workflow-host:${threadIdForSend}`),
+        if (pendingHost !== null || isLocalDraftThread || worktreeBase) {
+          const host =
+            pendingHost ??
+            ({
+              commandId: workflowHostLaunchCommandId(threadIdForSend),
               threadId: threadIdForSend,
-              ...(isLocalDraftThread ? {} : { reuseExistingThread: true }),
+              ...(draftId !== null || isLocalDraftThread ? {} : { reuseExistingThread: true }),
               projectId: activeProject.id,
               title: deriveThreadTitleSeed({ text: trimmed, attachments: [] }, m),
               modelSelection: ctxSelectedModelSelection,
@@ -1094,11 +1102,17 @@ export function useComposerSend(input: ComposerSendInput) {
               interactionMode,
               ...(modeId === undefined ? {} : { modeId }),
               awaitWorkspacePreparation: true,
-              workspaceStrategy: baseBranchForWorktree
+              workspaceStrategy: worktreeBase
                 ? {
                     type: "worktree",
-                    baseRef: baseBranchForWorktree,
-                    ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                    baseRef: worktreeBase,
+                    ...((
+                      draftId !== null
+                        ? (draftThread?.startFromOrigin ?? startFromOrigin)
+                        : startFromOrigin
+                    )
+                      ? { startFromOrigin: true }
+                      : {}),
                     ...(worktreeRepositories ? { repositories: worktreeRepositories } : {}),
                   }
                 : activeThread.worktreePath === null
@@ -1107,10 +1121,24 @@ export function useComposerSend(input: ComposerSendInput) {
                       ...(activeThreadBranch === null ? {} : { branch: activeThreadBranch }),
                     }
                   : { type: "existing_worktree", worktreePath: activeThread.worktreePath },
-            },
-          });
+            } satisfies import("@t3tools/contracts").OrchestrationV2ThreadLaunchInput);
+          pendingWorkflowHost.current = host;
+          const launch = await launchWorkflowHost({ environmentId, input: host });
           if (launch._tag === "Failure") throw squashAtomCommandFailure(launch);
+          pendingWorkflowHost.current = null;
         }
+        const settings = await persistThreadSettingsForNextTurn({
+          threadId: threadIdForSend,
+          createdAt: new Date().toISOString(),
+          ...(localCheckoutBranchMismatch && pendingHost === null && !worktreeBase
+            ? { branch: localCheckoutBranchMismatch.currentBranch }
+            : {}),
+          modelSelection: ctxSelectedModelSelection,
+          runtimeMode,
+          interactionMode,
+          ...(modeId === undefined ? {} : { modeId }),
+        });
+        if (settings._tag === "Failure") throw squashAtomCommandFailure(settings);
         const started = await startWorkflow({
           environmentId,
           input: {
@@ -1146,7 +1174,7 @@ export function useComposerSend(input: ComposerSendInput) {
           composerRef.current?.resetCursorState();
         }
       }
-      if (isLocalDraftThread) {
+      if (draftId !== null || isLocalDraftThread) {
         markPromotedDraftThreadByRef(target);
         if (isCurrentRouteThread()) {
           void navigate({

@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import type {
   EnvironmentId,
+  ServerConfig,
   ThreadId,
   WorkflowRunsSnapshot,
   WorkflowSummary,
@@ -17,11 +18,14 @@ type ChatWorkflowSelections = ReadonlyMap<
 const selections = Atom.make<ChatWorkflowSelections>(new Map()).pipe(Atom.keepAlive);
 const emptySnapshot = Atom.make(AsyncResult.initial<WorkflowRunsSnapshot>());
 
+function chatWorkflowAvailable(config: ServerConfig | undefined) {
+  return config?.environment.capabilities.workflowChat === true && config.settings.workflowsEnabled;
+}
+
 export function useChatWorkflows(environmentId: EnvironmentId | null, threadId?: ThreadId) {
   const configs = useAtomValue(environmentServerConfigsAtom);
   const config = environmentId === null ? undefined : configs.get(environmentId);
-  const enabled =
-    config?.environment.capabilities.workflowChat === true && config.settings.workflowsEnabled;
+  const enabled = chatWorkflowAvailable(config);
   const result = useAtomValue(
     environmentId !== null && enabled
       ? serverEnvironment.workflowsLive({
@@ -43,11 +47,17 @@ function selectionOf(
 }
 
 export function useChatWorkflowMode(draftKey: string | null, environmentId: EnvironmentId | null) {
-  return selectionOf(useAtomValue(selections), draftKey, environmentId);
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const selected = selectionOf(useAtomValue(selections), draftKey, environmentId);
+  return environmentId !== null && chatWorkflowAvailable(configs.get(environmentId))
+    ? selected
+    : null;
 }
 
 export function readChatWorkflowMode(draftKey: string, environmentId: EnvironmentId) {
-  return selectionOf(appAtomRegistry.get(selections), draftKey, environmentId);
+  return chatWorkflowAvailable(appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId))
+    ? selectionOf(appAtomRegistry.get(selections), draftKey, environmentId)
+    : null;
 }
 
 export function setChatWorkflowMode(

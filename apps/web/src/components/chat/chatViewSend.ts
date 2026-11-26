@@ -2,6 +2,7 @@ import {
   CommandId,
   type EnvironmentId,
   type ModelSelection,
+  type OrchestrationV2ThreadLaunchInput,
   type ScopedThreadRef,
   type ThreadId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -59,13 +60,18 @@ const draftSendStateByRouteKey = new Map<
   string,
   {
     readonly sendInFlight: { current: boolean };
+    readonly pendingWorkflowHost: { current: OrchestrationV2ThreadLaunchInput | null };
     readonly uncertainSubmissions: { current: Map<string, ThreadId> };
   }
 >();
 export function draftSendState(routeKey: string) {
   let state = draftSendStateByRouteKey.get(routeKey);
   if (!state) {
-    state = { sendInFlight: { current: false }, uncertainSubmissions: { current: new Map() } };
+    state = {
+      sendInFlight: { current: false },
+      pendingWorkflowHost: { current: null },
+      uncertainSubmissions: { current: new Map() },
+    };
     draftSendStateByRouteKey.set(routeKey, state);
   }
   return state;

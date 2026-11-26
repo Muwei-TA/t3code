@@ -2210,6 +2210,7 @@ export default function ChatView(props: ChatViewProps) {
     threadId: ThreadId;
     createdAt: string;
     branch?: string;
+    modelSelection?: ModelSelection;
     runtimeMode: RuntimeMode;
     interactionMode: ProviderInteractionMode;
     modeId?: HarnessModeId | undefined;
@@ -2221,6 +2222,7 @@ export default function ChatView(props: ChatViewProps) {
     let result: AtomCommandResult<void, unknown> = AsyncResult.success(undefined);
     const metadataUpdate = resolveThreadMetadataUpdateForNextTurn({
       currentModelSelection: serverThread.modelSelection,
+      ...(input.modelSelection === undefined ? {} : { nextModelSelection: input.modelSelection }),
       currentBranch: serverThread.branch,
       ...(input.branch ? { nextBranch: input.branch } : {}),
     });
@@ -2402,7 +2404,7 @@ export default function ChatView(props: ChatViewProps) {
   const activeThreadBranch =
     canOverrideServerThreadEnvMode && pendingServerThreadBranchEntryForThread !== null
       ? pendingServerThreadBranchEntryForThread.branch
-      : (activeThread?.branch ?? null);
+      : (activeThread?.branch ?? (draftThread?.envMode === "worktree" ? draftThread.branch : null));
   const startFromOrigin = isLocalDraftThread
     ? (draftThread?.startFromOrigin ?? false)
     : canOverrideServerThreadEnvMode
@@ -3166,7 +3168,9 @@ export default function ChatView(props: ChatViewProps) {
     workflow: WorkflowSummary;
   } | null>(null);
   const selectedWorkflow =
-    workflowSelection?.threadKey === activeThreadKey ? workflowSelection.workflow : null;
+    workflowChatAvailable && workflowSelection?.threadKey === activeThreadKey
+      ? workflowSelection.workflow
+      : null;
   const selectWorkflow = (workflow: WorkflowSummary | null) => {
     setWorkflowSelection(workflow === null ? null : { threadKey: activeThreadKey, workflow });
   };

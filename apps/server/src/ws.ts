@@ -2496,7 +2496,14 @@ export const layerWsRpc = (
           workflows.startFromChat(input).pipe(Effect.mapError(toWorkflowRequestError)),
         [WS_METHODS.workflowsCounts]: (_input) => workflows.counts,
         [WS_METHODS.workflowsGet]: (input) =>
-          workflows.get(input.runId).pipe(Effect.mapError(toWorkflowRequestError)),
+          workflows.get(input.runId).pipe(
+            Effect.filterOrFail(
+              ({ run }) =>
+                input.hostThreadId === undefined || input.hostThreadId === run.hostThreadId,
+              () => new Workflows.WorkflowRunNotFoundError({ runId: input.runId }),
+            ),
+            Effect.mapError(toWorkflowRequestError),
+          ),
         [WS_METHODS.workflowsAnswer]: (input) =>
           workflows
             .answer(input.runId, input.name, {

@@ -758,6 +758,19 @@ export const workflow = <P, PI, A = void, AI = void, EndError = never>(
     "triggers",
     "onEnd",
   ]);
+  if (options.chat !== undefined) {
+    if (
+      typeof options.chat !== "object" ||
+      options.chat === null ||
+      Array.isArray(options.chat) ||
+      (options.chat.description !== undefined && typeof options.chat.description !== "string")
+    ) {
+      throw new Error(
+        `workflow("${name}") chat must be an object with an optional description string.`,
+      );
+    }
+    checkOptions(`workflow("${name}") chat`, options.chat, ["description"]);
+  }
   // Read once now, so a duration that does not parse fails the file and not a paused run later.
   for (const rest of options.resumeAfter ?? [])
     durationOf(`workflow("${name}")'s resumeAfter`, rest);

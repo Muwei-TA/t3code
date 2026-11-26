@@ -505,7 +505,7 @@ export const make = Effect.gen(function* () {
       const reason = detail.slice(0, 2000);
       const paused = yield* sql`
         UPDATE workflow_runs
-        SET status = 'paused', detail = ${reason}, pauses = pauses + 1,
+        SET status = 'paused', detail = ${reason}, pauses = pauses + 1, manual_pause_stage = NULL,
           held = ${held === undefined ? sql`held` : held ? 1 : 0}, updated_at = ${at}
         WHERE run_id = ${runId} AND ended_at IS NULL AND status != 'paused'
         RETURNING run_id
@@ -562,7 +562,8 @@ export const make = Effect.gen(function* () {
     runUnpaused: Effect.fn("WorkflowStore.runUnpaused")(function* (runId, current) {
       const at = yield* now;
       const rows = yield* sql`
-        UPDATE workflow_runs SET status = 'running', detail = NULL, manual_pause_stage = NULL, updated_at = ${at}
+        UPDATE workflow_runs SET status = 'running', detail = NULL,
+            manual_pause_stage = NULLIF(manual_pause_stage, ''), updated_at = ${at}
         WHERE run_id = ${runId} AND ended_at IS NULL AND status = 'paused'
           AND (${current === undefined ? 1 : 0} = 1
             OR (pauses = ${current?.pauses ?? 0} AND updated_at = ${current?.updatedAt ?? ""}))
@@ -577,7 +578,11 @@ export const make = Effect.gen(function* () {
       // A pause since then set its own `held`.
       yield* write(
         runId,
-        sql`UPDATE workflow_runs SET held = 0 WHERE run_id = ${runId} AND status != 'paused'`,
+        sql`
+          UPDATE workflow_runs SET held = 0,
+            manual_pause_stage = CASE WHEN manual_pause_stage = '' THEN '' ELSE NULL END
+          WHERE run_id = ${runId} AND status != 'paused'
+        `,
       );
     }),
     runEnded: Effect.fn("WorkflowStore.runEnded")(function* (runId, status, detail, result) {

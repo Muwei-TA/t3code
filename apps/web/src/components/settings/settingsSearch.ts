@@ -566,7 +566,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "workflows",
     title: msg("Workflows"),
     to: "/settings/scheduled-tasks",
-    scope: "environment",
+    scope: "environment-defaults",
     searchTerms: [msg("workflow durable runs automation steps schedule webhook folder")],
   },
   {
@@ -1579,6 +1579,12 @@ const MOVED_SECTION_ANCHORS: Readonly<Record<string, SettingsPath>> = {
 
 /** Where an old settings link now lives. Its anchor finds the page its row moved to. */
 export function movedSettingsPath(pathname: string, hash: string): SettingsPath | null {
+  if (
+    (pathname === "/settings/labs" || pathname === "/settings/beta") &&
+    hash === "workflows-beta"
+  ) {
+    return "/settings/scheduled-tasks";
+  }
   if (!SPLIT_SETTINGS_PATHS.has(pathname)) return null;
   const items: readonly SettingsSearchItem[] = SETTINGS_SEARCH_ITEMS;
   const anchored = hash

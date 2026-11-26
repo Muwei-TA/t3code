@@ -173,7 +173,9 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
     ...(row.host_thread_id === null || !definitionByTag.get(row.engine_tag)?.stages?.length
       ? {}
       : { supportsStagePause: true, pauseRequested: row.manual_pause_stage === "" }),
-    ...(row.manual_pause_stage ? { pausedBeforeStage: row.manual_pause_stage } : {}),
+    ...(row.status === "paused" && row.manual_pause_stage
+      ? { pausedBeforeStage: row.manual_pause_stage }
+      : {}),
     startedAt: row.started_at,
     updatedAt: row.updated_at,
     endedAt: row.ended_at,
@@ -664,7 +666,11 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
     if (engine === undefined) return;
     const result = yield* withEngine(engine.poll(row.run_id));
     if (Option.isNone(result) || result.value._tag !== "Suspended") return;
-    if (result.value.failed !== true) return;
+    if (result.value.failed !== true) {
+      // The run was released in SQLite before a restart interrupted the engine's resume.
+      if (row.manual_pause_stage) yield* Effect.ignore(resumeRun(row.run_id));
+      return;
+    }
     const cause = result.value.cause;
     // Held as it was: a run that waited for a person still does.
     yield* store.runPaused(

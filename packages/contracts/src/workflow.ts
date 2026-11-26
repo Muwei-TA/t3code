@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { CommandId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HarnessModeId, HarnessWorkflowStepKind } from "./harness.ts";
 import { IssueRef } from "./issue.ts";
 import { PullRequestRef } from "./pullRequest.ts";
@@ -177,6 +177,10 @@ export type WorkflowRunsSnapshot = typeof WorkflowRunsSnapshot.Type;
 export const WorkflowRunsSubscribeInput = Schema.Struct({
   chat: Schema.optionalKey(Schema.Struct({ threadId: Schema.optionalKey(ThreadId) })),
 });
+
+export function workflowHostLaunchCommandId(threadId: ThreadId): CommandId {
+  return CommandId.make(`workflow-host:${threadId}`);
+}
 
 export const WorkflowStartInput = Schema.Struct({
   workflow: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),

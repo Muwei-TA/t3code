@@ -230,7 +230,7 @@ export function WorkflowRunFeed({
       environmentId,
       input: {
         runId: run.runId,
-        ...(run.hostThreadId === undefined ? {} : { hostThreadId: run.hostThreadId }),
+        ...(!embedded || run.hostThreadId === undefined ? {} : { hostThreadId: run.hostThreadId }),
       },
     }),
   );

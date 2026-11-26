@@ -230,7 +230,7 @@ export function AutomationsPage() {
                   </Button>
                   {environmentId !== null && !enabled ? (
                     <Button
-                      render={<Link to="/settings/scheduled-tasks" />}
+                      render={<Link to="/settings/scheduled-tasks" hash="workflows" />}
                       size="sm"
                       variant="outline"
                     >

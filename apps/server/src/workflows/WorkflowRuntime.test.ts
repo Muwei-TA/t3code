@@ -21,6 +21,7 @@ import WorkflowHostThreadMigration from "../persistence/Migrations/112_WorkflowH
 import { WorkflowAgents } from "./WorkflowAgents.ts";
 import * as WorkflowEngine from "./WorkflowEngine.ts";
 import * as WorkflowRuntime from "./WorkflowRuntime.ts";
+import * as WorkflowStore from "./WorkflowStore.ts";
 import { engineTag, type WorkflowDefinition } from "./workflow.ts";
 import * as Workflows from "./Workflows.ts";
 
@@ -66,10 +67,10 @@ const setup = Effect.fn("setup")(function* (
     directory,
     Effect.succeed(true),
   ).pipe(Effect.provideService(FileSystem.FileSystem, wrap(fileSystem)));
-  return { fileSystem, at, directory, made, runtime: Layer.effectContext(made) };
+  return { fileSystem, at, directory, database, made, runtime: Layer.effectContext(made) };
 });
 
-it.effect("runs chat-bound YAML stages and answers across an engine restart", () =>
+it.effect("recovers chat questions and interrupted stage resumes on restart", () =>
   Effect.gen(function* () {
     const starts: Array<Parameters<WorkflowAgents["Service"]["start"]>[0]> = [];
     const agents = Layer.mock(WorkflowAgents)({
@@ -80,7 +81,7 @@ it.effect("runs chat-bound YAML stages and answers across an engine restart", ()
         }),
       result: () => Effect.succeed({ ending: "completed", detail: "", reply: "Done" }),
     });
-    const { runtime } = yield* setup(undefined, undefined, agents);
+    const { database, runtime } = yield* setup(undefined, undefined, agents);
     const threadId = ThreadId.make("existing-thread");
     const launch = {
       workflow: "mode-flow",
@@ -163,7 +164,16 @@ steps:
       const paused = yield* workflows.waitFor(started, (current) => current.status === "paused");
       assert.equal(paused.detail, "Paused before audit");
       assert.equal(starts.length, 1);
-      yield* workflows.resume(started);
+    }).pipe(Effect.provide(runtime), Effect.scoped);
+
+    // Simulate a shutdown after the resume updated the run but before it reached the engine.
+    yield* Effect.gen(function* () {
+      const store = yield* WorkflowStore.make;
+      assert.isTrue(yield* store.runUnpaused(started));
+    }).pipe(Effect.provide(database), Effect.scoped);
+
+    yield* Effect.gen(function* () {
+      const workflows = yield* Workflows.Workflows;
       const finished = yield* workflows.waitFor(
         started,
         (current) => current.status === "completed",
@@ -179,7 +189,11 @@ steps:
         ],
       );
       assert.deepStrictEqual(
-        starts.map(({ thread, project, launch }) => ({ thread, project, modeId: launch?.modeId })),
+        starts.map(({ thread, project, launch }) => ({
+          thread,
+          project,
+          modeId: launch?.modeId,
+        })),
         [
           { thread: "existing-thread", project: undefined, modeId: "review" },
           { thread: undefined, project: "project-1", modeId: "custom-audit" },

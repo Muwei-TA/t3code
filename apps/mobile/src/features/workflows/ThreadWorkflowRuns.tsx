@@ -244,7 +244,12 @@ function RunCard({
                   openThread(beat.thread);
                 else
                   navigation.dispatch(
-                    StackActions.push("WorkflowStep", { environmentId, runId: run.runId, step }),
+                    StackActions.push("WorkflowStep", {
+                      environmentId,
+                      runId: run.runId,
+                      step,
+                      hostThreadId: run.hostThreadId,
+                    }),
                   );
               }}
             />

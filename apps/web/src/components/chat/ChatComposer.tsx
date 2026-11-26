@@ -2702,7 +2702,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       submitComposer,
       promptSuggestion: offeredPromptSuggestion,
       dismissPromptSuggestion,
-      ...(availableModes.length > 1 ? { onCycleMode: handleCycleMode } : {}),
+      ...(availableModes.length + (workflowModes?.length ?? 0) > 1 || selectedWorkflow !== null
+        ? { onCycleMode: handleCycleMode }
+        : {}),
     })(key, event, isTaskItem);
   };
 

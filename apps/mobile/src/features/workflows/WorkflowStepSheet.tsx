@@ -21,6 +21,7 @@ export type WorkflowStepParams = {
   readonly environmentId: string;
   readonly runId: string;
   readonly step: string;
+  readonly hostThreadId?: string;
 };
 
 /** One step of a run, opened from its node in the flow: what it said, its facts, its thread. */
@@ -29,9 +30,22 @@ export function WorkflowStepSheet({ route }: StaticScreenProps<WorkflowStepParam
   const insets = useSafeAreaInsets();
   const gt = useGT();
   const environmentId = EnvironmentId.make(route.params.environmentId);
-  const live = useEnvironmentQuery(serverEnvironment.workflowsLive({ environmentId, input: {} }));
+  const hostThreadId =
+    route.params.hostThreadId === undefined ? undefined : ThreadId.make(route.params.hostThreadId);
+  const live = useEnvironmentQuery(
+    serverEnvironment.workflowsLive({
+      environmentId,
+      input: hostThreadId === undefined ? {} : { chat: { threadId: hostThreadId } },
+    }),
+  );
   const detail = useEnvironmentQuery(
-    serverEnvironment.workflowRun({ environmentId, input: { runId: route.params.runId } }),
+    serverEnvironment.workflowRun({
+      environmentId,
+      input: {
+        runId: route.params.runId,
+        ...(hostThreadId === undefined ? {} : { hostThreadId }),
+      },
+    }),
   );
   const node =
     live.data === null

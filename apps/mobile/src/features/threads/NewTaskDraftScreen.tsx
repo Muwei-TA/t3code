@@ -13,7 +13,7 @@ import { scopedProjectKey } from "../../lib/scopedEntities";
 import { connectionTone } from "../connection/connectionTone";
 import { runtimeConnectionErrorText } from "../connection/environmentStatusText";
 import { AppBar } from "../../components/ui/AppBar";
-import { CommandId, ThreadId } from "@t3tools/contracts";
+import { workflowHostLaunchCommandId, ThreadId } from "@t3tools/contracts";
 
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
@@ -734,7 +734,7 @@ export function NewTaskDraftScreen(props: {
         const launch = await launchWorkflowHost({
           environmentId: message.environmentId,
           input: {
-            commandId: CommandId.make(`workflow-host:${message.threadId}`),
+            commandId: workflowHostLaunchCommandId(message.threadId),
             threadId: message.threadId,
             projectId: creation.projectId,
             title: deriveThreadTitleSeed({ text: initialMessageText, attachments: [] }, m),

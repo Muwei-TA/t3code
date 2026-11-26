@@ -1,4 +1,5 @@
 import { useComposerAttachmentActions } from "./use-composer-attachment-actions";
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import * as Effect from "effect/Effect";
 import * as Dialog from "../components/ui/Dialog";
@@ -260,6 +261,12 @@ export function useThreadComposerState(input: {
   const startingSideChatRef = useRef(false);
   const startingWorkflowRef = useRef(false);
   const workflowAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
+  const saveWorkflowHostMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
+    reportFailure: false,
+  });
+  const saveWorkflowHostModel = useAtomCommand(threadEnvironment.setModelSelection, {
+    reportFailure: false,
+  });
   const startWorkflow = useAtomCommand(serverEnvironment.startWorkflowRun, {
     reportFailure: false,
   });
@@ -736,16 +743,35 @@ export function useThreadComposerState(input: {
           : makeTurnCommandMetadata().messageId;
       workflowAttempt.current = { fingerprint, key };
       startingWorkflowRef.current = true;
-      const started = await startWorkflow({
-        environmentId: thread.environmentId,
-        input: {
-          workflow: workflow.name,
-          version: workflow.version,
-          threadId: thread.id,
-          projectId: thread.projectId,
-          prompt: text,
-          idempotencyKey: key,
-        },
+      const started = await settlePromise(async () => {
+        const runtimeMode = draft.runtimeMode ?? thread.runtimeMode;
+        const target = { environmentId: thread.environmentId, input: { threadId: thread.id } };
+        if (runtimeMode !== thread.runtimeMode) {
+          const result = await saveWorkflowHostMode({
+            ...target,
+            input: { ...target.input, runtimeMode, createdAt: new Date().toISOString() },
+          });
+          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+        }
+        if (!modelSelectionsEqual(modelSelection, thread.modelSelection)) {
+          const result = await saveWorkflowHostModel({
+            ...target,
+            input: { ...target.input, modelSelection },
+          });
+          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+        }
+        const result = await startWorkflow({
+          ...target,
+          input: {
+            ...target.input,
+            workflow: workflow.name,
+            version: workflow.version,
+            projectId: thread.projectId,
+            prompt: text,
+            idempotencyKey: key,
+          },
+        });
+        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
       }).finally(() => {
         startingWorkflowRef.current = false;
       });

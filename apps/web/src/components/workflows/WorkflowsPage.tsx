@@ -276,7 +276,11 @@ export function WorkflowsPage() {
               description={
                 <T>
                   Turn them on for this server in{" "}
-                  <Link to="/settings/scheduled-tasks" className="underline underline-offset-2">
+                  <Link
+                    to="/settings/scheduled-tasks"
+                    hash="workflows"
+                    className="underline underline-offset-2"
+                  >
                     Settings → Scheduled tasks
                   </Link>
                   .

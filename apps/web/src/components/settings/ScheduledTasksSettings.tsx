@@ -1,3 +1,4 @@
+import { WorkflowsSettingsRow } from "./WorkflowsSettingsRow";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { managedCapabilityDenial } from "@t3tools/client-runtime/contract-labels";
 import { useAtomValue } from "@effect/atom-react";
@@ -408,6 +409,7 @@ function statusVariant(status: ScheduledTask["lastRunStatus"]) {
 }
 
 export function ScheduledTasksSettings(target: {
+  readonly showWorkflowsSetting?: boolean;
   readonly environmentId?: EnvironmentId;
   readonly taskId?: ScheduledTaskId | undefined;
 }) {
@@ -475,6 +477,11 @@ export function ScheduledTasksSettings(target: {
     ) ?? permittedEnvironments[0];
   return (
     <SettingsPageContainer>
+      {target.showWorkflowsSetting ? (
+        <SettingsSection title={gt("Workflows")} hideTitle>
+          <WorkflowsSettingsRow />
+        </SettingsSection>
+      ) : null}
       <SettingsSection
         {...setting("scheduled-tasks")}
         variant="plain"

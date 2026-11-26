@@ -36,6 +36,8 @@ import * as ServerSettings from "../serverSettings.ts";
 import { compileDeclarativeWorkflowToDefinition } from "../harness/DeclarativeWorkflowCompiler.ts";
 import { engineTag, text, type WorkflowDefinition } from "./workflow.ts";
 import type * as WorkflowEngine from "./WorkflowEngine.ts";
+import { CommandId, workflowHostLaunchCommandId } from "@t3tools/contracts";
+import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as WorkflowAgentThreads from "./WorkflowAgentThreads.ts";
 import * as WorkflowForge from "./WorkflowForge.ts";
@@ -1036,6 +1038,7 @@ export const layer = Layer.effectContext(
     const sql = yield* SqlClient.SqlClient;
     const settings = yield* ServerSettings.ServerSettingsService;
     const threads = yield* ThreadManagement.ThreadManagementService;
+    const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
     const where = Option.getOrElse(override, () => config.workflowsDir);
     const changes = yield* settings.subscribeChanges;
     const gated = yield* gate(
@@ -1089,6 +1092,34 @@ export const layer = Layer.effectContext(
               return yield* new Workflows.WorkflowInputError({
                 problem: "Select an active chat thread in this project to run a workflow.",
               });
+            }
+            const launch = workflowHostLaunchCommandId(input.threadId);
+            const readReceipt = (commandId: CommandId) =>
+              receipts.getByCommandId(commandId).pipe(
+                Effect.mapError(
+                  () =>
+                    new Workflows.WorkflowInputError({
+                      problem: "Could not verify the workflow's workspace preparation.",
+                    }),
+                ),
+              );
+            const claimed = yield* readReceipt(launch);
+            if (
+              Option.isSome(claimed) &&
+              claimed.value.threadId === input.threadId &&
+              claimed.value.status === "accepted"
+            ) {
+              const prepared = yield* readReceipt(CommandId.make(`${launch}:workspace-ready`));
+              if (
+                Option.isNone(prepared) ||
+                prepared.value.status !== "accepted" ||
+                prepared.value.threadId !== input.threadId
+              ) {
+                return yield* new Workflows.WorkflowInputError({
+                  problem:
+                    "The chat workspace has not finished preparing. Retry the workspace setup before starting a workflow.",
+                });
+              }
             }
             return yield* live.startFromChat(input, thread);
           }),

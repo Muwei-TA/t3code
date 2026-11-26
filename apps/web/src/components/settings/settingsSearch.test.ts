@@ -406,6 +406,7 @@ describe("movedSettingsPath", () => {
     expect(movedSettingsPath("/settings/storage", "")).toBe("/settings/maintenance");
     expect(movedSettingsPath("/settings/integrations", "devices")).toBe("/settings/devices");
     expect(movedSettingsPath("/settings/beta", "")).toBe("/settings/labs");
+    expect(movedSettingsPath("/settings/labs", "workflows-beta")).toBe("/settings/scheduled-tasks");
   });
 
   it("leaves current pages alone", () => {
