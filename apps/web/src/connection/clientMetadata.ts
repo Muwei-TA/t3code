@@ -1,6 +1,7 @@
 import type {
   AuthClientMetadataDeviceType,
   AuthClientPresentationMetadata,
+  ClientBrowser,
   ClientOs,
   DesktopBridge,
 } from "@t3tools/contracts";
@@ -44,7 +45,7 @@ export function browserClientOs(identity: BrowserIdentity): ClientOs {
   return "other";
 }
 
-function browserFamily(userAgent: string): string {
+function browserFamily(userAgent: string): ClientBrowser {
   if (userAgent.trim() === "") return "unknown";
   if (/edg(?:e|a|ios)?\//i.test(userAgent)) return "Edge";
   if (/opr\/|opios\//i.test(userAgent)) return "Opera";

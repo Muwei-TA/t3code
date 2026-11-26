@@ -101,10 +101,11 @@ function formatKeyValueLines(record: Readonly<Record<string, string>> | undefine
 }
 
 function parseCommaList(raw: string): ReadonlyArray<string> {
-  return raw
+  const names = raw
     .split(/[,\n]+/u)
     .map((item) => item.trim())
-    .filter((item) => item.length > 0);
+    .filter(Boolean);
+  return [...new Set(names)];
 }
 
 function undiscoveredToolNames(
@@ -118,13 +119,17 @@ function undiscoveredToolNames(
 
 function McpToolListField({
   label,
+  placeholder,
   value,
+  oppositeValue,
   onChange,
   discoveredNames,
   disabled,
 }: {
   readonly label: string;
+  readonly placeholder: string;
   readonly value: string;
+  readonly oppositeValue: string;
   readonly onChange: (value: string) => void;
   readonly discoveredNames: ReadonlyArray<string> | undefined;
   readonly disabled: boolean;
@@ -132,13 +137,18 @@ function McpToolListField({
   const gt = useGT();
   const names = parseCommaList(value);
   const missing = undiscoveredToolNames(names, discoveredNames);
-  const available = discoveredNames?.filter((name) => !names.includes(name)) ?? [];
+  const configured = new Set([...names, ...parseCommaList(oppositeValue)]);
+  const available =
+    discoveredNames?.filter(
+      (name) => name.length <= 256 && !/[,\n]/u.test(name) && !configured.has(name),
+    ) ?? [];
   return (
     <div className="grid content-start gap-1">
       <label className="grid gap-1">
         <span className="text-xs font-medium text-foreground">{label}</span>
         <Input
           value={value}
+          placeholder={placeholder}
           disabled={disabled}
           spellCheck={false}
           onChange={(event) => onChange(event.target.value)}
@@ -587,6 +597,7 @@ function EnvironmentHarnessMcpSection({
             const isBusy = busyServerId === server.id;
             const isExpanded = expandedTools.has(server.id);
             const stateBadge = renderStateBadge(server, gt);
+            const discoveredCount = server.discoveredToolNames?.length ?? 0;
             const missingTools = undiscoveredToolNames(
               [...(server.config.allowedTools ?? []), ...(server.config.disabledTools ?? [])],
               server.discoveredToolNames,
@@ -639,6 +650,13 @@ function EnvironmentHarnessMcpSection({
                       <div className="text-xs text-warning-foreground">
                         {gt("Names missing from the last discovered tool list: {names}", {
                           names: missingTools.join(", "),
+                        })}
+                      </div>
+                    ) : null}
+                    {discoveredCount > 0 && server.tools.length === 0 ? (
+                      <div className="text-xs text-muted-foreground">
+                        {gt("0 of {count} discovered tools match the current filter.", {
+                          count: discoveredCount,
                         })}
                       </div>
                     ) : null}
@@ -1163,7 +1181,8 @@ function McpServerEditorForm({
 
     const allowedTools = parseCommaList(allowedToolsText);
     const disabledTools = parseCommaList(disabledToolsText);
-    const conflicts = allowedTools.filter((name) => disabledTools.includes(name));
+    const disabled = new Set(disabledTools);
+    const conflicts = allowedTools.filter((name) => disabled.has(name));
     if (conflicts.length > 0) {
       setValidationError(
         gt("Tools cannot be both allowed and disabled: {names}", {
@@ -1424,20 +1443,26 @@ function McpServerEditorForm({
 
           <p className="text-xs text-muted-foreground">
             <T>
-              Use upstream tool names. An empty allowlist allows every tool except those disabled.
+              Tool filters use upstream names and route the server through T3 Gateway. An empty
+              allowlist allows every tool except those disabled.
             </T>
           </p>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <McpToolListField
               label={gt("Allowed tools (optional, comma-separated)")}
+              // oxlint-disable-next-line t3code/no-untranslated-copy -- Example upstream tool names.
+              placeholder="search, get_issue"
               value={allowedToolsText}
+              oppositeValue={disabledToolsText}
               onChange={setAllowedToolsText}
               discoveredNames={initial?.discoveredToolNames}
               disabled={saving}
             />
             <McpToolListField
               label={gt("Disabled tools (optional, comma-separated)")}
+              placeholder="delete_repo"
               value={disabledToolsText}
+              oppositeValue={allowedToolsText}
               onChange={setDisabledToolsText}
               discoveredNames={initial?.discoveredToolNames}
               disabled={saving}

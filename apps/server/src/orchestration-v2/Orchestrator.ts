@@ -11622,6 +11622,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const emitEvent = emit(events, command);
       const requestNode = context.node;
       if (command.feedback !== undefined) {
+        const thread = yield* projectionStore
+          .getThread(command.threadId)
+          .pipe(mapDispatchError(command));
         const messageId = MessageId.make(`approval-feedback:${command.requestId}`);
         // Record the reply for every client without dispatching a prompt to the parent agent.
         yield* emitEvent({
@@ -11676,6 +11679,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             type: "user_message",
             messageId,
             inputIntent: "steer",
+            interactionMode: thread.interactionMode,
             text: command.feedback,
             attachments: [],
             createdBy: "user",

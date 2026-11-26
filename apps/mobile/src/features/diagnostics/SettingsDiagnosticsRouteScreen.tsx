@@ -1,9 +1,4 @@
 import { AuthSettingsWriteScope } from "@t3tools/contracts";
-import { serverEnvironment } from "../../state/server";
-import { useEnvironments } from "../../state/environments";
-import { useEnvironmentsWithScope } from "../../state/session";
-import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
-import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import * as Application from "expo-application";
 import Constants from "expo-constants";
 import * as Updates from "expo-updates";
@@ -12,16 +7,22 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { T, useGT } from "gt-react-native";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
+import * as Dialog from "../../components/ui/Dialog";
+import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { useEnvironments } from "../../state/environments";
 import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
+import { serverEnvironment } from "../../state/server";
+import { useEnvironmentsWithScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { relayTracingAvailable, setRelayTracingEnabled } from "../observability/tracing";
+import { beginRelayTracingPreferenceChange, relayTracingAvailable } from "../observability/tracing";
 import { crashReportingAvailable, setCrashReportsEnabled } from "../observability/observe";
 import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActionRow";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
@@ -216,8 +217,29 @@ function RelayTracingSetting() {
   const gt = useGT();
   const preferences = useAtomValue(mobilePreferencesAtom);
   const save = useAtomCommand(saveMobilePreferences, { reportFailure: true });
+  const savingRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const ready = AsyncResult.isSuccess(preferences) && !preferences.waiting;
+  const change = async (value: boolean) => {
+    if (!ready || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    const complete = beginRelayTracingPreferenceChange(value);
+    const result = await save({ relayTracingEnabled: value });
+    complete(result._tag === "Success");
+    savingRef.current = false;
+    setSaving(false);
+    if (result._tag === "Failure") {
+      Dialog.alert(
+        gt("Could not save settings"),
+        value
+          ? gt("Try again.")
+          : gt(
+              "Diagnostics are off for this session. Turn the switch off again to save your choice.",
+            ),
+      );
+    }
+  };
   return (
     <SettingsSection title={gt("Privacy")}>
       <SettingsSwitchRow
@@ -226,15 +248,7 @@ function RelayTracingSetting() {
         subtitle={gt("Share relay connection timings from this app.")}
         value={AsyncResult.isSuccess(preferences) && preferences.value.relayTracingEnabled === true}
         disabled={!ready || saving}
-        onValueChange={(value) => {
-          setSaving(true);
-          if (!value) setRelayTracingEnabled(false);
-          void save({ relayTracingEnabled: value })
-            .then((result) => {
-              setRelayTracingEnabled(result._tag === "Success" && value);
-            })
-            .finally(() => setSaving(false));
-        }}
+        onValueChange={(value) => void change(value)}
       />
     </SettingsSection>
   );

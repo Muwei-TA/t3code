@@ -14,10 +14,8 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Random from "effect/Random";
-import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Semaphore from "effect/Semaphore";
-import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -42,6 +40,13 @@ interface DeliveryState {
   readonly firstFailedAt: number;
   readonly failures: number;
   readonly retryAt: number;
+}
+
+interface ConsentQueue {
+  readonly epoch: number;
+  buffer: ReadonlyArray<BufferedAnalyticsEvent>;
+  delivery: DeliveryState;
+  readonly recordedOwners: Record<"server" | "client", Set<string>>;
 }
 
 // Retry delays shorter than this still wait for the next background check.
@@ -123,16 +128,15 @@ function serverOsFromNodePlatform(platform: string): ClientOs {
 }
 
 /** @public */
-/** @public */
 export const make = Effect.gen(function* () {
   const telemetryConfig = yield* TelemetryEnvConfig;
+  const wsl = Option.exists(telemetryConfig.wslDistroName, (value) => value.trim().length > 0);
   const hostEnvironment = yield* HostProcess.Environment;
   const awaitingShellConsent = hostEnvironment.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING === "1";
   // A managed policy can switch analytics off over the environment, never on.
   const policyAllows =
     ManagedPolicy.deniedBy(yield* ManagedPolicy.ManagedPolicy, "telemetry") === undefined;
   const settings = yield* ServerSettingsService;
-  const settingsChanges = yield* settings.subscribeChanges;
   // A cached PATH does not establish consent from the current login shell.
   const telemetryOverride = Effect.suspend((): Effect.Effect<Option.Option<boolean>> => {
     if (!policyAllows || !Option.getOrElse(telemetryConfig.enabled, () => true)) {
@@ -154,15 +158,11 @@ export const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => Option.some(false)),
     );
   });
-  const telemetryEnabled = telemetryOverride.pipe(
+  const consentEpoch = telemetryOverride.pipe(
     Effect.flatMap(
       Option.match({
-        onSome: Effect.succeed,
-        onNone: () =>
-          settings.getSettings.pipe(
-            Effect.map((value) => value.productTelemetryEnabled),
-            Effect.orElseSucceed(() => false),
-          ),
+        onSome: (enabled) => Effect.succeed(enabled ? -1 : null),
+        onNone: () => settings.getProductTelemetryConsent.pipe(Effect.orElseSucceed(() => null)),
       }),
     ),
   );
@@ -180,7 +180,6 @@ export const make = Effect.gen(function* () {
     ),
   );
   const crypto = yield* SecureRandom.SecureRandom;
-  const bufferRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>([]);
   const emptyDelivery: DeliveryState = {
     failedBatch: [],
     batchAttempts: 0,
@@ -188,72 +187,62 @@ export const make = Effect.gen(function* () {
     failures: 0,
     retryAt: 0,
   };
-  const deliveryRef = yield* Ref.make(emptyDelivery);
-  const emptyOwners: Readonly<Record<"server" | "client", ReadonlySet<string>>> = {
-    server: new Set(),
-    client: new Set(),
-  };
-  const recordedOwnersRef = yield* Ref.make(emptyOwners);
-  const consentEpoch = yield* Ref.make(0);
+  let currentQueue: ConsentQueue | null = null;
+  const getQueue = consentEpoch.pipe(
+    Effect.map((epoch) => {
+      if (epoch === null) {
+        currentQueue = null;
+      } else if (currentQueue?.epoch !== epoch) {
+        currentQueue = {
+          epoch,
+          buffer: [],
+          delivery: emptyDelivery,
+          recordedOwners: { server: new Set(), client: new Set() },
+        };
+      }
+      return currentQueue;
+    }),
+  );
   // The background flush and the shutdown flush must not send the same batch at once.
   const flushLock = yield* Semaphore.make(1);
-  const discardQueued = Effect.gen(function* () {
-    yield* Ref.update(consentEpoch, (epoch) => epoch + 1);
-    yield* Ref.set(bufferRef, []);
-    yield* Ref.set(deliveryRef, emptyDelivery);
-    yield* Ref.set(recordedOwnersRef, emptyOwners);
-  });
-  if (Option.isNone(telemetryConfig.enabled) || awaitingShellConsent) {
-    yield* Stream.runForEach(settingsChanges, (value) =>
-      value.productTelemetryEnabled
-        ? Effect.void
-        : telemetryOverride.pipe(
-            Effect.flatMap((override) =>
-              Option.getOrElse(override, () => false) ? Effect.void : discardQueued,
-            ),
-          ),
-    ).pipe(Effect.forkScoped);
-  }
   const clientType = serverConfig.mode === "desktop" ? "desktop-app" : "cli-web-client";
   const hostPlatform = yield* HostProcess.Platform;
   const hostArchitecture = yield* HostProcess.Architecture;
 
   const enqueueBufferedEvent = (
+    queue: ConsentQueue,
     uuid: string,
     event: string,
     properties?: Readonly<Record<string, unknown>>,
   ) =>
-    Effect.flatMap(DateTime.now, (now) =>
-      Ref.modify(bufferRef, (current) => {
-        const appended = [
-          ...current,
-          {
-            uuid,
-            event,
-            ...(properties ? { properties } : {}),
-            capturedAt: DateTime.formatIso(now),
-          } satisfies BufferedAnalyticsEvent,
-        ];
+    Effect.map(DateTime.now, (now) => {
+      const appended = [
+        ...queue.buffer,
+        {
+          uuid,
+          event,
+          ...(properties ? { properties } : {}),
+          capturedAt: DateTime.formatIso(now),
+        } satisfies BufferedAnalyticsEvent,
+      ];
+      queue.buffer =
+        appended.length > telemetryConfig.maxBufferedEvents
+          ? appended.slice(appended.length - telemetryConfig.maxBufferedEvents)
+          : appended;
+      return { size: queue.buffer.length, dropped: queue.buffer.length !== appended.length };
+    });
 
-        const next =
-          appended.length > telemetryConfig.maxBufferedEvents
-            ? appended.slice(appended.length - telemetryConfig.maxBufferedEvents)
-            : appended;
-
-        return [
-          {
-            size: next.length,
-            dropped: next.length !== appended.length,
-          } as const,
-          next,
-        ] as const;
-      }),
-    );
+  const takeBatch = (queue: ConsentQueue) => {
+    const next = queue.buffer.slice(0, telemetryConfig.flushBatchSize);
+    queue.buffer = queue.buffer.slice(next.length);
+    return next;
+  };
 
   const sendBatch = Effect.fn("AnalyticsService.sendBatch")(function* (
+    queue: ConsentQueue,
     events: ReadonlyArray<BufferedAnalyticsEvent>,
   ) {
-    if (!(yield* telemetryEnabled) || !distinctId) return;
+    if (!distinctId) return;
     const key = yield* telemetryKey;
     if (key === null) return;
     const hashedDistinctId = NodeCrypto.createHmac("sha256", key)
@@ -271,7 +260,7 @@ export const make = Effect.gen(function* () {
           ...(installId === null ? {} : { installId }),
           $process_person_profile: false,
           platform: hostPlatform,
-          wsl: Option.isSome(telemetryConfig.wslDistroName),
+          wsl,
           arch: hostArchitecture,
           t3CodeVersion: packageJson.version,
           telemetryChannel: ServerConfig.telemetryChannel,
@@ -287,35 +276,36 @@ export const make = Effect.gen(function* () {
 
     yield* HttpClientRequest.post(`${telemetryConfig.posthogHost}/batch/`).pipe(
       HttpClientRequest.bodyJson(payload),
-      Effect.flatMap(httpClient.execute),
-      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.flatMap((request) =>
+        getQueue.pipe(
+          Effect.flatMap((active) =>
+            active === queue
+              ? httpClient
+                  .execute(request)
+                  .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk), Effect.asVoid)
+              : Effect.void,
+          ),
+        ),
+      ),
       Effect.timeout(SEND_TIMEOUT),
     );
-  });
-
-  const takeBatch = Ref.modify(bufferRef, (current) => {
-    const nextBatch = current.slice(0, telemetryConfig.flushBatchSize);
-    return [nextBatch, current.slice(nextBatch.length)] as const;
   });
 
   // Back off even after dropping rejected batches so bad API keys cannot drain the queue in a tight loop.
   const flush: AnalyticsService["Service"]["flush"] = Effect.gen(function* () {
     while (true) {
-      if (!(yield* telemetryEnabled)) {
-        yield* discardQueued;
-        return;
-      }
-      const epoch = yield* Ref.get(consentEpoch);
-      const delivery = yield* Ref.get(deliveryRef);
-      const batch = delivery.failedBatch.length > 0 ? delivery.failedBatch : yield* takeBatch;
+      const queue = yield* getQueue;
+      if (queue === null) return;
+      const delivery = queue.delivery;
+      const batch = delivery.failedBatch.length > 0 ? delivery.failedBatch : takeBatch(queue);
       if (batch.length === 0) {
         return;
       }
 
-      const sent = yield* Effect.result(sendBatch(batch));
-      if (epoch !== (yield* Ref.get(consentEpoch))) return;
+      const sent = yield* Effect.result(sendBatch(queue, batch));
+      if (queue !== (yield* getQueue)) return;
       if (Result.isSuccess(sent)) {
-        yield* Ref.set(deliveryRef, emptyDelivery);
+        queue.delivery = emptyDelivery;
         continue;
       }
 
@@ -330,26 +320,26 @@ export const make = Effect.gen(function* () {
         error.reason._tag === "StatusCodeError" &&
         REJECTED_BATCH_STATUSES.has(error.reason.response.status);
       if (!rejected && now - firstFailedAt < MAX_BATCH_RETRY_MS) {
-        yield* Ref.set(deliveryRef, {
+        queue.delivery = {
           failedBatch: batch,
           batchAttempts,
           firstFailedAt,
           failures,
           retryAt,
-        });
+        };
         yield* Effect.logDebug("Failed to send telemetry batch; will retry", {
           attempt: batchAttempts,
           cause: error,
         });
         return;
       }
-      yield* Ref.set(deliveryRef, {
+      queue.delivery = {
         failedBatch: [],
         batchAttempts: 0,
         firstFailedAt: 0,
         failures,
         retryAt,
-      });
+      };
       yield* Effect.logWarning(
         rejected
           ? "Dropped telemetry batch the endpoint rejected"
@@ -361,65 +351,64 @@ export const make = Effect.gen(function* () {
   }).pipe(flushLock.withPermit);
 
   const flushWhenDue = Effect.gen(function* () {
-    const { retryAt } = yield* Ref.get(deliveryRef);
-    if ((yield* Clock.currentTimeMillis) >= retryAt) {
+    const queue = yield* getQueue;
+    if (queue !== null && (yield* Clock.currentTimeMillis) >= queue.delivery.retryAt) {
       yield* flush;
     }
   });
 
+  const recordInQueue = Effect.fnUntraced(function* (
+    queue: ConsentQueue,
+    event: string,
+    properties?: Readonly<Record<string, unknown>>,
+  ) {
+    if (!distinctId || (yield* telemetryKey) === null) return false;
+    const uuid = yield* Effect.exit(crypto.uuidV7());
+    if (Exit.isFailure(uuid) || queue !== (yield* getQueue)) return false;
+    const enqueueResult = yield* enqueueBufferedEvent(queue, uuid.value, event, properties);
+    if (enqueueResult.dropped) {
+      yield* Effect.logDebug("analytics buffer full; dropping oldest event", {
+        size: enqueueResult.size,
+        event,
+      });
+    }
+    return true;
+  });
+
   const record: AnalyticsService["Service"]["record"] = Effect.fn("AnalyticsService.record")(
     function* (event, properties) {
-      const epoch = yield* Ref.get(consentEpoch);
-      if (!(yield* telemetryEnabled) || !distinctId || (yield* telemetryKey) === null) return false;
-
-      // Catch Node UUID defects too; best-effort telemetry drops events without UUIDs.
-      const uuid = yield* Effect.exit(crypto.uuidV7());
-      if (Exit.isFailure(uuid) || epoch !== (yield* Ref.get(consentEpoch))) return false;
-
-      const enqueueResult = yield* enqueueBufferedEvent(uuid.value, event, properties);
-      if (enqueueResult.dropped) {
-        yield* Effect.logDebug("analytics buffer full; dropping oldest event", {
-          size: enqueueResult.size,
-          event,
-        });
-      }
-      return true;
+      const queue = yield* getQueue;
+      return queue !== null && (yield* recordInQueue(queue, event, properties));
     },
   );
 
   const recordOwners: AnalyticsService["Service"]["recordOwners"] = Effect.fn(
     "AnalyticsService.recordOwners",
   )(function* (owners, observedBy) {
-    if (!(yield* telemetryEnabled)) return;
+    const queue = yield* getQueue;
+    if (queue === null) return;
     const key = yield* telemetryKey;
     if (key === null) return;
     yield* Effect.forEach(
       owners,
-      ({ source, ownerId }) => {
+      Effect.fnUntraced(function* ({ source, ownerId }: TelemetryOwner) {
         const scopedId =
           source === "connect"
             ? ownerId
             : NodeCrypto.createHmac("sha256", key)
                 .update(`owner:${source}:${ownerId}`)
                 .digest("hex");
-        return Ref.modify(recordedOwnersRef, (recorded) => {
-          const key = `${source}:${scopedId}`;
-          const seen = recorded[observedBy];
-          return seen.has(key) || seen.size >= MAX_RECORDED_OWNERS
-            ? [false, recorded]
-            : [true, { ...recorded, [observedBy]: new Set(seen).add(key) }];
-        }).pipe(
-          Effect.flatMap((isNew) =>
-            isNew
-              ? record("install.owner_observed", {
-                  ownerSource: source,
-                  ownerId: scopedId,
-                  observedBy,
-                })
-              : Effect.void,
-          ),
-        );
-      },
+        const ownerKey = `${source}:${scopedId}`;
+        const seen = queue.recordedOwners[observedBy];
+        if (seen.has(ownerKey) || seen.size >= MAX_RECORDED_OWNERS) return;
+        seen.add(ownerKey);
+        const queued = yield* recordInQueue(queue, "install.owner_observed", {
+          ownerSource: source,
+          ownerId: scopedId,
+          observedBy,
+        });
+        if (!queued) seen.delete(ownerKey);
+      }),
       { discard: true },
     );
   });

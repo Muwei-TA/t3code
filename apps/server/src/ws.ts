@@ -43,6 +43,7 @@ import {
   WorkflowRequestError,
   AuthSessionId,
   ClientConnectionMethod,
+  ClientBrowser,
   ClientDeviceType,
   ClientOs,
   ClientSurface,
@@ -806,11 +807,11 @@ function toAuthAccessStreamEvent(
 
 const isClientSurface = Schema.is(ClientSurface);
 const isClientConnectionMethod = Schema.is(ClientConnectionMethod);
+const isClientBrowser = Schema.is(ClientBrowser);
 const isClientDeviceType = Schema.is(ClientDeviceType);
 const isClientOs = Schema.is(ClientOs);
 const isClientWebDeployment = Schema.is(ClientWebDeployment);
 const MAX_CLIENT_APP_VERSION_LENGTH = 64;
-const MAX_CLIENT_BROWSER_LENGTH = 64;
 
 function hasCompatibleOrchestrationProtocol(url: URL): boolean {
   return (
@@ -843,7 +844,7 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
   const deviceType = url.value.searchParams.get("clientDeviceType");
   const os = url.value.searchParams.get("clientOs");
   const webDeployment = url.value.searchParams.get("clientWebDeployment");
-  const browser = url.value.searchParams.get("clientBrowser")?.trim() ?? "";
+  const browser = url.value.searchParams.get("clientBrowser");
   const connectionMethod = url.value.searchParams.get("connectionMethod");
   const isMobile = surface === "mobile";
 
@@ -860,9 +861,7 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
       : {}),
     ...(isClientDeviceType(deviceType) ? { clientDeviceType: deviceType } : {}),
     ...(surface === "web" && isClientWebDeployment(webDeployment) ? { webDeployment } : {}),
-    ...(surface === "web" && browser !== "" && browser.length <= MAX_CLIENT_BROWSER_LENGTH
-      ? { clientBrowser: browser }
-      : {}),
+    ...(surface === "web" && isClientBrowser(browser) ? { clientBrowser: browser } : {}),
     ...(isClientConnectionMethod(connectionMethod) ? { connectionMethod } : {}),
   };
 }

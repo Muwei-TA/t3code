@@ -49,6 +49,7 @@ import {
   ArrowRightIcon,
   EraserIcon,
   GitForkIcon,
+  MapIcon,
   MessageSquareIcon,
 } from "lucide-react";
 
@@ -649,7 +650,7 @@ export function FreshSessionRow() {
 
 export function PlanModeRow() {
   const gt = useGT();
-  return <TimelineSystemDivider label={gt("Plan mode")} />;
+  return <TimelineSystemDivider label={gt("Plan mode")} icon={MapIcon} />;
 }
 
 /** A same-harness model or effort change. Shows only what changed. */

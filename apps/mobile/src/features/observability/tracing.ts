@@ -57,18 +57,25 @@ export function layerFromConfig(
 const config = resolveTracingConfig();
 export const relayTracingAvailable = config !== null;
 let relayTracingEnabled = false;
-let preferenceUpdated = false;
+let preferenceRevision = 0;
 
-export function setRelayTracingEnabled(enabled: boolean) {
-  preferenceUpdated = true;
-  relayTracingEnabled = enabled;
+export function isRelayTracingEnabled() {
+  return relayTracingEnabled;
+}
+
+export function beginRelayTracingPreferenceChange(enabled: boolean) {
+  const revision = ++preferenceRevision;
+  if (!enabled) relayTracingEnabled = false;
+  return (saved: boolean) => {
+    if (revision === preferenceRevision && saved) relayTracingEnabled = enabled;
+  };
 }
 
 if (relayTracingAvailable) {
   void import("../../persistence/imperative")
     .then(({ loadPreferences }) => loadPreferences())
     .then((preferences) => {
-      if (!preferenceUpdated) relayTracingEnabled = preferences.relayTracingEnabled === true;
+      if (preferenceRevision === 0) relayTracingEnabled = preferences.relayTracingEnabled === true;
     })
     .catch((error: unknown) => console.warn("[tracing] could not read trace preference", error));
 }
@@ -83,5 +90,5 @@ export const layer = layerFromConfig(
         ? Constants.expoConfig.extra.appVariant
         : "unknown",
   },
-  () => relayTracingEnabled,
+  isRelayTracingEnabled,
 );

@@ -1,5 +1,8 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Verify the persisted key against the Node HMAC digest used for ingestion.
+import * as NodeCrypto from "node:crypto";
+
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
@@ -8,10 +11,9 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as PubSub from "effect/PubSub";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientError from "effect/http/HttpClientError";
@@ -22,7 +24,7 @@ import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
-import type { ManagedPolicyDocument, ServerSettings } from "@t3tools/contracts";
+import type { ManagedPolicyDocument } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -77,6 +79,7 @@ const SentBatch = Schema.fromJsonString(
           ownerSource: Schema.optionalKey(Schema.String),
           ownerId: Schema.optionalKey(Schema.String),
           wsl: Schema.optionalKey(Schema.Boolean),
+          serverWslDistro: Schema.optionalKey(Schema.Unknown),
           observedBy: Schema.optionalKey(Schema.String),
         }),
       }),
@@ -119,38 +122,26 @@ const recordTwentyEvents = Effect.gen(function* () {
   }
 });
 
-const testSettingsLayer = Layer.effect(
-  ServerSettingsService,
-  Effect.gen(function* () {
-    const settings = yield* ServerSettingsService;
-    const changes = yield* PubSub.unbounded<ServerSettings>();
-    return {
-      ...settings,
-      updateSettings: (patch) =>
-        settings
-          .updateSettings(patch)
-          .pipe(Effect.tap((updated) => PubSub.publish(changes, updated))),
-      subscribeChanges: PubSub.subscribe(changes).pipe(Effect.map(Stream.fromSubscription)),
-    } satisfies ServerSettingsService["Service"];
-  }),
-).pipe(Layer.provide(ServerSettingsService.layerTest()));
+const testSettingsLayer = ServerSettingsService.layerTest();
 
 const analyticsLayerWith = (
   client: HttpClient.HttpClient,
   policy?: ManagedPolicyDocument,
   envOptIn: boolean | null = true,
+  wslDistroName = "private-org-linux",
+  serverConfigLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
+    prefix: "t3-telemetry-retry-",
+  }),
 ) =>
   AnalyticsService.layer.pipe(
     Layer.provideMerge(testSettingsLayer),
     Layer.provide(ServerSecretStore.layer),
-    Layer.provideMerge(
-      ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "t3-telemetry-retry-" }),
-    ),
+    Layer.provideMerge(serverConfigLayer),
     Layer.provide(
       ConfigProvider.layer(
         ConfigProvider.fromUnknown({
           ...(envOptIn === null ? {} : { T3CODE_TELEMETRY_ENABLED: envOptIn }),
-          WSL_DISTRO_NAME: "private-org-linux",
+          WSL_DISTRO_NAME: wslDistroName,
           T3CODE_POSTHOG_KEY: "phc_test_key",
           T3CODE_POSTHOG_HOST: "http://localhost",
         }),
@@ -165,6 +156,22 @@ const analyticsLayerWith = (
       ),
     ),
   );
+
+const captureBatches = (respond: Respond) => {
+  const batches: Array<ReadonlyArray<SentEvent>> = [];
+  const client = HttpClient.make((request) =>
+    Effect.gen(function* () {
+      if (request.body._tag === "Uint8Array") {
+        const body = yield* decodeSentBatch(new TextDecoder().decode(request.body.body)).pipe(
+          Effect.orDie,
+        );
+        batches.push(body.batch);
+      }
+      return yield* respond(request);
+    }),
+  );
+  return { client, batches };
+};
 
 /**
  * Runs `record` (20 events by default), then lets `minutes` of background
@@ -182,18 +189,7 @@ const sendFor = (
   policy?: ManagedPolicyDocument,
 ) =>
   Effect.gen(function* () {
-    const batches: Array<ReadonlyArray<SentEvent>> = [];
-    const client = HttpClient.make((request) =>
-      Effect.gen(function* () {
-        if (request.body._tag === "Uint8Array") {
-          const body = yield* decodeSentBatch(new TextDecoder().decode(request.body.body)).pipe(
-            Effect.orDie,
-          );
-          batches.push(body.batch);
-        }
-        return yield* respond(request);
-      }),
-    );
+    const { client, batches } = captureBatches(respond);
     const runtimeLayer = analyticsLayerWith(client, policy);
 
     yield* Effect.gen(function* () {
@@ -205,7 +201,80 @@ const sendFor = (
     return batches;
   });
 
-it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService test", (it) => {
+const testLayer = Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer);
+
+it.layer(testLayer)("AnalyticsService test", (it) => {
+  it.effect("uses the persisted HMAC key for distinct_id across analytics restarts", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const configLayer = Layer.succeed(ServerConfig.ServerConfig, config);
+      const { distinctId } = yield* getTelemetryIdentity;
+      assert.isString(distinctId);
+
+      const { client, batches } = captureBatches(respondWithStatus(204));
+      const send = Effect.gen(function* () {
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        assert.isTrue(yield* analytics.record("test.identity"));
+        yield* analytics.flush;
+      });
+      yield* Effect.scoped(
+        send.pipe(Effect.provide(analyticsLayerWith(client, undefined, true, "", configLayer))),
+      );
+      const key = yield* Effect.gen(function* () {
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        return Option.getOrThrow(yield* secrets.get("telemetry-hmac-key"));
+      }).pipe(Effect.provide(ServerSecretStore.layer));
+      yield* Effect.scoped(
+        send.pipe(Effect.provide(analyticsLayerWith(client, undefined, true, "", configLayer))),
+      );
+
+      const expected = NodeCrypto.createHmac("sha256", key)
+        .update(`distinct:${distinctId}`)
+        .digest("hex");
+      assert.notEqual(expected, distinctId);
+      assert.deepEqual(
+        batches.flat().map((event) => event.distinct_id),
+        [expected, expected],
+      );
+    }).pipe(
+      Effect.provide(
+        ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "t3-telemetry-identity-" }),
+      ),
+    ),
+  );
+
+  it.effect.each(["", "   "])("does not report WSL for a blank distro name (%j)", (distroName) =>
+    Effect.gen(function* () {
+      const { client, batches } = captureBatches(respondWithStatus(204));
+      yield* Effect.gen(function* () {
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        yield* analytics.record("test.platform");
+        yield* analytics.flush;
+      }).pipe(Effect.provide(analyticsLayerWith(client, undefined, true, distroName)));
+
+      const [event] = batches.flat();
+      assert.isFalse(event?.properties.wsl);
+      assert.notProperty(event?.properties, "serverWslDistro");
+    }),
+  );
+
+  it.effect.each([false, true])(
+    "uses explicit telemetry consent %s over server settings",
+    (enabled) =>
+      Effect.gen(function* () {
+        const { client, batches } = captureBatches(respondWithStatus(204));
+        yield* Effect.gen(function* () {
+          const analytics = yield* AnalyticsService.AnalyticsService;
+          const settings = yield* ServerSettingsService;
+          yield* settings.updateSettings({ productTelemetryEnabled: !enabled });
+          assert.equal(yield* analytics.record("test.override"), enabled);
+          yield* analytics.flush;
+        }).pipe(Effect.provide(analyticsLayerWith(client, undefined, enabled)));
+
+        assert.lengthOf(batches.flat(), enabled ? 1 : 0);
+      }),
+  );
+
   it.effect("waits for desktop shell consent and honors a late telemetry opt-out", () =>
     Effect.gen(function* () {
       const env: NodeJS.ProcessEnv = { T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1" };
@@ -262,37 +331,37 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
     }),
   );
 
-  it.effect("clears buffered events and failed deliveries when usage data is switched off", () =>
-    Effect.gen(function* () {
-      const attempts: string[] = [];
-      const client = HttpClient.make((request) => {
-        if (request.body._tag === "Uint8Array") {
-          attempts.push(new TextDecoder().decode(request.body.body));
-        }
-        return respondWithStatus(attempts.length === 1 ? 503 : 204)(request);
-      });
+  it.effect(
+    "clears pending deliveries across an opt-out even if usage data is immediately re-enabled",
+    () =>
+      Effect.gen(function* () {
+        const attempts: string[] = [];
+        const client = HttpClient.make((request) => {
+          if (request.body._tag === "Uint8Array") {
+            attempts.push(new TextDecoder().decode(request.body.body));
+          }
+          return respondWithStatus(attempts.length === 1 ? 503 : 204)(request);
+        });
 
-      yield* Effect.gen(function* () {
-        const analytics = yield* AnalyticsService.AnalyticsService;
-        const settings = yield* ServerSettingsService;
-        assert.isFalse(yield* analytics.record("while-disabled"));
-        yield* settings.updateSettings({ productTelemetryEnabled: true });
-        assert.isTrue(yield* analytics.record("failed-before-opt-out"));
-        yield* analytics.flush;
-        assert.isTrue(yield* analytics.record("queued-before-opt-out"));
-        yield* settings.updateSettings({ productTelemetryEnabled: false });
-        assert.isFalse(yield* analytics.record("after-opt-out"));
-        yield* TestClock.adjust("1 millis");
-        yield* settings.updateSettings({ productTelemetryEnabled: true });
-        assert.isTrue(yield* analytics.record("after-opt-in"));
-        yield* analytics.flush;
-      }).pipe(Effect.provide(analyticsLayerWith(client, undefined, null)));
+        yield* Effect.gen(function* () {
+          const analytics = yield* AnalyticsService.AnalyticsService;
+          const settings = yield* ServerSettingsService;
+          assert.isFalse(yield* analytics.record("while-disabled"));
+          yield* settings.updateSettings({ productTelemetryEnabled: true });
+          assert.isTrue(yield* analytics.record("failed-before-opt-out"));
+          yield* analytics.flush;
+          assert.isTrue(yield* analytics.record("queued-before-opt-out"));
+          yield* settings.updateSettings({ productTelemetryEnabled: false });
+          yield* settings.updateSettings({ productTelemetryEnabled: true });
+          assert.isTrue(yield* analytics.record("after-opt-in"));
+          yield* analytics.flush;
+        }).pipe(Effect.provide(analyticsLayerWith(client, undefined, null)));
 
-      assert.equal(attempts.length, 2);
-      assert.include(attempts[0], "failed-before-opt-out");
-      assert.include(attempts[1], "after-opt-in");
-      assert.notInclude(attempts[1], "before-opt-out");
-    }),
+        assert.equal(attempts.length, 2);
+        assert.include(attempts[0], "failed-before-opt-out");
+        assert.include(attempts[1], "after-opt-in");
+        assert.notInclude(attempts[1], "before-opt-out");
+      }),
   );
 
   it.effect("keeps a failed batch through a 20-minute outage and sends it once after", () =>

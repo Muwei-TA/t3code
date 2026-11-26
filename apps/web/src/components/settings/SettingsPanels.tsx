@@ -3,15 +3,16 @@ import { m as resolveMessage } from "~/i18n/messages";
 import { useAtomValue } from "@effect/atom-react";
 import { NotificationSettings } from "./NotificationSettings";
 import {
-  relayTelemetryEnabled,
+  getRelayTracingStatus,
   resolveRelayTracingConfig,
   setRelayTracingPreference,
+  subscribeRelayTracingStatus,
 } from "../../cloud/publicConfig";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import { CheckIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import {
   type DesktopUpdateChannel,
   IDLE_COMPACTION_MODES,
@@ -853,7 +854,11 @@ function PrivacySettings() {
   const updateSettings = useUpdateScopedSettings();
   const canWrite = useScopedSettingsWriteAllowed();
   const mixed = useScopedSettingsMixed(["productTelemetryEnabled"]);
-  const [relayEnabled, setRelayEnabled] = useState(() => relayTelemetryEnabled() === true);
+  const relayStatus = useSyncExternalStore(
+    subscribeRelayTracingStatus,
+    getRelayTracingStatus,
+    getRelayTracingStatus,
+  );
   const relayConfig = resolveRelayTracingConfig();
   const productAvailable =
     scope.kind !== "project" &&
@@ -893,17 +898,23 @@ function PrivacySettings() {
       {relayConfig === null ? null : (
         <SettingsRow
           {...setting("relay-connection-diagnostics")}
-          description={gt(
-            "Share relay connection timings from this app. On desktop, the host must also allow tracing.",
-          )}
+          description={
+            relayStatus === "pending"
+              ? gt("Checking whether this desktop host allows T3 Connect diagnostics.")
+              : relayStatus === "host-disabled"
+                ? gt(
+                    "This desktop host has disabled diagnostics. The host requires T3CODE_TELEMETRY_ENABLED=true and must allow diagnostics under administrator policy.",
+                  )
+                : gt("Share relay connection timings from this app.")
+          }
           control={
             <Switch
               aria-label={gt("Send T3 Connect diagnostics")}
-              checked={relayEnabled}
+              checked={relayStatus === "enabled"}
+              disabled={relayStatus === "pending" || relayStatus === "host-disabled"}
               onCheckedChange={(value) => {
                 try {
                   setRelayTracingPreference(value);
-                  setRelayEnabled(relayTelemetryEnabled() === true);
                 } catch {
                   toastManager.add({
                     type: "error",

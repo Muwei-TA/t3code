@@ -94,8 +94,6 @@ export const appendClientConnectionParams = (
       url.searchParams.set("clientBrowser", clientMetadata.browser);
     }
   }
-  if (clientMetadata?.surface === "mobile") {
-  }
   if (connectionMethod) {
     url.searchParams.set("connectionMethod", connectionMethod);
   }
