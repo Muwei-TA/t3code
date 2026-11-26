@@ -126,6 +126,12 @@ describe("HarnessProjector", () => {
     expect(expanded.commandId).toBe("review-pr");
     expect(expanded.text).toBe('Review PR 42 against origin/main. Extra notes: 42 "origin/main"');
 
+    const literalArguments = expandPortableCommand({
+      text: "/review-pr $& $1 $$",
+      commands,
+    });
+    expect(literalArguments.text).toBe("Review PR $& against $1. Extra notes: $& $1 $$");
+
     // No placeholders appends user args cleanly
     const appended = expandPortableCommand({
       text: "/check-types packages/contracts",

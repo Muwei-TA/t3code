@@ -118,6 +118,7 @@ async function runCommandHook(
     let timedOut = false;
     let stdout = "";
     let stderr = "";
+    let inputError: string | undefined;
     let child: NodeChildProcess.ChildProcess | null = null;
 
     const finish = (outcome: Omit<RawHookRunOutcome, "durationMs">) => {
@@ -178,22 +179,26 @@ async function runCommandHook(
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (code === 0) {
+      if (code === 0 && inputError === undefined) {
         finish({ ok: true, timedOut: false, stdout });
       } else {
         finish({
           ok: false,
           timedOut,
           stdout,
-          error: stderr.trim() || `Hook exited with status ${code ?? "unknown"}.`,
+          error: stderr.trim() || (inputError ?? `Hook exited with status ${code ?? "unknown"}.`),
         });
       }
     });
 
+    const recordInputError = (error: unknown) => {
+      inputError = error instanceof Error ? error.message : String(error);
+    };
+    child.stdin?.on("error", recordInputError);
     try {
       child.stdin?.end(payloadJson);
-    } catch {
-      // Ignore closed stdin.
+    } catch (error) {
+      recordInputError(error);
     }
   });
 }

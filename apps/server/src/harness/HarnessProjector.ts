@@ -135,12 +135,12 @@ export function expandPortableCommand(input: {
   const rawArgs = (match[2] ?? match[3] ?? "").trim();
   const positional = tokenizeArguments(rawArgs);
   const template = command.body.trim();
-  const hadPlaceholder = /\$ARGUMENTS\b|\$[1-9]\b/u.test(template);
-  let rendered = template
-    .replaceAll(/\$ARGUMENTS\b/gu, rawArgs)
-    .replaceAll(/\$([1-9])\b/gu, (_m, idxText: string) => positional[Number(idxText) - 1] ?? "");
+  const placeholder = /\$(ARGUMENTS|[1-9])\b/gu;
+  let rendered = template.replaceAll(placeholder, (_match, name: string) =>
+    name === "ARGUMENTS" ? rawArgs : (positional[Number(name) - 1] ?? ""),
+  );
 
-  if (!hadPlaceholder && rawArgs.length > 0) {
+  if (!placeholder.test(template) && rawArgs.length > 0) {
     rendered = `${rendered}\n\n${rawArgs}`;
   }
   return {

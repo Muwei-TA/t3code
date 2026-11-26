@@ -322,6 +322,20 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
             yield* fs.exists(path.join(homeDir, ".codex", "skills", "ship-check", "SKILL.md")),
           ).toBe(true);
 
+          const unmanagedToml = '[mcp_servers."docs"]\nurl = "https://existing.example/mcp"\n';
+          yield* fs.writeFileString(codexConfigPath, unmanagedToml);
+          const conflictPreview = yield* exporter.preview({ target: "codex", sections: ["mcp"] });
+          expect(conflictPreview.files).toEqual([]);
+          expect(conflictPreview.warnings.join("\n")).toContain("conflicting MCP server IDs");
+          const conflictApplied = yield* exporter.apply({
+            target: "codex",
+            sections: ["mcp"],
+            planDigest: TrimmedNonEmptyString.make(conflictPreview.planDigest),
+          });
+          expect(conflictApplied.writtenPaths).toEqual([]);
+          expect(yield* fs.readFileString(codexConfigPath)).toBe(unmanagedToml);
+          yield* fs.writeFileString(codexConfigPath, writtenToml);
+
           // 2. Claude export preserves unrelated keys (`numStartups`, `existing_one`) + writes commands & CLAUDE.md
           const claudePreview = yield* exporter.preview({ target: "claude" });
           const claudeApplied = yield* exporter.apply({

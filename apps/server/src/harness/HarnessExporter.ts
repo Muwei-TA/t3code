@@ -21,6 +21,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
+import { parse as parseToml } from "smol-toml";
 
 import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import {
@@ -328,17 +329,29 @@ const make = Effect.gen(function* () {
           const targetPath = path.join(homeDir, ".codex", "config.toml");
           const existing = Option.getOrNull(yield* readFileOpt(targetPath));
           const merged = mergeCodexConfigToml(existing ?? "", exportableServers);
-          // Preview only the redacted T3-managed export block so existing host config credentials can never leak.
-          const redactedDeltaPreview = mergeCodexConfigToml("", redactedServers);
-          addPlannedFile(
-            targetPath,
-            existing,
-            "mcp",
-            "mcpServers",
-            merged,
-            redactedDeltaPreview,
-            hasSecrets,
-          );
+          const validated = yield* Effect.try({
+            try: () => parseToml(merged),
+            catch: () =>
+              new HarnessError({
+                code: "invalid_config",
+                detail: `${targetPath}: Codex MCP export skipped because the resulting TOML would be invalid. Check the existing configuration for syntax errors or conflicting MCP server IDs.`,
+              }),
+          }).pipe(Effect.result);
+          if (validated._tag === "Success") {
+            // Preview only the redacted T3-managed block to keep host config credentials private.
+            const redactedDeltaPreview = mergeCodexConfigToml("", redactedServers);
+            addPlannedFile(
+              targetPath,
+              existing,
+              "mcp",
+              "mcpServers",
+              merged,
+              redactedDeltaPreview,
+              hasSecrets,
+            );
+          } else {
+            warnings.push(validated.failure.detail);
+          }
         } else {
           const targetPath =
             input.target === "claude"

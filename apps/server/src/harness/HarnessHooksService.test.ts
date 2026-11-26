@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Stub the hook runner's native child process and stdin stream.
+import * as NodeChildProcess from "node:child_process";
+import * as NodeStream from "node:stream";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { HarnessHookId, PositiveInt, TrimmedNonEmptyString } from "@t3tools/contracts";
@@ -5,12 +9,15 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import { vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as HarnessHooksService from "./HarnessHooksService.ts";
 import * as HarnessStore from "./HarnessStore.ts";
+
+vi.mock("node:child_process", { spy: true });
 
 function makeTestLayer(baseDir: string, paths: ServerConfig.ServerDerivedPaths) {
   const configLayer = Layer.succeed(ServerConfig.ServerConfig, {
@@ -178,6 +185,19 @@ describe("HarnessHooksService", () => {
           const testResult = yield* hooks.testHook({ id: HarnessHookId.make("inject-note") });
           expect(testResult.ok).toBe(true);
           expect(testResult.injectedContext).toBe("[policy] Always check tests.");
+
+          const child = new NodeChildProcess.ChildProcess();
+          const inputFailure = "Hook test input could not be written.";
+          child.stdin = new NodeStream.Writable({
+            write(_chunk, _encoding, callback) {
+              callback(new Error(inputFailure));
+            },
+          });
+          child.stdin.once("close", () => child.emit("close", 0));
+          using _spawn = vi.spyOn(NodeChildProcess, "spawn").mockReturnValueOnce(child);
+          const inputFailed = yield* hooks.testHook({ id: HarnessHookId.make("inject-note") });
+          expect(inputFailed.ok).toBe(false);
+          expect(inputFailed.error).toBe(inputFailure);
 
           const afterRemove = yield* hooks.removeUserHook({
             id: HarnessHookId.make("block-build"),
