@@ -11,7 +11,9 @@ are sent only when they appear in a provider's public model list.
 
 Product events do not include prompts, responses, file contents, authentication tokens, conversation IDs,
 raw provider events, or child-agent output. The one exception is [agent feedback](#agent-feedback),
-which is off unless you turn it on.
+which is off unless you turn it on. Product events are opt-in on this branch. WSL is
+reported as a boolean, never as a distribution name. Mobile product events omit the device model
+and OS major version.
 
 ## Agent feedback
 
@@ -23,7 +25,9 @@ do what they expected, a confusing instruction, or a missing capability. Choose 
   message pointing to Labs.
 - **When I ask**: agents send a report only when you ask them to, about anything in T3 Code.
 - **Automatic**: agents also report T3 Code problems they hit on their own, such as a T3 tool that
-  failed and made them find another way. These reports carry no outline and no message text, and
+  failed and made them find another way. These reports carry only the problem kind, known tool or
+  command subject, source, and available provider/model dimensions; no expected behavior, actual
+  behavior, workaround, or conversation trace leaves the machine, and
   go out without asking you. `t3 feedback --kind bug --subject "t3 thread send" --expected "…" --actual "…"`
   sends one the same way, so it works only in this mode.
 
@@ -65,7 +69,7 @@ exactly what each one holds.
 
 T3 Code sends relay connection traces to Axiom to diagnose T3 Connect connectivity. These are
 separate from product events. Depending on the client version, traces can include connection
-timings, environment identifiers and the connected machine's name. Failed spans can include error
+timings and environment identifiers, but not the configured environment label. Failed spans can include error
 messages and stack traces; error text can quote a value the app was handling.
 
 To disable product events and relay tracing from the server, set

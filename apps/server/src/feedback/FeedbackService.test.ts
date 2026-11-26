@@ -460,11 +460,7 @@ it.effect("scrubs the caller's private values and sends only the event contract"
           {
             kind: "bug",
             subject: "t3 thread show",
-            expected: input.expected,
-            actual: input.actual,
-            workaround: "",
             userRequested: false,
-            trace: null,
             source: "mcp",
             provider: "codex",
             model: "gpt-5.5",
@@ -477,11 +473,7 @@ it.effect("scrubs the caller's private values and sends only the event contract"
         {
           kind: "bug",
           subject: "general",
-          expected: input.expected,
-          actual: input.actual,
-          workaround: "",
           userRequested: false,
-          trace: null,
           source: "cli",
         },
       ]);

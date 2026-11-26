@@ -36,6 +36,9 @@ interface RecordedBatchRequest {
         readonly index?: number;
         readonly clientType?: string;
         readonly serverOs?: string;
+        readonly wsl?: boolean;
+        readonly serverIsWsl?: boolean;
+        readonly serverWslDistro?: unknown;
         readonly serverArch?: string;
         readonly serverAppVersion?: string;
         readonly serverMode?: string;
@@ -52,6 +55,9 @@ interface RecordedBatchBody {
       readonly index?: number;
       readonly clientType?: string;
       readonly serverOs?: string;
+      readonly wsl?: boolean;
+      readonly serverIsWsl?: boolean;
+      readonly serverWslDistro?: unknown;
       readonly serverArch?: string;
       readonly serverAppVersion?: string;
       readonly serverMode?: string;
@@ -306,6 +312,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
           T3CODE_POSTHOG_KEY: "phc_test_key",
           T3CODE_POSTHOG_HOST: "http://localhost",
           T3CODE_TELEMETRY_FLUSH_BATCH_SIZE: 20,
+          WSL_DISTRO_NAME: "private-customer-workspace",
         }),
       );
       const layerBatchServer = HttpServer.serve(
@@ -386,6 +393,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
             (event) =>
               event.properties?.serverOs === "Linux" &&
               event.properties.serverArch === "arm64" &&
+              event.properties.wsl === true &&
+              event.properties.serverIsWsl === true &&
+              event.properties.serverWslDistro === undefined &&
               event.properties.serverAppVersion === event.properties.t3CodeVersion &&
               event.properties.serverMode === "web",
           ),
