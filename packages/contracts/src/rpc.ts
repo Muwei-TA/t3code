@@ -550,6 +550,12 @@ import {
   HarnessSkillSetEnabledInput,
   HarnessSkillUpsertInput,
   HarnessSyncConfigureInput,
+  HarnessSyncExportBundleInput,
+  HarnessSyncExportBundleResult,
+  HarnessSyncPreviewReceiveInput,
+  HarnessSyncPreviewReceiveResult,
+  HarnessSyncApplyReceiveInput,
+  HarnessSyncApplyReceiveResult,
   HarnessSyncPreviewPushResult,
   HarnessSyncPullInput,
   HarnessSyncPullResult,
@@ -872,6 +878,9 @@ export const WS_METHODS = {
   harnessMemoryUpsert: "harness.memory.upsert",
   harnessMemoryRemove: "harness.memory.remove",
   harnessSyncStatus: "harness.sync.status",
+  harnessSyncExportBundle: "harness.sync.exportBundle",
+  harnessSyncPreviewReceive: "harness.sync.previewReceive",
+  harnessSyncApplyReceive: "harness.sync.applyReceive",
   harnessSyncConfigure: "harness.sync.configure",
   harnessSyncPreviewPush: "harness.sync.previewPush",
   harnessSyncPush: "harness.sync.push",
@@ -2945,6 +2954,24 @@ const WsHarnessSyncPullRpc = Rpc.make(WS_METHODS.harnessSyncPull, {
   error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
 });
 
+const WsHarnessSyncExportBundleRpc = Rpc.make(WS_METHODS.harnessSyncExportBundle, {
+  payload: HarnessSyncExportBundleInput,
+  success: HarnessSyncExportBundleResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncPreviewReceiveRpc = Rpc.make(WS_METHODS.harnessSyncPreviewReceive, {
+  payload: HarnessSyncPreviewReceiveInput,
+  success: HarnessSyncPreviewReceiveResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessSyncApplyReceiveRpc = Rpc.make(WS_METHODS.harnessSyncApplyReceive, {
+  payload: HarnessSyncApplyReceiveInput,
+  success: HarnessSyncApplyReceiveResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
 export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthorization>()(
   "t3/contracts/RpcScopeAuthorization",
   { error: EnvironmentAuthorizationError },
@@ -3263,6 +3290,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsHarnessMemoryUpsertRpc,
   WsHarnessMemoryRemoveRpc,
   WsHarnessSyncStatusRpc,
+  WsHarnessSyncExportBundleRpc,
+  WsHarnessSyncPreviewReceiveRpc,
+  WsHarnessSyncApplyReceiveRpc,
   WsHarnessSyncConfigureRpc,
   WsHarnessSyncPreviewPushRpc,
   WsHarnessSyncPushRpc,

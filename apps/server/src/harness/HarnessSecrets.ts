@@ -73,7 +73,7 @@ const SENSITIVE_ARG_ASSIGN =
 const SENSITIVE_ARG_VALUE =
   /(?:^(?:Bearer|Basic|Token)\s+\S+|\b(?:sk|ghp|gho|ghu|ghs|ghr|xox[baprs])-[A-Za-z0-9_-]{12,}\b|\bgh[pousr]_[A-Za-z0-9]{20,}\b|\bAKIA[0-9A-Z]{16}\b|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b)/iu;
 
-function isSafePlaceholderValue(value: string): boolean {
+export function isSafePlaceholderValue(value: string): boolean {
   const trimmed = value.trim();
   return trimmed.length === 0 || SAFE_PLACEHOLDER_ONLY_VALUE.test(trimmed);
 }

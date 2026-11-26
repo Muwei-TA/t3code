@@ -876,6 +876,11 @@ export function SettingsHarnessLibraryPanel({
                   <View className="flex-row items-center justify-between gap-2">
                     <View className="flex-1">
                       <Text className="font-t3-semibold text-base text-foreground">{rule.id}</Text>
+                      {rule.lockedByPolicy ? (
+                        <Text className="text-xs text-foreground-muted">
+                          <T>Locked by organization</T>
+                        </Text>
+                      ) : null}
                       <Text className="text-xs text-foreground-muted">
                         {rule.apply} · {rule.bytes} B
                         {rule.description ? ` · ${rule.description}` : ""}
@@ -883,7 +888,11 @@ export function SettingsHarnessLibraryPanel({
                     </View>
                     <Switch
                       value={rule.effectiveEnabled}
-                      disabled={!canWriteSettings || busyId === `rule:${rule.id}`}
+                      disabled={
+                        rule.lockedByPolicy === true ||
+                        !canWriteSettings ||
+                        busyId === `rule:${rule.id}`
+                      }
                       onValueChange={() => void handleToggleRule(rule)}
                     />
                   </View>
@@ -896,13 +905,17 @@ export function SettingsHarnessLibraryPanel({
                     <Button
                       label={gt("Edit")}
                       tone="secondary"
-                      disabled={!canWriteSettings}
+                      disabled={rule.lockedByPolicy === true || !canWriteSettings}
                       onPress={() => setRuleModal({ mode: "edit", entry: rule })}
                     />
                     <Button
                       label={gt("Remove")}
                       tone="secondary"
-                      disabled={!canWriteSettings || busyId === `rule:${rule.id}`}
+                      disabled={
+                        rule.lockedByPolicy === true ||
+                        !canWriteSettings ||
+                        busyId === `rule:${rule.id}`
+                      }
                       onPress={() => handleRemoveRule(rule)}
                     />
                   </View>

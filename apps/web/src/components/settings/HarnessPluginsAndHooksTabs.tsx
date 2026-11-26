@@ -120,7 +120,9 @@ export function HarnessPluginsTab({ environmentId }: { readonly environmentId: E
     );
   }
 
-  const editable = canWriteSettings && snapshot.managedPolicyAllowsHarness;
+  const allowsPlugins =
+    snapshot.managedPolicyAllowsHarness && snapshot.managedPolicyAllowsPlugins !== false;
+  const editable = canWriteSettings && allowsPlugins;
 
   return (
     <>
@@ -138,7 +140,7 @@ export function HarnessPluginsTab({ environmentId }: { readonly environmentId: E
             <Button
               variant="outline"
               size="sm"
-              disabled={busy}
+              disabled={!editable || busy}
               onClick={async () => {
                 setBusy(true);
                 const res = await reloadPlugins({ environmentId, input: {} });
@@ -155,6 +157,12 @@ export function HarnessPluginsTab({ environmentId }: { readonly environmentId: E
             </Button>
           </div>
         </SettingsRow>
+
+        {!allowsPlugins ? (
+          <p className="px-4 py-2 text-xs text-muted-foreground">
+            <T>Your organization has disabled external plugins.</T>
+          </p>
+        ) : null}
 
         {snapshot.plugins.length === 0 ? (
           <p className="px-4 py-4 text-sm text-muted-foreground">
@@ -235,7 +243,7 @@ export function HarnessPluginsTab({ environmentId }: { readonly environmentId: E
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={!editable || busy}
+                    disabled={!canWriteSettings || busy}
                     onClick={async () => {
                       setBusy(true);
                       const res = await removePlugin({

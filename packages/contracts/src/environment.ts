@@ -105,6 +105,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   inlineMessageContext: Schema.optionalKey(Schema.Boolean),
   workflowChat: Schema.optionalKey(Schema.Boolean),
   harnessMcpResources: Schema.optionalKey(Schema.Boolean),
+  harnessEnvironmentSync: Schema.optionalKey(Schema.Boolean),
   requiredWorktreeBootstrap: Schema.optionalKey(Schema.Boolean),
   threadSettlement: Schema.optionalKey(Schema.Boolean),
   threadAutoSettlement: Schema.optionalKey(Schema.Boolean),

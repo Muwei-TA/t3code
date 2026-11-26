@@ -24,6 +24,8 @@ import { harnessEnvironment } from "../../state/harness";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 
+import { SettingsHarnessEnvironmentSync } from "./SettingsHarnessEnvironmentSync";
+
 const decodeMemoryId = Schema.decodeUnknownOption(HarnessMemoryId);
 
 export function SettingsHarnessMemorySyncPanel({
@@ -272,6 +274,7 @@ function MobileSyncPanel({
 
   const [busy, setBusy] = useState(false);
   const [remoteUrl, setRemoteUrl] = useState("");
+  const [portableMcpDraft, setPortableMcpDraft] = useState<boolean | null>(null);
   const [preview, setPreview] = useState<HarnessSyncPreviewPushResult | null>(null);
   const [conflicts, setConflicts] = useState<ReadonlyArray<HarnessSyncPullConflict>>([]);
   const conflictReasons = {
@@ -284,13 +287,16 @@ function MobileSyncPanel({
     return <AppActivityIndicator size="small" />;
   }
   const status = statusQuery.data;
+  const portableMcp = portableMcpDraft ?? status?.includePortableMcpServers ?? false;
 
   const pull = async (force: boolean) => {
     setBusy(true);
     const res = await pullSync({ environmentId, input: force ? { force: true } : {} });
     setBusy(false);
     if (res._tag === "Success") {
-      const remainingConflicts = force ? [] : (res.value.conflicts ?? []);
+      const remainingConflicts = (res.value.conflicts ?? []).filter(
+        ({ path }) => !force || path === "mcp-servers.portable.json",
+      );
       setConflicts(remainingConflicts);
       setPreview(null);
       if (remainingConflicts.length === 0) {
@@ -307,6 +313,7 @@ function MobileSyncPanel({
 
   return (
     <View className="gap-3">
+      <SettingsHarnessEnvironmentSync key={environmentId} environmentId={environmentId} />
       <Text className="text-xs text-foreground-muted">
         <T>
           Sync portable harness files on <Var>{targetHost}</Var> via Git. Raw secrets are blocked
@@ -324,6 +331,21 @@ function MobileSyncPanel({
           </Text>
         </View>
       ) : null}
+
+      <View className="flex-row items-center gap-2">
+        <Text className="flex-1 text-xs text-foreground">
+          <T>Include portable MCP definitions in Git sync</T>
+        </Text>
+        <Switch
+          accessibilityLabel={gt("Include portable MCP definitions in Git sync")}
+          value={portableMcp}
+          disabled={busy || !canWriteSettings}
+          onValueChange={(checked) => {
+            setPortableMcpDraft(checked);
+            setPreview(null);
+          }}
+        />
+      </View>
 
       <TextInput
         value={remoteUrl || status?.remoteUrl || ""}
@@ -345,10 +367,14 @@ function MobileSyncPanel({
               setBusy(true);
               const res = await configureSync({
                 environmentId,
-                input: { remoteUrl: TrimmedNonEmptyString.make(url) },
+                input: {
+                  remoteUrl: TrimmedNonEmptyString.make(url),
+                  includePortableMcpServers: portableMcp,
+                },
               });
               setBusy(false);
               if (res._tag === "Success") {
+                setPortableMcpDraft(null);
                 setConflicts([]);
                 setPreview(null);
                 statusQuery.refresh();
@@ -384,7 +410,13 @@ function MobileSyncPanel({
         <Button
           label={gt("Pull")}
           tone="secondary"
-          disabled={!canSyncRemote || !status?.initialized || !status.remoteUrl || busy}
+          disabled={
+            !canSyncRemote ||
+            !status?.initialized ||
+            !status.remoteUrl ||
+            portableMcpDraft !== null ||
+            busy
+          }
           onPress={() => void pull(false)}
         />
       </View>
@@ -409,7 +441,13 @@ function MobileSyncPanel({
           <Button
             label={gt("Force Pull")}
             tone="danger"
-            disabled={!canSyncRemote || !status?.initialized || !status.remoteUrl || busy}
+            disabled={
+              !canSyncRemote ||
+              !status?.initialized ||
+              !status.remoteUrl ||
+              portableMcpDraft !== null ||
+              busy
+            }
             onPress={() => void pull(true)}
           />
         </View>

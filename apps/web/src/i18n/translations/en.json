@@ -13465,5 +13465,41 @@
       "c": "Settings → Scheduled tasks"
     },
     "."
-  ]
+  ],
+  "2e6aeae18aa50d98": "Sync blocked by safety checks.",
+  "30271f9f45806678": "Preview Diff",
+  "39cdbc8b84b17c6f": [
+    "Missing on target: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "400f75805ed11740": "Include portable MCP definitions. Secret references require verification on the target.",
+  "55b4b083e71f9916": "Include portable MCP definitions in Git sync",
+  "56573bb72f48c3a4": "Harness changes pushed",
+  "56a9ce5ea39af8e2": "The two environments have no portable harness differences.",
+  "57b8568730d37aab": "Harness sync failed",
+  "64f65e7c1e66e0b6": "Untracked",
+  "72236e08fdbc9bfd": "Modified",
+  "9a37a8ae33072b13": "Only on target",
+  "ad36b814f6a09f97": "Confirm & Push",
+  "b15b490a6b93f51b": "Conflict",
+  "b8be1d5f156ecf1f": "Disabled on import",
+  "c0ecf665a2affc08": "Locked by organization",
+  "c46795e0f5c9e29d": "No connected environment with write access supports harness sync.",
+  "c959341cad7960e5": [
+    "Changes for ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "ce38d39a69faaa07": "Select target environment",
+  "da23c7158edc3453": "Target environment",
+  "da64f760d0040b9a": "Push to another connected environment",
+  "df1b3dddecd4659f": "Delete files that only exist on the target",
+  "f3c271e99d8d70c1": "Your organization has disabled external plugins."
 }

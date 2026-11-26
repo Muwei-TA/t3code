@@ -13451,5 +13451,41 @@
       "c": "Ajustes → Tareas programadas"
     },
     "."
-  ]
+  ],
+  "2e6aeae18aa50d98": "Las comprobaciones de seguridad bloquearon la sincronización.",
+  "30271f9f45806678": "Ver diferencias",
+  "39cdbc8b84b17c6f": [
+    "Faltan en el destino: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "400f75805ed11740": "Incluye definiciones MCP portátiles. Las referencias a secretos deben verificarse en el destino.",
+  "55b4b083e71f9916": "Incluir definiciones MCP portátiles en la sincronización de Git",
+  "56573bb72f48c3a4": "Cambios de Harness enviados",
+  "56a9ce5ea39af8e2": "No hay diferencias de Harness portátil entre los dos entornos.",
+  "57b8568730d37aab": "Error al sincronizar Harness",
+  "64f65e7c1e66e0b6": "Sin seguimiento",
+  "72236e08fdbc9bfd": "Modificado",
+  "9a37a8ae33072b13": "Solo en el destino",
+  "ad36b814f6a09f97": "Confirmar y enviar",
+  "b15b490a6b93f51b": "Conflicto",
+  "b8be1d5f156ecf1f": "Se desactiva al importar",
+  "c0ecf665a2affc08": "Bloqueado por la organización",
+  "c46795e0f5c9e29d": "Ningún entorno conectado con permiso de escritura admite la sincronización de Harness.",
+  "c959341cad7960e5": [
+    "Cambios para ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "ce38d39a69faaa07": "Selecciona el entorno de destino",
+  "da23c7158edc3453": "Entorno de destino",
+  "da64f760d0040b9a": "Enviar a otro entorno conectado",
+  "df1b3dddecd4659f": "Eliminar archivos que solo existen en el destino",
+  "f3c271e99d8d70c1": "Tu organización ha desactivado los plugins externos."
 }

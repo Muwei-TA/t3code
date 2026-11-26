@@ -16,6 +16,7 @@ import {
   IsoDateTime,
   isReservedHarnessCommandId,
   isReservedHarnessMcpServerId,
+  type ManagedPolicyLimits,
   PositiveInt,
 } from "@t3tools/contracts";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
@@ -445,6 +446,9 @@ export class HarnessStore extends Context.Service<
   {
     readonly harnessDir: string;
     readonly configPath: string;
+    readonly lockedRules: NonNullable<ManagedPolicyLimits["harnessLockedRules"]>;
+    readonly policyPath: string;
+    readonly managedPolicyAllowsPlugins: boolean;
     /** Computes a server-secret-keyed confirmation digest that cannot be offline brute-forced from read-only snapshots. */
     readonly computeConfirmationDigest: (config: HarnessMcpServerConfig) => string;
     readonly loadUserConfig: Effect.Effect<LoadedUserHarnessConfig>;
@@ -541,6 +545,7 @@ const make = Effect.gen(function* () {
 
   const policyHarnessDeniedBy = ManagedPolicy.deniedBy(managedPolicy, "harness");
   const policyStdioDeniedBy = ManagedPolicy.deniedBy(managedPolicy, "harnessMcpStdio");
+  const policyPluginsDeniedBy = ManagedPolicy.deniedBy(managedPolicy, "harnessPlugins");
   const managedPolicyAllowsHarness = policyHarnessDeniedBy === undefined;
   const managedPolicyAllowsStdio = managedPolicyAllowsHarness && policyStdioDeniedBy === undefined;
   const managedPolicyOrganization = managedPolicy.document?.organization ?? null;
@@ -1194,6 +1199,9 @@ const make = Effect.gen(function* () {
   return HarnessStore.of({
     harnessDir,
     configPath,
+    lockedRules: managedPolicy.document?.limits?.harnessLockedRules ?? [],
+    policyPath: managedPolicy.path,
+    managedPolicyAllowsPlugins: managedPolicyAllowsHarness && policyPluginsDeniedBy === undefined,
     computeConfirmationDigest,
     loadUserConfig,
     resolveWorkspace,

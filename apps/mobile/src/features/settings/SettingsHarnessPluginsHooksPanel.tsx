@@ -137,19 +137,28 @@ export function SettingsHarnessPluginsHooksPanel({
 
   if (activeTab === "plugins") {
     const snapshot = pluginsQuery.data;
+    const allowsPlugins =
+      snapshot?.managedPolicyAllowsHarness === true &&
+      snapshot.managedPolicyAllowsPlugins !== false;
+    const editable = canWriteSettings && allowsPlugins;
     return (
       <View className="gap-3">
+        {snapshot && !allowsPlugins ? (
+          <Text className="text-xs text-foreground-muted">
+            <T>Your organization has disabled external plugins.</T>
+          </Text>
+        ) : null}
         <View className="flex-row flex-wrap gap-2">
           <Button
             label={gt("Install plugin")}
             tone="primary"
-            disabled={!canWriteSettings}
+            disabled={!editable}
             onPress={() => setInstallOpen(true)}
           />
           <Button
             label={gt("Reload")}
             tone="secondary"
-            disabled={busyId !== null}
+            disabled={!editable || busyId !== null}
             onPress={() => {
               void (async () => {
                 setBusyId("__reload__");
@@ -186,7 +195,7 @@ export function SettingsHarnessPluginsHooksPanel({
                 {plugin.trustStatus === "trusted" ? (
                   <Switch
                     value={plugin.enabled}
-                    disabled={!canWriteSettings || busyId === plugin.id}
+                    disabled={!editable || busyId === plugin.id}
                     onValueChange={(enabled) => {
                       void (async () => {
                         setBusyId(plugin.id);
@@ -203,7 +212,7 @@ export function SettingsHarnessPluginsHooksPanel({
                   <Button
                     label={gt("Trust")}
                     tone="primary"
-                    disabled={!canWriteSettings || busyId === plugin.id}
+                    disabled={!editable || busyId === plugin.id}
                     onPress={() => handleTrustPlugin(plugin)}
                   />
                 )}

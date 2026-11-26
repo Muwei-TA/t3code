@@ -796,6 +796,11 @@ export function HarnessLibraryPanels({
                       {rule.globs.length > 0 ? (
                         <Badge variant="secondary">{rule.globs.join(", ")}</Badge>
                       ) : null}
+                      {rule.lockedByPolicy ? (
+                        <Badge variant="secondary">
+                          <T>Locked by organization</T>
+                        </Badge>
+                      ) : null}
                       {rule.overriddenByProject ? (
                         <Badge variant="secondary">{gt("Disabled by project")}</Badge>
                       ) : null}
@@ -807,7 +812,7 @@ export function HarnessLibraryPanels({
                   <div className="flex items-center gap-2">
                     <Switch
                       checked={rule.enabled}
-                      disabled={!editable || busy}
+                      disabled={!editable || busy || rule.lockedByPolicy === true}
                       onCheckedChange={async (checked) => {
                         setBusy(true);
                         const res = await setRuleEnabled({
@@ -821,7 +826,7 @@ export function HarnessLibraryPanels({
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!editable || busy}
+                      disabled={!editable || busy || rule.lockedByPolicy === true}
                       onClick={() => setRuleModal({ mode: "edit", item: rule })}
                     >
                       <PencilIcon className="size-3.5" aria-hidden />
@@ -829,7 +834,7 @@ export function HarnessLibraryPanels({
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!editable || busy}
+                      disabled={!editable || busy || rule.lockedByPolicy === true}
                       onClick={async () => {
                         setBusy(true);
                         const res = await removeRule({

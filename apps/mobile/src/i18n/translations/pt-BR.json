@@ -6020,5 +6020,48 @@
   "674bcf1bb284d4f7": "{completed}/{total} etapas",
   "65763fd9556fa033": "Continuar executando",
   "60ed1918d57cae79": "Pausar após esta etapa",
-  "614e5ad58a795fb5": "Parar"
+  "614e5ad58a795fb5": "Parar",
+  "28df9bb9dedb5433": "Incluir definições portáteis de MCP na sincronização via Git",
+  "2e6aeae18aa50d98": "As verificações de segurança bloquearam a sincronização.",
+  "39cdbc8b84b17c6f": [
+    "Ausentes no destino: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "400f75805ed11740": "Inclua definições portáteis de MCP. As referências a segredos precisam ser verificadas no destino.",
+  "4af2b8c07dc4597d": "Enviar para outro ambiente conectado",
+  "529e0dbf6e537e78": "As alterações revisadas serão gravadas em {host}.",
+  "55b4b083e71f9916": "Incluir definições portáteis de MCP na sincronização via Git",
+  "56573bb72f48c3a4": "Alterações do Harness enviadas",
+  "56a9ce5ea39af8e2": "Não há diferenças no Harness portátil entre os dois ambientes.",
+  "575acd0e90bf400b": "Enviar as alterações do Harness?",
+  "57b8568730d37aab": "Falha ao sincronizar o Harness",
+  "64f65e7c1e66e0b6": "Não rastreado",
+  "6e8603ed8778d343": "Bloqueado pela organização",
+  "72236e08fdbc9bfd": "Modificado",
+  "76ba386d44714717": "Adicionado",
+  "94c79e955e903f6e": "Confirmar e enviar",
+  "9a37a8ae33072b13": "Só no destino",
+  "9dd9ed734f047708": "Pré-visualizar diferenças",
+  "9e9a13dc969baed5": "Aplicar {files} alterações de arquivos e {servers} alterações de servidores MCP em {host}?",
+  "b15b490a6b93f51b": "Conflito",
+  "b8be1d5f156ecf1f": "Desativado ao importar",
+  "c0ecf665a2affc08": "Bloqueado pela organização",
+  "c46795e0f5c9e29d": "Nenhum ambiente conectado com acesso de gravação oferece sincronização do Harness.",
+  "c8eb7c7c95521c3d": "Excluir arquivos que existem apenas no destino",
+  "c959341cad7960e5": [
+    "Alterações para ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "db0ce314e4bcc242": "Revisar o envio do Harness",
+  "df1b3dddecd4659f": "Excluir arquivos que existem apenas no destino",
+  "f3c271e99d8d70c1": "Sua organização desativou os plugins externos.",
+  "f93c918381c8cfa9": "Incluir definições portáteis de MCP"
 }

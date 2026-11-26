@@ -663,11 +663,16 @@ const layerHarness = Layer.mergeAll(HarnessLibraryImporter.layer, HarnessExporte
   Layer.provideMerge(HarnessLibraryStore.layer),
   Layer.provideMerge(PluginHost.layer),
   Layer.provideMerge(
+    HarnessSyncService.layer.pipe(
+      Layer.provide(SecretResolver.layer.pipe(Layer.provide(layerServerSettings))),
+      Layer.provide(ServerSecretStore.layer),
+    ),
+  ),
+  Layer.provideMerge(
     Layer.mergeAll(
       HarnessApprovalAuditStore.layer,
       HarnessHooksService.layer,
       HarnessMemoryStore.layer,
-      HarnessSyncService.layer,
       HarnessImporter.layer,
       McpGateway.layer.pipe(
         Layer.provide(SecretResolver.layer.pipe(Layer.provide(layerServerSettings))),

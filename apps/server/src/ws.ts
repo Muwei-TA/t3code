@@ -4335,6 +4335,21 @@ export const layerWsRpc = (
             onNone: () => harnessUnavailable("HarnessMemoryStore"),
             onSome: (memory) => authorizeEffect(AuthSettingsWriteScope, memory.removeMemory(input)),
           }),
+        [WS_METHODS.harnessSyncExportBundle]: (input) =>
+          Option.match(harnessSyncOption, {
+            onNone: () => harnessUnavailable("HarnessSyncService"),
+            onSome: (sync) => sync.exportBundle(input),
+          }),
+        [WS_METHODS.harnessSyncPreviewReceive]: (input) =>
+          Option.match(harnessSyncOption, {
+            onNone: () => harnessUnavailable("HarnessSyncService"),
+            onSome: (sync) => sync.previewReceive(input),
+          }),
+        [WS_METHODS.harnessSyncApplyReceive]: (input) =>
+          Option.match(harnessSyncOption, {
+            onNone: () => harnessUnavailable("HarnessSyncService"),
+            onSome: (sync) => sync.applyReceive(input),
+          }),
         [WS_METHODS.harnessSyncStatus]: () =>
           Option.match(harnessSyncOption, {
             onNone: () => harnessUnavailable("HarnessSyncService"),

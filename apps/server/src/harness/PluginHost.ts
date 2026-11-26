@@ -1025,6 +1025,7 @@ export const layer = Layer.effect(
       const resolved = yield* store.resolveWorkspace();
       return {
         allowsHarness: resolved.managedPolicyAllowsHarness,
+        allowsPlugins: store.managedPolicyAllowsPlugins,
         allowsStdio: resolved.managedPolicyAllowsStdio,
         organization: resolved.managedPolicyOrganization,
       };
@@ -1255,7 +1256,7 @@ export const layer = Layer.effect(
               : "digest_changed";
 
         const shouldBeActive =
-          policy.allowsHarness &&
+          policy.allowsPlugins &&
           enabled &&
           trustStatus === "trusted" &&
           (!bundle.hasCommandHooks || policy.allowsStdio) &&
@@ -1327,6 +1328,7 @@ export const layer = Layer.effect(
         pluginsDir: root,
         plugins: views,
         managedPolicyAllowsHarness: policy.allowsHarness,
+        managedPolicyAllowsPlugins: policy.allowsPlugins,
         managedPolicyOrganization: policy.organization,
       } satisfies HarnessPluginsSnapshot;
     });
@@ -1400,7 +1402,7 @@ export const layer = Layer.effect(
         return yield* mutex.withPermits(1)(
           Effect.gen(function* () {
             const policy = yield* readPolicy();
-            if (!policy.allowsHarness) {
+            if (!policy.allowsPlugins) {
               return yield* new HarnessError({
                 code: "policy_denied",
                 detail: "Portable harness plugins are disabled by managed policy.",
@@ -1463,7 +1465,7 @@ export const layer = Layer.effect(
         return yield* mutex.withPermits(1)(
           Effect.gen(function* () {
             const policy = yield* readPolicy();
-            if (!policy.allowsHarness) {
+            if (!policy.allowsPlugins) {
               return yield* new HarnessError({
                 code: "policy_denied",
                 detail: "Portable harness plugins are disabled by managed policy.",
@@ -1498,6 +1500,12 @@ export const layer = Layer.effect(
       setEnabled: Effect.fn("PluginHost.setEnabled")(function* (input) {
         return yield* mutex.withPermits(1)(
           Effect.gen(function* () {
+            if (!store.managedPolicyAllowsPlugins) {
+              return yield* new HarnessError({
+                code: "policy_denied",
+                detail: "Portable harness plugins are disabled by managed policy.",
+              });
+            }
             const state = yield* readState();
             yield* writeState({
               version: 1,
@@ -1538,6 +1546,12 @@ export const layer = Layer.effect(
       }),
 
       reload: Effect.fn("PluginHost.reload")(function* (input) {
+        if (!store.managedPolicyAllowsPlugins) {
+          return yield* new HarnessError({
+            code: "policy_denied",
+            detail: "Portable harness plugins are disabled by managed policy.",
+          });
+        }
         return yield* mutex.withPermits(1)(
           discoverAndSnapshot({
             reconcile: true,

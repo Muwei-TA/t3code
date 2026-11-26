@@ -1152,7 +1152,10 @@ function ThreadSettingsOptionsItem(props: {
         ...(manifest.rules.length > 0
           ? [
               `${gt("Portable rules")}: ${manifest.rules.length} (${manifest.contextUsedBytes}/${manifest.contextBudgetBytes} B)`,
-              ...manifest.rules.map((rule) => `• ${rule.id} (${rule.apply}/${rule.status})`),
+              ...manifest.rules.map(
+                (rule) =>
+                  `• ${rule.id} (${rule.apply}/${rule.status})${rule.lockedByPolicy ? ` · ${gt("Locked by organization")}` : ""}`,
+              ),
             ]
           : []),
         ...(manifest.commandsCount > 0

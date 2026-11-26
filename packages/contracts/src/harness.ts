@@ -465,6 +465,7 @@ export const HarnessRuleEntry = Schema.Struct({
   enabled: Schema.Boolean,
   effectiveEnabled: Schema.Boolean,
   overriddenByProject: Schema.Boolean,
+  lockedByPolicy: Schema.optionalKey(Schema.Boolean),
   sourcePath: Schema.String,
   contentDigest: Schema.String,
   bytes: NonNegativeInt,
@@ -825,6 +826,7 @@ export const ThreadContextRuleItem = Schema.Struct({
   scope: HarnessMcpServerScope,
   apply: HarnessRuleApplyMode,
   status: Schema.Literals(["inlined", "on-demand", "degraded", "deduplicated", "disabled"]),
+  lockedByPolicy: Schema.optionalKey(Schema.Boolean),
   bytes: NonNegativeInt,
   reason: Schema.optionalKey(Schema.String),
 });
@@ -1024,6 +1026,7 @@ export const HarnessPluginsSnapshot = Schema.Struct({
   pluginsDir: Schema.String,
   plugins: Schema.Array(HarnessPluginView),
   managedPolicyAllowsHarness: Schema.Boolean,
+  managedPolicyAllowsPlugins: Schema.optionalKey(Schema.Boolean),
   managedPolicyOrganization: Schema.NullOr(Schema.String),
 });
 export type HarnessPluginsSnapshot = typeof HarnessPluginsSnapshot.Type;
@@ -1268,6 +1271,7 @@ export const HarnessSyncStatus = Schema.Struct({
   secretFindings: Schema.Array(HarnessSyncSecretFinding),
   canPush: Schema.Boolean,
   managedPolicyAllowsHarness: Schema.Boolean,
+  includePortableMcpServers: Schema.optionalKey(Schema.Boolean),
   lastError: Schema.NullOr(Schema.String),
 });
 export type HarnessSyncStatus = typeof HarnessSyncStatus.Type;
@@ -1275,6 +1279,7 @@ export type HarnessSyncStatus = typeof HarnessSyncStatus.Type;
 export const HarnessSyncConfigureInput = Schema.Struct({
   remoteUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
   branch: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+  includePortableMcpServers: Schema.optionalKey(Schema.Boolean),
 });
 export type HarnessSyncConfigureInput = typeof HarnessSyncConfigureInput.Type;
 
@@ -1322,9 +1327,84 @@ export const HarnessSyncPullResult = Schema.Struct({
   updatedFiles: Schema.Array(Schema.String),
   skippedFiles: Schema.optionalKey(Schema.Array(Schema.String)),
   conflicts: Schema.optionalKey(Schema.Array(HarnessSyncPullConflict)),
+  importedDisabledMcpIds: Schema.optionalKey(Schema.Array(HarnessMcpServerId)),
+  missingSecretRefs: Schema.optionalKey(Schema.Array(Schema.String)),
   summary: Schema.String,
 });
 export type HarnessSyncPullResult = typeof HarnessSyncPullResult.Type;
+
+export const HarnessSyncExportBundleInput = Schema.Struct({
+  includeMcpServers: Schema.optionalKey(Schema.Boolean),
+});
+export type HarnessSyncExportBundleInput = typeof HarnessSyncExportBundleInput.Type;
+
+export const HarnessPortableMcpCatalog = Schema.Struct({
+  version: Schema.Literal(1),
+  servers: Schema.Array(
+    Schema.Struct({ id: HarnessMcpServerId, config: HarnessMcpServerConfig }),
+  ).check(Schema.isMaxLength(128)),
+});
+export type HarnessPortableMcpCatalog = typeof HarnessPortableMcpCatalog.Type;
+
+const HarnessSyncBundleDigest = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/u));
+const HarnessSyncBundlePath = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512));
+const HarnessSyncBundle = Schema.Struct({
+  version: Schema.Literal(1),
+  bundleDigest: HarnessSyncBundleDigest,
+  files: Schema.Array(
+    Schema.Struct({
+      path: HarnessSyncBundlePath,
+      text: Schema.String.check(Schema.isMaxLength(512 * 1024)),
+    }),
+  ).check(Schema.isMaxLength(512)),
+  portableMcpServers: Schema.optionalKey(HarnessPortableMcpCatalog),
+});
+export type HarnessSyncBundle = typeof HarnessSyncBundle.Type;
+
+export const HarnessSyncExportBundleResult = Schema.Struct({
+  bundle: Schema.NullOr(HarnessSyncBundle),
+  canExport: Schema.Boolean,
+  secretFindings: Schema.Array(HarnessSyncSecretFinding),
+});
+export type HarnessSyncExportBundleResult = typeof HarnessSyncExportBundleResult.Type;
+
+export const HarnessSyncPreviewReceiveInput = Schema.Struct({ bundle: HarnessSyncBundle });
+export type HarnessSyncPreviewReceiveInput = typeof HarnessSyncPreviewReceiveInput.Type;
+export const HarnessSyncPreviewReceiveResult = Schema.Struct({
+  previewDigest: Schema.NullOr(HarnessSyncBundleDigest),
+  files: Schema.Array(HarnessSyncDiffFile),
+  mcpServerDiffs: Schema.Array(
+    Schema.Struct({
+      id: HarnessMcpServerId,
+      status: Schema.Literals(["added", "modified", "conflict"]),
+      disabledOnImport: Schema.Boolean,
+    }),
+  ),
+  missingSecretRefs: Schema.Array(Schema.String),
+  secretFindings: Schema.Array(HarnessSyncSecretFinding),
+  canApply: Schema.Boolean,
+  diffSummary: Schema.String,
+});
+export type HarnessSyncPreviewReceiveResult = typeof HarnessSyncPreviewReceiveResult.Type;
+
+export const HarnessSyncApplyReceiveInput = Schema.Struct({
+  bundle: HarnessSyncBundle,
+  expectedPreviewDigest: HarnessSyncBundleDigest,
+  selectedPaths: Schema.optionalKey(
+    Schema.Array(HarnessSyncBundlePath).check(Schema.isMaxLength(512)),
+  ),
+  includeMcpServers: Schema.optionalKey(Schema.Boolean),
+  deleteRemovedFiles: Schema.optionalKey(Schema.Boolean),
+});
+export type HarnessSyncApplyReceiveInput = typeof HarnessSyncApplyReceiveInput.Type;
+
+export const HarnessSyncApplyReceiveResult = Schema.Struct({
+  appliedPaths: Schema.Array(Schema.String),
+  importedDisabledMcpIds: Schema.Array(HarnessMcpServerId),
+  missingSecretRefs: Schema.Array(Schema.String),
+  summary: Schema.String,
+});
+export type HarnessSyncApplyReceiveResult = typeof HarnessSyncApplyReceiveResult.Type;
 
 export const HarnessErrorCode = Schema.Literals([
   "policy_denied",

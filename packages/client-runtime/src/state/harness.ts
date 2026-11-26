@@ -250,6 +250,18 @@ export function createHarnessEnvironmentAtoms<R, E>(
       label: "environment-command:harness:memory:remove",
       tag: WS_METHODS.harnessMemoryRemove,
     }),
+    exportSyncBundle: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:sync:export-bundle",
+      tag: WS_METHODS.harnessSyncExportBundle,
+    }),
+    previewReceiveSync: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:sync:preview-receive",
+      tag: WS_METHODS.harnessSyncPreviewReceive,
+    }),
+    applyReceiveSync: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:sync:apply-receive",
+      tag: WS_METHODS.harnessSyncApplyReceive,
+    }),
     syncStatusQuery: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:harness:sync:status",
       tag: WS_METHODS.harnessSyncStatus,

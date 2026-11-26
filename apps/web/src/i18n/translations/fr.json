@@ -13456,5 +13456,41 @@
       "c": "Paramètres → Tâches planifiées"
     },
     "."
-  ]
+  ],
+  "2e6aeae18aa50d98": "Les contrôles de sécurité ont bloqué la synchronisation.",
+  "30271f9f45806678": "Aperçu des différences",
+  "39cdbc8b84b17c6f": [
+    "Manquants dans la cible : ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "400f75805ed11740": "Incluez les définitions MCP portables. Les références aux secrets doivent être vérifiées dans l’environnement cible.",
+  "55b4b083e71f9916": "Inclure les définitions MCP portables dans la synchronisation Git",
+  "56573bb72f48c3a4": "Modifications de Harness envoyées",
+  "56a9ce5ea39af8e2": "Les deux environnements ont la même configuration Harness portable.",
+  "57b8568730d37aab": "Échec de la synchronisation de Harness",
+  "64f65e7c1e66e0b6": "Non suivi",
+  "72236e08fdbc9bfd": "Modifié",
+  "9a37a8ae33072b13": "Uniquement dans la cible",
+  "ad36b814f6a09f97": "Confirmer et envoyer",
+  "b15b490a6b93f51b": "Conflit",
+  "b8be1d5f156ecf1f": "Désactivé à l’importation",
+  "c0ecf665a2affc08": "Verrouillé par l’organisation",
+  "c46795e0f5c9e29d": "Aucun environnement connecté avec accès en écriture ne prend en charge la synchronisation de Harness.",
+  "c959341cad7960e5": [
+    "Modifications pour ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "ce38d39a69faaa07": "Sélectionner l’environnement cible",
+  "da23c7158edc3453": "Environnement cible",
+  "da64f760d0040b9a": "Envoyer vers un autre environnement connecté",
+  "df1b3dddecd4659f": "Supprimer les fichiers présents uniquement dans la cible",
+  "f3c271e99d8d70c1": "Votre organisation a désactivé les plugins externes."
 }

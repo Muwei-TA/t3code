@@ -52,6 +52,7 @@ import {
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
+import { HarnessEnvironmentSync } from "./HarnessEnvironmentSync";
 import { SettingsSection } from "./settingsLayout";
 import { useSearchableSetting } from "./settingsSearch";
 
@@ -371,6 +372,8 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
   const [remoteUrl, setRemoteUrl] = useState("");
   const [branchDraft, setBranchDraft] = useState<string | null>(null);
   const branch = branchDraft ?? status?.branch ?? "main";
+  const [portableMcpDraft, setPortableMcpDraft] = useState<boolean | null>(null);
+  const portableMcp = portableMcpDraft ?? status?.includePortableMcpServers ?? false;
   const [commitMessage, setCommitMessage] = useState("");
   const [preview, setPreview] = useState<HarnessSyncPreviewPushResult | null>(null);
   const [conflicts, setConflicts] = useState<ReadonlyArray<HarnessSyncPullConflict>>([]);
@@ -392,7 +395,9 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
     const res = await pullSync({ environmentId, input: force ? { force: true } : {} });
     setBusy(false);
     if (res._tag === "Success") {
-      const remainingConflicts = force ? [] : (res.value.conflicts ?? []);
+      const remainingConflicts = (res.value.conflicts ?? []).filter(
+        ({ path }) => !force || path === "mcp-servers.portable.json",
+      );
       setConflicts(remainingConflicts);
       setPreview(null);
       if (remainingConflicts.length === 0) {
@@ -414,6 +419,7 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
 
   return (
     <div className="space-y-4">
+      <HarnessEnvironmentSync key={environmentId} environmentId={environmentId} />
       <SettingsSection {...setting("harness-mcp")} title={gt("Harness Git Sync")}>
         <div className="space-y-4 px-4 py-3">
           <p className="text-xs text-muted-foreground">
@@ -487,6 +493,18 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
             </Alert>
           ) : null}
 
+          <label className="flex items-start gap-2 text-xs">
+            <Checkbox
+              checked={portableMcp}
+              disabled={busy || !canWriteSettings}
+              onCheckedChange={(checked) => {
+                setPortableMcpDraft(checked === true);
+                setPreview(null);
+              }}
+            />
+            <T>Include portable MCP definitions in Git sync</T>
+          </label>
+
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-1 sm:col-span-2">
               <label className="text-xs font-medium">{gt("Git Remote URL")}</label>
@@ -520,6 +538,7 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
                   environmentId,
                   input: {
                     remoteUrl: TrimmedNonEmptyString.make(targetUrl),
+                    includePortableMcpServers: portableMcp,
                     ...(branch.trim() ? { branch: TrimmedNonEmptyString.make(branch.trim()) } : {}),
                   },
                 });
@@ -527,6 +546,7 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
                 if (res._tag === "Success") {
                   setOverrideStatus(res.value);
                   setBranchDraft(null);
+                  setPortableMcpDraft(null);
                   setConflicts([]);
                   setPreview(null);
                   toastManager.add({ type: "success", title: gt("Harness Git remote saved") });
@@ -568,7 +588,13 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
             <Button
               size="sm"
               variant="outline"
-              disabled={!canSyncRemote || !status?.initialized || !status.remoteUrl || busy}
+              disabled={
+                !canSyncRemote ||
+                !status?.initialized ||
+                !status.remoteUrl ||
+                portableMcpDraft !== null ||
+                busy
+              }
               onClick={() => void pull(false)}
             >
               <ArrowDownToLineIcon className="size-3.5" />
@@ -598,7 +624,13 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
               <Button
                 size="sm"
                 variant="destructive"
-                disabled={!canSyncRemote || !status?.initialized || !status.remoteUrl || busy}
+                disabled={
+                  !canSyncRemote ||
+                  !status?.initialized ||
+                  !status.remoteUrl ||
+                  portableMcpDraft !== null ||
+                  busy
+                }
                 onClick={() => void pull(true)}
               >
                 <T>Force Pull</T>

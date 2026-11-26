@@ -427,6 +427,16 @@ const make = Effect.gen(function* () {
   const pluginHostOption = yield* Effect.serviceOption(PluginHost.PluginHost);
 
   const harnessDir = store.harnessDir;
+  const lockedRuleIds = new Set(store.lockedRules.map((rule) => rule.id.toLowerCase()));
+  const assertRuleMutable = (id: HarnessRuleId) =>
+    lockedRuleIds.has(id.toLowerCase())
+      ? Effect.fail(
+          new HarnessError({
+            code: "policy_denied",
+            detail: "This harness rule is locked by your organization.",
+          }),
+        )
+      : Effect.void;
   const mountsRoot = path.join(serverConfig.stateDir, "harness-mounts");
   const issuedMounts = new Set<string>();
   const writeLock = yield* Semaphore.make(1);
@@ -913,6 +923,7 @@ const make = Effect.gen(function* () {
       invalidEntries,
     });
     const rules: Array<HarnessRuleEntry> = rawUserRules
+      .filter((item) => !lockedRuleIds.has(item.id.toLowerCase()))
       .map((item) => {
         const enabled = item.frontmatterEnabled && !userDisabledRules.has(item.id);
         const overriddenByProject = overrides.disabledRules.has(item.id);
@@ -922,6 +933,20 @@ const make = Effect.gen(function* () {
         return { ...rest, enabled, effectiveEnabled, overriddenByProject };
       })
       .sort((a, b) => a.id.localeCompare(b.id));
+    rules.unshift(
+      ...store.lockedRules.map((rule): HarnessRuleEntry => ({
+        ...rule,
+        scope: "user",
+        globs: rule.globs ?? [],
+        enabled: true,
+        effectiveEnabled: overrides.managedPolicyAllowsHarness,
+        overriddenByProject: false,
+        lockedByPolicy: true,
+        sourcePath: store.policyPath,
+        contentDigest: sha256Hex(rule.body),
+        bytes: NonNegativeInt.make(Buffer.byteLength(rule.body, "utf8")),
+      })),
+    );
 
     const rawUserCommands = yield* loadCommandsFromDir({
       commandsDir: path.join(harnessDir, "commands"),
@@ -1012,7 +1037,7 @@ const make = Effect.gen(function* () {
           }
         }
         for (const r of contrib.rules) {
-          if (!existingRuleIds.has(r.id)) {
+          if (!existingRuleIds.has(r.id) && !lockedRuleIds.has(r.id.toLowerCase())) {
             existingRuleIds.add(r.id);
             rules.push(r);
           }
@@ -1116,6 +1141,7 @@ const make = Effect.gen(function* () {
     "HarnessLibraryStore.upsertUserRule",
   )(function* (input) {
     yield* assertPolicyAllows();
+    yield* assertRuleMutable(input.id);
     const rulePath = path.join(harnessDir, "rules", `${input.id}.md`);
     const content = formatRuleMarkdown({
       description: input.description,
@@ -1139,6 +1165,7 @@ const make = Effect.gen(function* () {
     "HarnessLibraryStore.removeUserRule",
   )(function* ({ id, workspaceRoot }) {
     yield* assertPolicyAllows();
+    yield* assertRuleMutable(id);
     const rulePath = path.join(harnessDir, "rules", `${id}.md`);
     yield* withLibraryWrite(removeLibraryEntry(rulePath, `Portable rule "${id}"`));
     yield* store.setLibraryItemDisabled({ kind: "rule", id, disabled: false }).pipe(Effect.ignore);
@@ -1149,6 +1176,7 @@ const make = Effect.gen(function* () {
     "HarnessLibraryStore.setRuleEnabled",
   )(function* ({ id, enabled, workspaceRoot }) {
     yield* assertPolicyAllows();
+    yield* assertRuleMutable(id);
     yield* store.setLibraryItemDisabled({ kind: "rule", id, disabled: !enabled });
     return yield* getSnapshot(workspaceRoot);
   });

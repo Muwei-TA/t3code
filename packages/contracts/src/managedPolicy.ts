@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { HarnessRuleId } from "./harness.ts";
 import { ProviderDriverKind, ProviderInstanceEnvironmentVariableName } from "./providerInstance.ts";
 import { isRuntimeModeAbove, RuntimeMode } from "./providerPolicy.ts";
 
@@ -66,6 +67,22 @@ export type ManagedUpdatesPolicy = typeof ManagedUpdatesPolicy.Type;
 export const ManagedPolicyClient = Schema.Literals(["desktop", "local-browser", "remote"]);
 export type ManagedPolicyClient = typeof ManagedPolicyClient.Type;
 
+const ManagedHarnessRule = Schema.Struct({
+  id: HarnessRuleId,
+  apply: Schema.Literals(["always", "glob"]),
+  globs: Schema.optionalKey(
+    Schema.NonEmptyArray(TrimmedNonEmptyString.check(Schema.isMaxLength(512))).check(
+      Schema.isMaxLength(32),
+    ),
+  ),
+  description: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+  body: TrimmedNonEmptyString.check(Schema.isMaxLength(262_144)),
+}).check(
+  Schema.makeFilter((rule) => rule.apply !== "glob" || rule.globs !== undefined, {
+    expected: "a glob rule with at least one glob",
+  }),
+);
+
 /**
  * Restrictions that are not settings: users cannot opt out of them anywhere. For the boolean
  * capabilities, omitted means allowed and only `false` restricts.
@@ -87,6 +104,10 @@ export const ManagedPolicyLimits = Schema.Struct({
   harness: Schema.optionalKey(Schema.Boolean),
   /** `false` blocks spawning local stdio MCP servers through the portable harness. */
   harnessMcpStdio: Schema.optionalKey(Schema.Boolean),
+  harnessPlugins: Schema.optionalKey(Schema.Boolean),
+  harnessLockedRules: Schema.optionalKey(
+    Schema.Array(ManagedHarnessRule).check(Schema.isMaxLength(64)),
+  ),
   providers: Schema.optionalKey(ManagedProviderLimits),
   updates: Schema.optionalKey(ManagedUpdatesPolicy),
 });
@@ -104,6 +125,8 @@ export const ManagedPolicySummaryLimits = Schema.Struct({
   previewTunnel: Schema.optionalKey(Schema.Boolean),
   harness: Schema.optionalKey(Schema.Boolean),
   harnessMcpStdio: Schema.optionalKey(Schema.Boolean),
+  harnessPlugins: Schema.optionalKey(Schema.Boolean),
+  harnessLockedRuleIds: Schema.optionalKey(Schema.Array(HarnessRuleId)),
   providers: Schema.optionalKey(
     Schema.Struct({
       /** Absent means every driver is allowed. */
@@ -221,6 +244,7 @@ const CAPABILITY_LABELS = {
   previewTunnel: "opening this machine's local servers on other devices",
   harness: "portable harness extensions",
   harnessMcpStdio: "local stdio MCP servers",
+  harnessPlugins: "external harness plugins",
 } as const;
 
 /** Why a capability is unavailable on an environment with `summary`, or undefined when allowed. */

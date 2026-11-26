@@ -13463,5 +13463,41 @@
       "c": "Inställningar → Schemalagda uppgifter"
     },
     "."
-  ]
+  ],
+  "2e6aeae18aa50d98": "Säkerhetskontrollerna blockerade synkroniseringen.",
+  "30271f9f45806678": "Förhandsvisa skillnader",
+  "39cdbc8b84b17c6f": [
+    "Saknas i målet: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "400f75805ed11740": "Inkludera portabla MCP-definitioner. Referenser till hemligheter måste verifieras i målet.",
+  "55b4b083e71f9916": "Inkludera portabla MCP-definitioner i Git-synkroniseringen",
+  "56573bb72f48c3a4": "Harness-ändringar skickade",
+  "56a9ce5ea39af8e2": "De två miljöerna har inga skillnader i portabelt Harness.",
+  "57b8568730d37aab": "Harness-synkroniseringen misslyckades",
+  "64f65e7c1e66e0b6": "Ospårad",
+  "72236e08fdbc9bfd": "Ändrad",
+  "9a37a8ae33072b13": "Bara i målet",
+  "ad36b814f6a09f97": "Bekräfta och skicka",
+  "b15b490a6b93f51b": "Konflikt",
+  "b8be1d5f156ecf1f": "Inaktiveras vid import",
+  "c0ecf665a2affc08": "Låst av organisationen",
+  "c46795e0f5c9e29d": "Ingen ansluten miljö med skrivåtkomst stöder Harness-synkronisering.",
+  "c959341cad7960e5": [
+    "Ändringar för ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "ce38d39a69faaa07": "Välj målmiljö",
+  "da23c7158edc3453": "Målmiljö",
+  "da64f760d0040b9a": "Skicka till en annan ansluten miljö",
+  "df1b3dddecd4659f": "Ta bort filer som bara finns i målet",
+  "f3c271e99d8d70c1": "Din organisation har inaktiverat externa pluginmoduler."
 }

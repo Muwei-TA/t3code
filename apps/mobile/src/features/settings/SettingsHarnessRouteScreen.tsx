@@ -1,3 +1,4 @@
+import { confirmTwoStepRemoteAction } from "./confirmTwoStepRemoteAction";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import {
   isAtomCommandInterrupted,
@@ -74,32 +75,6 @@ function splitArgs(raw: string): string[] {
       return token.slice(1, -1);
     }
     return token;
-  });
-}
-
-function confirmTwoStepRemoteAction(input: {
-  readonly reviewTitle: string;
-  readonly reviewMessage: string;
-  readonly reviewConfirmText: string;
-  readonly finalTitle: string;
-  readonly finalMessage: string;
-  readonly finalConfirmText: string;
-  readonly destructive?: boolean;
-  readonly onConfirmed: () => void;
-}) {
-  Dialog.confirm({
-    title: input.reviewTitle,
-    message: input.reviewMessage,
-    confirmText: input.reviewConfirmText,
-    onConfirm: () => {
-      Dialog.confirm({
-        title: input.finalTitle,
-        message: input.finalMessage,
-        confirmText: input.finalConfirmText,
-        ...(input.destructive ? { destructive: true } : {}),
-        onConfirm: input.onConfirmed,
-      });
-    },
   });
 }
 

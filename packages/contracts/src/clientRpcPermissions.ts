@@ -150,6 +150,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.harnessMemoryUpsert]: AuthSettingsWriteScope,
   [WS_METHODS.harnessMemoryRemove]: AuthSettingsWriteScope,
   [WS_METHODS.harnessSyncConfigure]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSyncExportBundle]: AuthOrchestrationReadScope,
+  [WS_METHODS.harnessSyncPreviewReceive]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessSyncApplyReceive]: AuthSettingsWriteScope,
   [WS_METHODS.harnessSyncPreviewPush]: AuthOrchestrationReadScope,
   [WS_METHODS.harnessSyncPush]: AuthSourceControlWriteScope,
   [WS_METHODS.harnessSyncPull]: AuthSourceControlWriteScope,
@@ -213,6 +216,15 @@ export function clientRpcRequiredScopes(
   }
   if (method === WS_METHODS.harnessHookTest) {
     return [AuthSettingsWriteScope, AuthTerminalOperateScope];
+  }
+  if (
+    method === WS_METHODS.harnessSyncExportBundle &&
+    typeof input === "object" &&
+    input !== null &&
+    "includeMcpServers" in input &&
+    input.includeMcpServers === true
+  ) {
+    return [AuthOrchestrationReadScope, AuthSettingsWriteScope];
   }
   if (method === WS_METHODS.harnessSyncPush || method === WS_METHODS.harnessSyncPull) {
     return [AuthSettingsWriteScope, AuthSourceControlWriteScope];

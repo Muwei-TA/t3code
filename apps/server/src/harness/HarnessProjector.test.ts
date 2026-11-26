@@ -48,6 +48,46 @@ function makeLibrary(overrides?: Partial<HarnessLibrarySnapshot>): HarnessLibrar
 }
 
 describe("HarnessProjector", () => {
+  it("inlines locked organization rules before user context despite a small user budget", () => {
+    const body = "Use the organization checklist.";
+    const id = HarnessRuleId.make("org-guide");
+    const base = makeLibrary();
+    const projected = projectHarnessContext({
+      harnessCapabilities: DEFAULT_HARNESS_CAPABILITIES,
+      supportsMcpTools: true,
+      library: makeLibrary({
+        maxSystemContextBytes: PositiveInt.make(10),
+        userAgentsMd: {
+          ...base.userAgentsMd,
+          exists: true,
+          body: "User instructions",
+          bytes: NonNegativeInt.make(17),
+        },
+        rules: [
+          {
+            id,
+            scope: "user",
+            apply: "always",
+            globs: [],
+            enabled: true,
+            effectiveEnabled: true,
+            overriddenByProject: false,
+            lockedByPolicy: true,
+            sourcePath: "/policy.json",
+            contentDigest: "fixture",
+            bytes: NonNegativeInt.make(body.length),
+            body,
+          },
+        ],
+      }),
+    });
+    expect(projected.segments[0]?.text).toContain(body);
+    expect(projected.rules).toContainEqual(
+      expect.objectContaining({ id, lockedByPolicy: true, status: "inlined" }),
+    );
+    expect(projected.contextUsedBytes).toBeLessThanOrEqual(projected.contextBudgetBytes);
+  });
+
   it("matches rule globs including **, *, ?, braces, and basename patterns", () => {
     expect(matchesRuleGlob("**/*.ts", "apps/server/src/index.ts")).toBe(true);
     expect(matchesRuleGlob("**/*.{ts,tsx}", "apps/web/src/App.tsx")).toBe(true);

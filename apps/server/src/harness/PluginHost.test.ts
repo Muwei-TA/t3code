@@ -17,7 +17,11 @@ import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 import * as PluginHost from "./PluginHost.ts";
 
-function makeTestLayer(baseDir: string, paths: ServerConfig.ServerDerivedPaths) {
+function makeTestLayer(
+  baseDir: string,
+  paths: ServerConfig.ServerDerivedPaths,
+  denyPlugins = false,
+) {
   const configLayer = Layer.succeed(ServerConfig.ServerConfig, {
     ...paths,
     mode: "web",
@@ -27,7 +31,9 @@ function makeTestLayer(baseDir: string, paths: ServerConfig.ServerDerivedPaths) 
     baseDir,
   } as unknown as ServerConfig.ServerConfig["Service"]);
   const policyLayer = Layer.succeed(ManagedPolicy.ManagedPolicy, {
-    document: undefined,
+    document: denyPlugins
+      ? { schemaVersion: 1, organization: "Fixture", limits: { harnessPlugins: false } }
+      : undefined,
     source: undefined,
     error: undefined,
   } as unknown as ManagedPolicy.ManagedPolicy["Service"]);
@@ -58,6 +64,57 @@ function makeTestLayer(baseDir: string, paths: ServerConfig.ServerDerivedPaths) 
 }
 
 describe("PluginHost", () => {
+  it.effect("keeps external plugins inactive under policy and rejects activation operations", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "t3-plugins-policy-" }),
+      );
+      const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+      const source = path.join(baseDir, "bundle");
+      yield* fs.makeDirectory(path.join(source, "skills", "example"), { recursive: true });
+      yield* fs.writeFileString(
+        path.join(source, "t3-plugin.json"),
+        '{"id":"demo-plugin","name":"Demo","version":"1.0.0"}',
+      );
+      yield* fs.writeFileString(
+        path.join(source, "skills", "example", "SKILL.md"),
+        "---\nname: example\n---\nExample\n",
+      );
+      const installed = yield* Effect.gen(function* () {
+        const host = yield* PluginHost.PluginHost;
+        const snapshot = yield* host.install({ sourcePath: TrimmedNonEmptyString.make(source) });
+        const plugin = snapshot.plugins[0]!;
+        return (yield* host.trust({
+          id: plugin.id,
+          expectedDigest: TrimmedNonEmptyString.make(plugin.contentDigest),
+        })).plugins[0]!;
+      }).pipe(Effect.provide(makeTestLayer(baseDir, paths)));
+      expect(installed.active).toBe(true);
+      yield* Effect.gen(function* () {
+        const host = yield* PluginHost.PluginHost;
+        const snapshot = yield* host.list();
+        expect(snapshot.managedPolicyAllowsHarness).toBe(true);
+        expect(snapshot.managedPolicyAllowsPlugins).toBe(false);
+        expect(snapshot.plugins[0]?.active).toBe(false);
+        expect(host.getActiveContributions()).toEqual([]);
+        const operations = [
+          host.install({ sourcePath: TrimmedNonEmptyString.make(source) }),
+          host.trust({
+            id: installed.id,
+            expectedDigest: TrimmedNonEmptyString.make(installed.contentDigest),
+          }),
+          host.setEnabled({ id: installed.id, enabled: true }),
+          host.reload({}),
+        ];
+        for (const operation of operations)
+          expect((yield* operation.pipe(Effect.flip)).code).toBe("policy_denied");
+        expect((yield* host.remove({ id: installed.id })).plugins).toEqual([]);
+      }).pipe(Effect.provide(makeTestLayer(baseDir, paths, true)));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect(
     "enforces owner digest trust, reversible Scope activation/unload, tamper detection, and .claude-plugin compatibility",
     () =>

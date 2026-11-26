@@ -266,16 +266,13 @@ export function projectHarnessContext(input: {
   readonly supportsMcpTools: boolean;
 }): ProjectedHarnessContext {
   const { library, harnessCapabilities } = input;
-  const totalBudget = library.maxSystemContextBytes;
-  const maxSegmentBytes = harnessCapabilities.maxSystemContextBytes ?? totalBudget;
-
   if (!library.managedPolicyAllowsHarness) {
     return {
       segments: [],
       skills: [],
       rules: [],
       degradedItems: [],
-      contextBudgetBytes: NonNegativeInt.make(totalBudget),
+      contextBudgetBytes: NonNegativeInt.make(library.maxSystemContextBytes),
       contextUsedBytes: NonNegativeInt.make(0),
       scaffoldBytes: NonNegativeInt.make(0),
       needsGatewayTools: false,
@@ -353,6 +350,7 @@ export function projectHarnessContext(input: {
     readonly apply: "always" | "glob" | "manual";
     readonly blockText: string;
     readonly rawBytes: number;
+    readonly lockedByPolicy?: boolean;
   }> = [];
 
   const activeMode = input.activeMode ?? null;
@@ -419,6 +417,7 @@ export function projectHarnessContext(input: {
   }
 
   // 2. Conditional user rules (`rules/*.md`)
+  const lockedBlocks: typeof candidateBlocks = [];
   let hasOnDemandOrDegradedRules = false;
   for (const rule of library.rules) {
     if (!rule.effectiveEnabled) {
@@ -428,13 +427,14 @@ export function projectHarnessContext(input: {
         apply: rule.apply,
         status: "disabled",
         bytes: rule.bytes,
+        ...(rule.lockedByPolicy ? { lockedByPolicy: true } : {}),
         reason: rule.overriddenByProject
           ? "Disabled by project t3.json."
           : "Disabled in Harness settings.",
       });
       continue;
     }
-    const forcedByMode = modeIncludedRules.has(rule.id.toLowerCase());
+    const forcedByMode = !rule.lockedByPolicy && modeIncludedRules.has(rule.id.toLowerCase());
     if (!forcedByMode && rule.apply === "manual") {
       hasOnDemandOrDegradedRules = true;
       ruleItems.push({
@@ -461,21 +461,24 @@ export function projectHarnessContext(input: {
           apply: rule.apply,
           status: "on-demand",
           bytes: rule.bytes,
+          ...(rule.lockedByPolicy ? { lockedByPolicy: true } : {}),
           reason: `Glob rule (${rule.globs.join(", ")}) did not match this turn's referenced paths; readable via harness_rule_read.`,
         });
         continue;
       }
     }
     const blockText = `<t3_rule id="${rule.id}" apply="${rule.apply}">\n${rule.body.trim()}\n</t3_rule>`;
-    candidateBlocks.push({
+    (rule.lockedByPolicy ? lockedBlocks : candidateBlocks).push({
       kind: "rule",
       id: rule.id,
       scope: rule.scope,
       apply: rule.apply,
       blockText,
       rawBytes: rule.bytes,
+      ...(rule.lockedByPolicy ? { lockedByPolicy: true } : {}),
     });
   }
+  candidateBlocks.unshift(...lockedBlocks);
 
   // 3. Explicit `$skill` mentions or Mode-included skills for non-native skills
   for (const skill of gatewaySkills) {
@@ -530,6 +533,12 @@ export function projectHarnessContext(input: {
       (input.codexSkillMount !== undefined && nativeMountSkills.length > 0));
   const scaffoldText = T3_CODE_HARNESS_SCAFFOLD_INSTRUCTIONS;
   const scaffoldByteSize = utf8Bytes(scaffoldText);
+  const lockedBudget = lockedBlocks.reduce(
+    (bytes, block) => bytes + utf8Bytes(block.blockText) + 2,
+    0,
+  );
+  const totalBudget = Math.max(library.maxSystemContextBytes, lockedBudget);
+  const maxSegmentBytes = harnessCapabilities.maxSystemContextBytes ?? totalBudget;
 
   const packWithScaffold = (includeScaffold: boolean) => {
     const accepted: Array<{ readonly text: string; readonly bytes: number }> = [];
@@ -545,7 +554,7 @@ export function projectHarnessContext(input: {
     if (
       includeScaffold &&
       scaffoldByteSize <= maxSegmentBytes &&
-      scaffoldByteSize <= remainingBudget
+      scaffoldByteSize <= remainingBudget - lockedBudget
     ) {
       remainingBudget -= scaffoldByteSize;
       currentSegmentBytes = scaffoldByteSize;
@@ -578,6 +587,7 @@ export function projectHarnessContext(input: {
             apply: candidate.apply,
             status: "inlined",
             bytes: NonNegativeInt.make(blockBytes),
+            ...(candidate.lockedByPolicy ? { lockedByPolicy: true } : {}),
           });
         }
       } else {
@@ -599,6 +609,7 @@ export function projectHarnessContext(input: {
             apply: candidate.apply,
             status: "degraded",
             bytes: NonNegativeInt.make(candidate.rawBytes),
+            ...(candidate.lockedByPolicy ? { lockedByPolicy: true } : {}),
             reason,
           });
           packedDegradedItems.push({ kind: "rule", id: candidate.id, reason });

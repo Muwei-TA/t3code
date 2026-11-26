@@ -260,6 +260,17 @@ so restart T3 Code after that.
   relay connection traces. A policy cannot turn them on. A browser that opens the server, such as
   app.t3.codes, still sends its own relay traces.
 
+### Portable Harness
+
+Set `limits.harnessPlugins` to `false` to stop external Harness plugins from activating. Users can
+still view and remove installed bundles.
+
+Put shared instructions in `limits.harnessLockedRules` to make them available to all projects on
+this environment. Give each rule a unique `id`, an `apply` value, and a Markdown `body`. Use
+`"always"` on every turn or `"glob"` with a `globs` array to match referenced file paths. Harness
+Settings identifies these rules as locked by the organization. They take priority in the portable
+context, and project overrides and environment sync cannot replace them.
+
 ### Providers
 
 `providers.allowedDrivers` lists the providers that may run, by ID: `codex` (Codex),

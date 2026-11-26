@@ -5,6 +5,7 @@ import {
   HarnessModeId,
   HarnessRuleId,
   HarnessSkillId,
+  type ManagedPolicyLimits,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -23,7 +24,7 @@ import * as HarnessStore from "./HarnessStore.ts";
 const makeTestLayer = (
   baseDir: string,
   paths: ServerConfig.ServerDerivedPaths,
-  policyOverrides?: { readonly harness?: boolean },
+  policyOverrides?: ManagedPolicyLimits,
 ) => {
   const configLayer = Layer.succeed(ServerConfig.ServerConfig, {
     ...paths,
@@ -38,7 +39,8 @@ const makeTestLayer = (
     document:
       policyOverrides === undefined
         ? undefined
-        : { version: 1, organization: "Acme Corp", limits: policyOverrides },
+        : { schemaVersion: 1, organization: "Acme Corp", limits: policyOverrides },
+    path: "/policy.json",
     source: undefined,
     error: undefined,
   } as unknown as ManagedPolicy.ManagedPolicy["Service"]);
@@ -54,6 +56,54 @@ const makeTestLayer = (
 };
 
 describe("HarnessLibraryStore", () => {
+  it.effect("locks organization rules against local edits and project overrides", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempRoot = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "t3-locked-rule-" }),
+      );
+      const baseDir = path.join(tempRoot, "home");
+      const workspaceRoot = path.join(tempRoot, "workspace");
+      const rulesDir = path.join(baseDir, "harness", "rules");
+      yield* fs.makeDirectory(rulesDir, { recursive: true });
+      yield* fs.makeDirectory(workspaceRoot, { recursive: true });
+      yield* fs.writeFileString(path.join(rulesDir, "org-guide.md"), "Local text\n");
+      yield* fs.writeFileString(
+        path.join(workspaceRoot, "t3.json"),
+        '{"harness":{"disabledRules":["org-guide"]}}',
+      );
+      const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+      const id = HarnessRuleId.make("org-guide");
+      const body = TrimmedNonEmptyString.make("Organization text");
+      yield* Effect.gen(function* () {
+        const library = yield* HarnessLibraryStore.HarnessLibraryStore;
+        const { rules } = yield* library.getSnapshot(workspaceRoot);
+        expect(rules).toEqual([
+          expect.objectContaining({
+            id,
+            body,
+            lockedByPolicy: true,
+            effectiveEnabled: true,
+            overriddenByProject: false,
+          }),
+        ]);
+        const upper = HarnessRuleId.make("ORG-GUIDE");
+        for (const mutation of [
+          library.setRuleEnabled({ id, enabled: false }),
+          library.removeUserRule({ id: upper }),
+          library.upsertUserRule({ id, apply: "always", body: "Replace the organization rule" }),
+        ]) {
+          expect((yield* mutation.pipe(Effect.flip)).code).toBe("policy_denied");
+        }
+      }).pipe(
+        Effect.provide(
+          makeTestLayer(baseDir, paths, { harnessLockedRules: [{ id, apply: "always", body }] }),
+        ),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it("rejects reserved built-in command IDs in schema decoding", () => {
     const decodeCmd = Schema.decodeUnknownOption(HarnessCommandId);
     for (const reserved of ["plan", "model", "compact", "clear", "logout", "default", "skill"]) {

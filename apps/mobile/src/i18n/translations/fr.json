@@ -6020,5 +6020,48 @@
   "674bcf1bb284d4f7": "{completed}/{total} étapes",
   "65763fd9556fa033": "Continuer l’exécution",
   "60ed1918d57cae79": "Mettre en pause après cette étape",
-  "614e5ad58a795fb5": "Arrêter"
+  "614e5ad58a795fb5": "Arrêter",
+  "28df9bb9dedb5433": "Inclure les définitions MCP portables dans la synchronisation Git",
+  "2e6aeae18aa50d98": "Les contrôles de sécurité ont bloqué la synchronisation.",
+  "39cdbc8b84b17c6f": [
+    "Manquants dans la cible : ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "400f75805ed11740": "Incluez les définitions MCP portables. Les références aux secrets doivent être vérifiées dans l’environnement cible.",
+  "4af2b8c07dc4597d": "Envoyer vers un autre environnement connecté",
+  "529e0dbf6e537e78": "Les modifications vérifiées seront enregistrées sur {host}.",
+  "55b4b083e71f9916": "Inclure les définitions MCP portables dans la synchronisation Git",
+  "56573bb72f48c3a4": "Modifications de Harness envoyées",
+  "56a9ce5ea39af8e2": "Les deux environnements ont la même configuration Harness portable.",
+  "575acd0e90bf400b": "Envoyer les modifications de Harness ?",
+  "57b8568730d37aab": "Échec de la synchronisation de Harness",
+  "64f65e7c1e66e0b6": "Non suivi",
+  "6e8603ed8778d343": "Verrouillé par l’organisation",
+  "72236e08fdbc9bfd": "Modifié",
+  "76ba386d44714717": "Ajouté",
+  "94c79e955e903f6e": "Confirmer et envoyer",
+  "9a37a8ae33072b13": "Uniquement dans la cible",
+  "9dd9ed734f047708": "Aperçu des différences",
+  "9e9a13dc969baed5": "Appliquer {files} modifications de fichiers et {servers} modifications de serveurs MCP sur {host} ?",
+  "b15b490a6b93f51b": "Conflit",
+  "b8be1d5f156ecf1f": "Désactivé à l’importation",
+  "c0ecf665a2affc08": "Verrouillé par l’organisation",
+  "c46795e0f5c9e29d": "Aucun environnement connecté avec accès en écriture ne prend en charge la synchronisation de Harness.",
+  "c8eb7c7c95521c3d": "Supprimer les fichiers présents uniquement dans la cible",
+  "c959341cad7960e5": [
+    "Modifications pour ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "db0ce314e4bcc242": "Vérifier l’envoi de Harness",
+  "df1b3dddecd4659f": "Supprimer les fichiers présents uniquement dans la cible",
+  "f3c271e99d8d70c1": "Votre organisation a désactivé les plugins externes.",
+  "f93c918381c8cfa9": "Inclure les définitions MCP portables"
 }

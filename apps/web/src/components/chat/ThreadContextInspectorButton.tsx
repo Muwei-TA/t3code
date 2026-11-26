@@ -205,6 +205,11 @@ export function ThreadContextInspectorButton({
                                 {rule.id}
                               </span>
                               <Badge variant="outline">{rule.apply}</Badge>
+                              {rule.lockedByPolicy ? (
+                                <Badge variant="secondary">
+                                  <T>Locked by organization</T>
+                                </Badge>
+                              ) : null}
                               <Badge
                                 variant={
                                   rule.status === "inlined"

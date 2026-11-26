@@ -6026,5 +6026,48 @@
   "674bcf1bb284d4f7": "{completed}/{total} Phasen",
   "65763fd9556fa033": "Weiterlaufen lassen",
   "60ed1918d57cae79": "Nach dieser Phase pausieren",
-  "614e5ad58a795fb5": "Stoppen"
+  "614e5ad58a795fb5": "Stoppen",
+  "28df9bb9dedb5433": "Portierbare MCP-Definitionen über Git synchronisieren",
+  "2e6aeae18aa50d98": "Sicherheitsprüfungen haben die Synchronisierung blockiert.",
+  "39cdbc8b84b17c6f": [
+    "Im Ziel fehlt: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "400f75805ed11740": "Portierbare MCP-Definitionen einbeziehen. Verweise auf Geheimnisse müssen im Ziel geprüft werden.",
+  "4af2b8c07dc4597d": "An eine andere verbundene Umgebung übertragen",
+  "529e0dbf6e537e78": "Die geprüften Änderungen werden auf {host} geschrieben.",
+  "55b4b083e71f9916": "Portierbare MCP-Definitionen über Git synchronisieren",
+  "56573bb72f48c3a4": "Harness-Änderungen übertragen",
+  "56a9ce5ea39af8e2": "Die beiden Umgebungen haben keine Unterschiede im portierbaren Harness.",
+  "575acd0e90bf400b": "Harness-Änderungen übertragen?",
+  "57b8568730d37aab": "Harness-Synchronisierung fehlgeschlagen",
+  "64f65e7c1e66e0b6": "Nicht nachverfolgt",
+  "6e8603ed8778d343": "Von der Organisation gesperrt",
+  "72236e08fdbc9bfd": "Geändert",
+  "76ba386d44714717": "Hinzugefügt",
+  "94c79e955e903f6e": "Bestätigen und übertragen",
+  "9a37a8ae33072b13": "Nur im Ziel",
+  "9dd9ed734f047708": "Unterschiede ansehen",
+  "9e9a13dc969baed5": "{files} Dateiänderungen und {servers} MCP-Serveränderungen auf {host} anwenden?",
+  "b15b490a6b93f51b": "Konflikt",
+  "b8be1d5f156ecf1f": "Nach dem Import deaktiviert",
+  "c0ecf665a2affc08": "Von der Organisation gesperrt",
+  "c46795e0f5c9e29d": "Keine verbundene Umgebung mit Schreibzugriff unterstützt die Harness-Synchronisierung.",
+  "c8eb7c7c95521c3d": "Dateien löschen, die nur im Ziel vorhanden sind",
+  "c959341cad7960e5": [
+    "Änderungen für ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "db0ce314e4bcc242": "Harness-Übertragung prüfen",
+  "df1b3dddecd4659f": "Dateien löschen, die nur im Ziel vorhanden sind",
+  "f3c271e99d8d70c1": "Ihre Organisation hat externe Plugins deaktiviert.",
+  "f93c918381c8cfa9": "Portierbare MCP-Definitionen einbeziehen"
 }

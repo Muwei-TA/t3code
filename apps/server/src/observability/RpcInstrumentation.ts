@@ -328,6 +328,9 @@ const RPC_AGGREGATES = {
   [WS_METHODS.harnessSyncPreviewPush]: "harness",
   [WS_METHODS.harnessSyncPush]: "harness",
   [WS_METHODS.harnessSyncPull]: "harness",
+  [WS_METHODS.harnessSyncExportBundle]: "harness",
+  [WS_METHODS.harnessSyncPreviewReceive]: "harness",
+  [WS_METHODS.harnessSyncApplyReceive]: "harness",
 } as const satisfies Readonly<Record<WsRpcMethod, string>>;
 
 const RPC_SPAN_PREFIX = "ws.rpc";

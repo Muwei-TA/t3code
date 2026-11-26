@@ -6026,5 +6026,48 @@
   "674bcf1bb284d4f7": "{completed}/{total} steg",
   "65763fd9556fa033": "Fortsätt köra",
   "60ed1918d57cae79": "Pausa efter det här steget",
-  "614e5ad58a795fb5": "Stoppa"
+  "614e5ad58a795fb5": "Stoppa",
+  "28df9bb9dedb5433": "Inkludera portabla MCP-definitioner i Git-synkroniseringen",
+  "2e6aeae18aa50d98": "Säkerhetskontrollerna blockerade synkroniseringen.",
+  "39cdbc8b84b17c6f": [
+    "Saknas i målet: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "400f75805ed11740": "Inkludera portabla MCP-definitioner. Referenser till hemligheter måste verifieras i målet.",
+  "4af2b8c07dc4597d": "Skicka till en annan ansluten miljö",
+  "529e0dbf6e537e78": "De granskade ändringarna skrivs på {host}.",
+  "55b4b083e71f9916": "Inkludera portabla MCP-definitioner i Git-synkroniseringen",
+  "56573bb72f48c3a4": "Harness-ändringar skickade",
+  "56a9ce5ea39af8e2": "De två miljöerna har inga skillnader i portabelt Harness.",
+  "575acd0e90bf400b": "Skicka Harness-ändringar?",
+  "57b8568730d37aab": "Harness-synkroniseringen misslyckades",
+  "64f65e7c1e66e0b6": "Ospårad",
+  "6e8603ed8778d343": "Låst av organisationen",
+  "72236e08fdbc9bfd": "Ändrad",
+  "76ba386d44714717": "Tillagd",
+  "94c79e955e903f6e": "Bekräfta och skicka",
+  "9a37a8ae33072b13": "Bara i målet",
+  "9dd9ed734f047708": "Förhandsvisa skillnader",
+  "9e9a13dc969baed5": "Tillämpa {files} filändringar och {servers} ändringar av MCP-servrar på {host}?",
+  "b15b490a6b93f51b": "Konflikt",
+  "b8be1d5f156ecf1f": "Inaktiveras vid import",
+  "c0ecf665a2affc08": "Låst av organisationen",
+  "c46795e0f5c9e29d": "Ingen ansluten miljö med skrivåtkomst stöder Harness-synkronisering.",
+  "c8eb7c7c95521c3d": "Ta bort filer som bara finns i målet",
+  "c959341cad7960e5": [
+    "Ändringar för ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "db0ce314e4bcc242": "Granska Harness-överföringen",
+  "df1b3dddecd4659f": "Ta bort filer som bara finns i målet",
+  "f3c271e99d8d70c1": "Din organisation har inaktiverat externa pluginmoduler.",
+  "f93c918381c8cfa9": "Inkludera portabla MCP-definitioner"
 }

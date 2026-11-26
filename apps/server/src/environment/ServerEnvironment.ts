@@ -237,6 +237,7 @@ export const make = Effect.gen(function* () {
       inlineMessageContext: true,
       workflowChat: true,
       harnessMcpResources: true,
+      harnessEnvironmentSync: true,
       requiredWorktreeBootstrap: true,
       threadSettlement: true,
       threadAutoSettlement: true,

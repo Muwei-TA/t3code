@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
   AuthTerminalOperateScope,
@@ -23,6 +24,18 @@ it("requires thread operation access to start a workflow", () => {
   expect(clientRpcRequiredScopes(WS_METHODS.workflowsStart, undefined)).toEqual([
     AuthOrchestrationOperateScope,
   ]);
+});
+
+it("restricts harness transfer preview and apply to writable targets", () => {
+  expect(clientRpcRequiredScopes(WS_METHODS.harnessSyncExportBundle, {})).toEqual([
+    AuthOrchestrationReadScope,
+  ]);
+  expect(
+    clientRpcRequiredScopes(WS_METHODS.harnessSyncExportBundle, { includeMcpServers: true }),
+  ).toEqual([AuthOrchestrationReadScope, AuthSettingsWriteScope]);
+  for (const method of [WS_METHODS.harnessSyncPreviewReceive, WS_METHODS.harnessSyncApplyReceive]) {
+    expect(clientRpcRequiredScopes(method, {})).toEqual([AuthSettingsWriteScope]);
+  }
 });
 
 describe("clientRpcRequiredScopes for hook changes", () => {

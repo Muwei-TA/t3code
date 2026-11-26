@@ -404,7 +404,7 @@ const make = Effect.gen(function* () {
           addPlannedFile(targetPath, existing, "rules", "AGENTS.md", content, content, false);
         }
         for (const rule of lib.rules) {
-          if (!rule.effectiveEnabled) continue;
+          if (!rule.effectiveEnabled || rule.lockedByPolicy) continue;
           const targetPath = path.join(cursorRulesRoot, `${rule.id}.mdc`);
           const existing = Option.getOrNull(yield* readFileOpt(targetPath));
           const fm: Record<string, unknown> = {
@@ -424,7 +424,7 @@ const make = Effect.gen(function* () {
           ruleBlocks.push(lib.userAgentsMd.body.trim());
         }
         for (const rule of lib.rules) {
-          if (!rule.effectiveEnabled) continue;
+          if (!rule.effectiveEnabled || rule.lockedByPolicy) continue;
           if (rule.apply === "always") {
             ruleBlocks.push(`## Rule: ${rule.id}\n\n${rule.body.trim()}`);
           } else {
