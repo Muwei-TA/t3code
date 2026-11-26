@@ -286,7 +286,7 @@ it.effect(
         title: "Parent",
         modelSelection,
         runtimeMode: "full-access",
-        interactionMode: "default",
+        interactionMode: "plan",
         branch: null,
         worktreePath: null,
         createdBy: "user",
@@ -376,6 +376,7 @@ it.effect(
           ({ item }) =>
             item.type === "user_message" &&
             item.messageId === feedbackMessageId &&
+            item.interactionMode === "plan" &&
             item.text === feedback,
         ),
       );
@@ -385,6 +386,7 @@ it.effect(
           ({ item }) =>
             item.type === "user_message" &&
             item.messageId === feedbackMessageId &&
+            item.interactionMode === "plan" &&
             item.text === feedback,
         ),
       );

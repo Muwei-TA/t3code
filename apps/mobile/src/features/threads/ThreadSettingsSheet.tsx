@@ -1,8 +1,9 @@
+import { threadContextReasonLabel } from "@t3tools/client-runtime/contract-labels";
 import {
   getPromptControlledTraits,
   getTraitSelectChange,
 } from "@t3tools/client-runtime/model-traits";
-import { T, useGT, useLocale, useMessages } from "gt-react-native";
+import { msg, T, useGT, useLocale, useMessages } from "gt-react-native";
 import * as Dialog from "../../components/ui/Dialog";
 import { createV5StackNavigator as createNativeStackNavigator } from "../../native/createV5StackNavigator";
 import { useSheetStackOptions } from "../layout/nested-stacks";
@@ -971,6 +972,41 @@ function buildThreadSettingsCatalogItems(
   });
 }
 
+const HARNESS_MODE_LABELS = {
+  default: msg("Default", { $context: "harness interaction mode" }),
+  plan: msg("Plan", { $context: "harness interaction mode" }),
+} satisfies Record<ThreadContextManifest["interactionMode"], string>;
+
+const HARNESS_ENFORCEMENT_LABELS = {
+  native: msg("Native", { $context: "provider-enforced read-only plan mode" }),
+  advisory: msg("Advisory", { $context: "read-only plan mode guidance" }),
+} satisfies Record<ThreadContextManifest["planModeReadOnlyEnforcement"], string>;
+
+type HarnessStatusServer = ThreadContextManifest["mcpServers"][number];
+
+const HARNESS_SERVER_SCOPE_LABELS = {
+  user: msg("User", { $context: "MCP server scope" }),
+  project: msg("Project", { $context: "MCP server scope" }),
+  builtin: msg("Built-in", { $context: "MCP server scope" }),
+} satisfies Record<HarnessStatusServer["scope"], string>;
+
+const HARNESS_SERVER_CHANNEL_LABELS = {
+  gateway: msg("T3 Gateway"),
+  native: msg("Native", { $context: "MCP server connection channel" }),
+  blocked: msg("Blocked", { $context: "MCP server connection channel" }),
+  disabled: msg("Disabled", { $context: "MCP server connection channel" }),
+} satisfies Record<HarnessStatusServer["channel"], string>;
+
+const HARNESS_SERVER_STATE_LABELS = {
+  connected: msg("Connected", { $context: "MCP server status" }),
+  idle: msg("Idle", { $context: "MCP server status" }),
+  starting: msg("Starting", { $context: "MCP server status" }),
+  error: msg("Error", { $context: "MCP server status" }),
+  untrusted: msg("Needs trust", { $context: "MCP server status" }),
+  blocked_by_policy: msg("Blocked by policy", { $context: "MCP server status" }),
+  disabled: msg("Disabled", { $context: "MCP server status" }),
+} satisfies Record<HarnessStatusServer["state"], string>;
+
 function ThreadSettingsOptionsItem(props: {
   readonly animationsReady: boolean;
   readonly bottomInset: number;
@@ -1008,23 +1044,46 @@ function ThreadSettingsOptionsItem(props: {
     setInspectingContext(false);
     if (result._tag === "Success") {
       const manifest: ThreadContextManifest = result.value;
+      const toolCount = (count: number) =>
+        gt("{count, plural, one {{count} tool} other {{count} tools}}", { count });
       const lines = [
-        `${gt("Mode")}: ${manifest.interactionMode} (${manifest.planModeReadOnlyEnforcement})`,
-        `${gt("Harness MCP")}: ${manifest.harnessGatewayActive ? gt("Active") : gt("Inactive")}`,
-        `${gt("MCP servers")}: ${manifest.mcpServers.length} (${manifest.mcpServers.reduce((acc, s) => acc + s.toolCount, 0)} ${gt("tools")})`,
-        ...manifest.mcpServers.map(
-          (server) =>
-            `• ${server.id} (${server.scope}/${server.channel}): ${server.state}, ${server.toolCount} tools`,
-        ),
+        gt("Mode: {mode} ({enforcement})", {
+          mode: m(HARNESS_MODE_LABELS[manifest.interactionMode]),
+          enforcement: m(HARNESS_ENFORCEMENT_LABELS[manifest.planModeReadOnlyEnforcement]),
+        }),
+        manifest.harnessGatewayActive ? gt("Harness MCP is active") : gt("Harness MCP is inactive"),
+        gt("MCP servers: {servers} ({tools})", {
+          servers: manifest.mcpServers.length,
+          tools: toolCount(
+            manifest.mcpServers.reduce((total, server) => total + server.toolCount, 0),
+          ),
+        }),
+        ...manifest.mcpServers.map((server) => {
+          const summary = gt("• {id} ({scope} / {channel}): {state}, {tools}", {
+            id: server.id,
+            scope: m(HARNESS_SERVER_SCOPE_LABELS[server.scope]),
+            channel: m(HARNESS_SERVER_CHANNEL_LABELS[server.channel]),
+            state: m(HARNESS_SERVER_STATE_LABELS[server.state]),
+            tools: toolCount(server.toolCount),
+          });
+          return server.reason
+            ? `${summary}\n  ${threadContextReasonLabel(server.reason, m)}`
+            : summary;
+        }),
         ...(manifest.degradedItems.length > 0
-          ? ["", ...manifest.degradedItems.map((item) => `⚠ ${item.id}: ${item.reason}`)]
+          ? [
+              "",
+              ...manifest.degradedItems.map(
+                (item) => `⚠ ${item.id}: ${threadContextReasonLabel(item.reason, m)}`,
+              ),
+            ]
           : []),
       ];
-      Dialog.alert(gt("Thread context"), lines.join("\n"));
+      Dialog.alert(gt("Harness status"), lines.join("\n"));
     } else {
       const error = squashAtomCommandFailure(result);
       Dialog.alert(
-        gt("Could not inspect context"),
+        gt("Could not inspect harness status"),
         errorDisplayMessage(error, m) ?? gt("Try again."),
       );
     }
@@ -1115,7 +1174,11 @@ function ThreadSettingsOptionsItem(props: {
           <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
             <DisclosureRow
               isLast
-              label={inspectingContext ? gt("Inspecting context...") : gt("Inspect thread context")}
+              label={
+                inspectingContext
+                  ? gt("Inspecting harness status...")
+                  : gt("Inspect harness status")
+              }
               value={undefined}
               onPress={() => void handleInspectContext()}
             />

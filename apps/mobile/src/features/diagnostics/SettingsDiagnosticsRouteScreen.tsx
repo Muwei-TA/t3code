@@ -1,5 +1,4 @@
-import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
-import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
+import { AuthSettingsWriteScope, isManagedSettingPath } from "@t3tools/contracts";
 import * as Application from "expo-application";
 import Constants from "expo-constants";
 import * as Updates from "expo-updates";
@@ -8,15 +7,22 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { T, useGT } from "gt-react-native";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
+import * as Dialog from "../../components/ui/Dialog";
+import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { useEnvironments } from "../../state/environments";
 import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
+import { serverEnvironment } from "../../state/server";
+import { useEnvironmentsWithScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { beginRelayTracingPreferenceChange, relayTracingAvailable } from "../observability/tracing";
 import { crashReportingAvailable, setCrashReportsEnabled } from "../observability/observe";
 import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActionRow";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
@@ -104,6 +110,8 @@ export function SettingsDiagnosticsRouteScreen() {
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
         {crashReportingAvailable ? <CrashReportsSetting /> : null}
+        {relayTracingAvailable ? <RelayTracingSetting /> : null}
+        <ProductUsageSettings />
 
         <SettingsSection title={gt("Startup crashes")}>
           {state.status === "loading" ? (
@@ -202,6 +210,107 @@ function CrashReportsSetting() {
         </T>
       </Text>
     </View>
+  );
+}
+
+function RelayTracingSetting() {
+  const gt = useGT();
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const save = useAtomCommand(saveMobilePreferences, { reportFailure: true });
+  const savingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const ready = AsyncResult.isSuccess(preferences) && !preferences.waiting;
+  const change = async (value: boolean) => {
+    if (!ready || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    const complete = beginRelayTracingPreferenceChange(value);
+    const result = await save({ relayTracingEnabled: value });
+    complete(result._tag === "Success");
+    savingRef.current = false;
+    setSaving(false);
+    if (result._tag === "Failure") {
+      Dialog.alert(
+        gt("Could not save settings"),
+        value
+          ? gt("Try again.")
+          : gt(
+              "Diagnostics are off for this session. Turn the switch off again to save your choice.",
+            ),
+      );
+    }
+  };
+  return (
+    <SettingsSection title={gt("Privacy")}>
+      <SettingsSwitchRow
+        icon="tray.and.arrow.up"
+        label={gt("Send T3 Connect diagnostics")}
+        subtitle={gt("Share relay connection timings from this app.")}
+        value={AsyncResult.isSuccess(preferences) && preferences.value.relayTracingEnabled === true}
+        disabled={!ready || saving}
+        onValueChange={(value) => void change(value)}
+      />
+    </SettingsSection>
+  );
+}
+
+function ProductUsageSettings() {
+  const gt = useGT();
+  const { environments } = useEnvironments();
+  const supported = environments.filter(
+    (environment) =>
+      environment.connection.phase === "connected" &&
+      environment.serverConfig?.environment.capabilities.productTelemetrySettings === true,
+  );
+  const writable = useEnvironmentsWithScope(supported, AuthSettingsWriteScope);
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: true });
+  if (supported.length === 0) return null;
+  return (
+    <SettingsSection title={gt("Product usage data")}>
+      {supported.map((environment) => {
+        const { serverConfig } = environment;
+        const policy = serverConfig?.managedPolicy;
+        const forcedOff = policy?.limits?.telemetry === false;
+        const managed = isManagedSettingPath(policy, "productTelemetryEnabled");
+        const { envOverride, shellDiscoveryPending } = serverConfig?.productTelemetry ?? {};
+        return (
+          <SettingsSwitchRow
+            key={environment.environmentId}
+            icon="tray.and.arrow.up"
+            label={environment.label}
+            subtitle={
+              forcedOff
+                ? gt("An administrator has disabled product usage data.")
+                : managed
+                  ? gt("Managed by {organization}.", { organization: policy?.organization })
+                  : envOverride !== undefined
+                    ? gt("Controlled by T3CODE_TELEMETRY_ENABLED on this machine.")
+                    : shellDiscoveryPending
+                      ? gt("Checking this machine’s shell environment.")
+                      : undefined
+            }
+            disabled={
+              forcedOff ||
+              managed ||
+              envOverride !== undefined ||
+              shellDiscoveryPending ||
+              !writable.has(environment.environmentId)
+            }
+            value={
+              !forcedOff &&
+              !shellDiscoveryPending &&
+              (envOverride ?? serverConfig?.settings.productTelemetryEnabled ?? false)
+            }
+            onValueChange={(value) =>
+              void updateSettings({
+                environmentId: environment.environmentId,
+                input: { patch: { productTelemetryEnabled: value } },
+              })
+            }
+          />
+        );
+      })}
+    </SettingsSection>
   );
 }
 

@@ -78,6 +78,30 @@ describe("applyServerConfigProjection settingsUpdated", () => {
     } as ServerConfigStreamEvent);
     expect(Option.getOrThrow(next).config).toBe(Option.getOrThrow(current).config);
   });
+
+  it("applies live telemetry overrides and clears pending shell discovery", () => {
+    const settings = DEFAULT_SERVER_SETTINGS;
+    const current = Option.some({
+      config: { settings, productTelemetry: { shellDiscoveryPending: true } } as ServerConfig,
+      latestEvent: {} as ServerConfigStreamEvent,
+      source: "live" as const,
+    });
+    const next = applyServerConfigProjection(current, {
+      version: 1,
+      type: "settingsUpdated",
+      payload: { settings, productTelemetry: { envOverride: false } },
+    });
+    const config = Option.getOrThrow(next).config;
+    expect(config.productTelemetry).toEqual({ envOverride: false });
+    expect(config.settings).toBe(settings);
+
+    const cleared = applyServerConfigProjection(next, {
+      version: 1,
+      type: "settingsUpdated",
+      payload: { settings, productTelemetry: {} },
+    });
+    expect(Option.getOrThrow(cleared).config.productTelemetry).toEqual({});
+  });
 });
 
 describe("applyServerConfigProjection provider catalogs", () => {

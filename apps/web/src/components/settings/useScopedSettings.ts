@@ -141,13 +141,17 @@ function useRunScopedPlan() {
   };
 }
 
-export function useUpdateScopedSettings() {
+export function useUpdateScopedSettings(
+  includeEnvironment?: (
+    environment: ReturnType<typeof useSettingsScope>["environments"][number],
+  ) => boolean,
+) {
   const { scope, environments, deviceOnly } = useSettingsScope();
   const run = useRunScopedPlan();
   /** `onFailed` runs when any target rejects or drops the patch, so a draft can fall back. */
   return (patch: ScopedSettingsPatch, options?: { readonly onFailed?: () => void }) =>
     run(
-      environments,
+      includeEnvironment ? environments.filter(includeEnvironment) : environments,
       (current) => planScopedSettingsPatch(scope, current, patch, { deviceOnly }),
       options?.onFailed,
     );

@@ -67,6 +67,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
@@ -100,10 +101,91 @@ function formatKeyValueLines(record: Readonly<Record<string, string>> | undefine
 }
 
 function parseCommaList(raw: string): ReadonlyArray<string> {
-  return raw
+  const names = raw
     .split(/[,\n]+/u)
     .map((item) => item.trim())
-    .filter((item) => item.length > 0);
+    .filter(Boolean);
+  return [...new Set(names)];
+}
+
+function undiscoveredToolNames(
+  configured: ReadonlyArray<string>,
+  discovered: ReadonlyArray<string> | undefined,
+) {
+  if (discovered === undefined) return [];
+  const known = new Set(discovered);
+  return [...new Set(configured)].filter((name) => !known.has(name));
+}
+
+function McpToolListField({
+  label,
+  placeholder,
+  value,
+  oppositeValue,
+  onChange,
+  discoveredNames,
+  disabled,
+}: {
+  readonly label: string;
+  readonly placeholder: string;
+  readonly value: string;
+  readonly oppositeValue: string;
+  readonly onChange: (value: string) => void;
+  readonly discoveredNames: ReadonlyArray<string> | undefined;
+  readonly disabled: boolean;
+}) {
+  const gt = useGT();
+  const names = parseCommaList(value);
+  const missing = undiscoveredToolNames(names, discoveredNames);
+  const configured = new Set([...names, ...parseCommaList(oppositeValue)]);
+  const available =
+    discoveredNames?.filter(
+      (name) => name.length <= 256 && !/[,\n]/u.test(name) && !configured.has(name),
+    ) ?? [];
+  return (
+    <div className="grid content-start gap-1">
+      <label className="grid gap-1">
+        <span className="text-xs font-medium text-foreground">{label}</span>
+        <Input
+          value={value}
+          placeholder={placeholder}
+          disabled={disabled}
+          spellCheck={false}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </label>
+      {available.length > 0 ? (
+        <Select
+          value={null}
+          disabled={disabled}
+          onValueChange={(name: string | null) => {
+            if (name !== null) onChange([...names, name].join(", "));
+          }}
+        >
+          <SelectTrigger
+            size="sm"
+            aria-label={gt("Add a discovered tool to {list}", { list: label })}
+          >
+            <T>Add a discovered tool</T>
+          </SelectTrigger>
+          <SelectPopup>
+            {available.map((name) => (
+              <SelectItem key={name} value={name}>
+                {name}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      ) : null}
+      {missing.length > 0 ? (
+        <p role="status" className="text-xs text-muted-foreground">
+          {gt("Names missing from the last discovered tool list: {names}", {
+            names: missing.join(", "),
+          })}
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 function parseArgsText(raw: string): ReadonlyArray<string> {
@@ -515,6 +597,11 @@ function EnvironmentHarnessMcpSection({
             const isBusy = busyServerId === server.id;
             const isExpanded = expandedTools.has(server.id);
             const stateBadge = renderStateBadge(server, gt);
+            const discoveredCount = server.discoveredToolNames?.length ?? 0;
+            const missingTools = undiscoveredToolNames(
+              [...(server.config.allowedTools ?? []), ...(server.config.disabledTools ?? [])],
+              server.discoveredToolNames,
+            );
             const targetSummary =
               server.config.transport.type === "stdio"
                 ? [server.config.transport.command, ...(server.config.transport.args ?? [])].join(
@@ -558,6 +645,20 @@ function EnvironmentHarnessMcpSection({
                     ) : null}
                     {server.lastError ? (
                       <div className="text-xs text-destructive">{server.lastError}</div>
+                    ) : null}
+                    {missingTools.length > 0 ? (
+                      <div className="text-xs text-warning-foreground">
+                        {gt("Names missing from the last discovered tool list: {names}", {
+                          names: missingTools.join(", "),
+                        })}
+                      </div>
+                    ) : null}
+                    {discoveredCount > 0 && server.tools.length === 0 ? (
+                      <div className="text-xs text-muted-foreground">
+                        {gt("0 of {count} discovered tools match the current filter.", {
+                          count: discoveredCount,
+                        })}
+                      </div>
                     ) : null}
                     {server.needsTrustConfirmation ? (
                       <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-warning-foreground">
@@ -1080,6 +1181,16 @@ function McpServerEditorForm({
 
     const allowedTools = parseCommaList(allowedToolsText);
     const disabledTools = parseCommaList(disabledToolsText);
+    const disabled = new Set(disabledTools);
+    const conflicts = allowedTools.filter((name) => disabled.has(name));
+    if (conflicts.length > 0) {
+      setValidationError(
+        gt("Tools cannot be both allowed and disabled: {names}", {
+          names: conflicts.join(", "),
+        }),
+      );
+      return;
+    }
     const config: HarnessMcpServerConfig = {
       enabled: initial?.config.enabled ?? true,
       transport,
@@ -1330,32 +1441,32 @@ function McpServerEditorForm({
             </div>
           </div>
 
+          <p className="text-xs text-muted-foreground">
+            <T>
+              Tool filters use upstream names and route the server through T3 Gateway. An empty
+              allowlist allows every tool except those disabled.
+            </T>
+          </p>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <label className="grid gap-1">
-              <span className="text-xs font-medium text-foreground">
-                <T>Allowed tools (optional, comma-separated)</T>
-              </span>
-              <Input
-                value={allowedToolsText}
-                disabled={saving}
-                // oxlint-disable-next-line t3code/no-untranslated-copy -- MCP tool name identifiers stay English.
-                placeholder="search, get_issue"
-                spellCheck={false}
-                onChange={(event) => setAllowedToolsText(event.target.value)}
-              />
-            </label>
-            <label className="grid gap-1">
-              <span className="text-xs font-medium text-foreground">
-                <T>Disabled tools (optional, comma-separated)</T>
-              </span>
-              <Input
-                value={disabledToolsText}
-                disabled={saving}
-                placeholder="delete_repo"
-                spellCheck={false}
-                onChange={(event) => setDisabledToolsText(event.target.value)}
-              />
-            </label>
+            <McpToolListField
+              label={gt("Allowed tools (optional, comma-separated)")}
+              // oxlint-disable-next-line t3code/no-untranslated-copy -- Example upstream tool names.
+              placeholder="search, get_issue"
+              value={allowedToolsText}
+              oppositeValue={disabledToolsText}
+              onChange={setAllowedToolsText}
+              discoveredNames={initial?.discoveredToolNames}
+              disabled={saving}
+            />
+            <McpToolListField
+              label={gt("Disabled tools (optional, comma-separated)")}
+              placeholder="delete_repo"
+              value={disabledToolsText}
+              oppositeValue={allowedToolsText}
+              onChange={setDisabledToolsText}
+              discoveredNames={initial?.discoveredToolNames}
+              disabled={saving}
+            />
           </div>
 
           <label className="grid gap-1">

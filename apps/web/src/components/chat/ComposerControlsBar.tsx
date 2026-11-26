@@ -332,7 +332,6 @@ export function ComposerControlsBar(props: {
         <ThreadContextInspectorButton
           environmentId={environmentId}
           threadId={activeThreadId}
-          interactionMode={interactionMode}
           size={controlSize}
         />
       ) : null}

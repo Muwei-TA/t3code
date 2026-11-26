@@ -135,6 +135,8 @@ const layerAnalytics = Layer.effectContext(
               Effect.as(true),
             ),
           flush: Effect.void,
+          productTelemetryStatus: Effect.succeed({}),
+          subscribeProductTelemetryStatus: Effect.succeed(Stream.empty),
           recordOwners: () => Effect.void,
         }),
       ),

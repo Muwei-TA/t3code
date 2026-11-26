@@ -102,39 +102,56 @@ function trustReasonForProjectServer(config: HarnessMcpServerConfig): HarnessMcp
   return "project";
 }
 
+export function canonicalMcpTransport(transport: HarnessMcpServerConfig["transport"]) {
+  return transport.type === "stdio"
+    ? {
+        type: "stdio",
+        command: transport.command,
+        args: transport.args ?? [],
+        cwd: transport.cwd ?? null,
+        env: transport.env
+          ? Object.entries(transport.env).sort(([a], [b]) => a.localeCompare(b))
+          : [],
+      }
+    : {
+        type: transport.type,
+        url: transport.url,
+        headers: transport.headers
+          ? Object.entries(transport.headers).sort(([a], [b]) => a.localeCompare(b))
+          : [],
+      };
+}
+
 /**
  * Binds owner trust for a checked-in `t3.json` server to its full execution channel,
  * destination URL/command/args/cwd/env/headers, and tool approval policy.
  */
 function computeProjectTrustDigest(config: HarnessMcpServerConfig): string {
-  const transport =
-    config.transport.type === "stdio"
-      ? {
-          type: "stdio",
-          command: config.transport.command,
-          args: config.transport.args ?? [],
-          cwd: config.transport.cwd ?? null,
-          env: config.transport.env
-            ? Object.entries(config.transport.env).sort(([a], [b]) => a.localeCompare(b))
-            : [],
-        }
-      : {
-          type: config.transport.type,
-          url: config.transport.url,
-          headers: config.transport.headers
-            ? Object.entries(config.transport.headers).sort(([a], [b]) => a.localeCompare(b))
-            : [],
-        };
   const canonical = JSON.stringify({
     version: 2,
     injectionMode: config.injectionMode,
     approvalPolicy: config.approvalPolicy,
     allowedTools: config.allowedTools ?? null,
     disabledTools: config.disabledTools ?? null,
-    transport,
+    transport: canonicalMcpTransport(config.transport),
   });
   return NodeCrypto.createHash("sha256").update(canonical).digest("hex");
 }
+
+const validateToolFilters = Effect.fn("HarnessStore.validateToolFilters")(function* (
+  id: HarnessMcpServerId,
+  config: HarnessMcpServerConfig,
+) {
+  const disabled = new Set(config.disabledTools);
+  const conflicts = [...new Set(config.allowedTools)].filter((name) => disabled.has(name));
+  if (conflicts.length > 0) {
+    return yield* new HarnessError({
+      code: "invalid_config",
+      serverId: id,
+      detail: `Tools cannot be both allowed and disabled: ${conflicts.join(", ")}.`,
+    });
+  }
+});
 
 function computeCanonicalConfigFingerprint(config: HarnessMcpServerConfig): string {
   return JSON.stringify({
@@ -692,6 +709,7 @@ const make = Effect.gen(function* () {
         detail: `MCP server id "${id}" is reserved by T3 Code.`,
       });
     }
+    yield* validateToolFilters(id, config);
     yield* writeLock.withPermits(1)(
       Effect.gen(function* () {
         const { config: current } = yield* loadUserConfig;
@@ -767,6 +785,7 @@ const make = Effect.gen(function* () {
             skippedIds.push(entry.id);
             continue;
           }
+          yield* validateToolFilters(entry.id, entry.config);
           if (exists && overwriteExisting === true && entry.expectedExistingDigest === undefined) {
             return yield* new HarnessError({
               code: "invalid_config",

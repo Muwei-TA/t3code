@@ -6,15 +6,11 @@ an authenticated connection does not count as product use.
 
 ## Identity
 
-- **Never change `distinct_id`.** It preserves historical continuity in PostHog charts; add fields
-  instead of changing how it is computed.
-- **Count installs with `installId`, resolve owners at query time.** `installId` is a stable hash
-  persisted in the state directory; `install.owner_observed` links installs to owners (Connect
-  account, OpenAI `user_id`—not the shared Codex Team `account_id` or per-login `sub`—Claude id,
-  client device). Two Connect accounts are never merged as one person.
-- **Hash everywhere with [one helper](../../packages/shared/src/telemetryId.ts).** Clients and
-  servers hash with the same SHA-256 helper so IDs correlate; the server accepts only hashes from
-  clients.
+- **Count installs with `installId`.** A stable hash of the random anonymous ID identifies the
+  install. `distinct_id` and the OpenAI, Claude, and device owner IDs use HMAC with a key stored
+  in that install's secret store. This changes the previous account-level `distinct_id` series.
+- **Only T3 Connect hashes correlate across installs.** The server accepts only hashes from
+  clients. It applies the install-local HMAC before any non-Connect identifier reaches ingest.
 
 ## Attribution boundaries
 
@@ -29,12 +25,9 @@ an authenticated connection does not count as product use.
 - Payloads stay strictly to product metadata, closed contract enums, and normalized measurements:
   never attach prompts, file paths, credentials, raw provider payloads, device names, conversation
   IDs, user-named provider instance IDs, or non-vendor/custom model names.
-- The sole exception is opt-in `agent.feedback`, which
-  [`FeedbackService`](../../apps/server/src/feedback/FeedbackService.ts) scrubs of paths, private
-  values, and secret-shaped strings, and only attaches bounded conversation traces when the user
-  explicitly previews and sends them.
-- Delivery ([`AnalyticsService.ts`](../../apps/server/src/telemetry/AnalyticsService.ts)) attaches a
-  UUID per event, backs off on failure, and drops batches after bounded retries so a stuck batch
-  cannot loop forever.
-- Product events and relay tracing are opt-in: they stay off unless `T3CODE_TELEMETRY_ENABLED=true`,
-  which the dev runner and CI smoke tests leave unset so they do not inflate install counts.
+- For `agent.feedback`, automatic reports send structured metadata only. User-approved reports
+  can include scrubbed text and bounded conversation traces shown in the approval card.
+- Delivery attaches a UUID per event, limits retries, and drops both buffered events and failed
+  batches when product usage data is switched off. The server defaults to off. Managed policy
+  can forbid telemetry, and an explicit `T3CODE_TELEMETRY_ENABLED` overrides the server setting
+  when policy permits it. Development and CI runs stay off unless explicitly enabled.

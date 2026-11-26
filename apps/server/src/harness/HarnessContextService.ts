@@ -121,8 +121,9 @@ const make = Effect.gen(function* () {
           channel = "gateway";
           activeGatewayCount += 1;
           if (server.config.injectionMode === "native") {
-            reason =
-              "Provider does not support native passthrough for this transport; routed via T3 Gateway.";
+            reason = McpGateway.hasToolFilters(server.config)
+              ? "Tool filters require routing through T3 Gateway."
+              : "Provider does not support native passthrough for this transport; routed via T3 Gateway.";
             degradedItems.push({ kind: "mcp", id: server.id, reason });
           }
           if (server.state === "error" && server.lastError) {

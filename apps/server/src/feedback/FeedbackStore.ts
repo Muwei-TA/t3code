@@ -206,12 +206,9 @@ const make = Effect.gen(function* () {
     const sent = yield* analytics.record("agent.feedback", {
       kind,
       subject,
-      expected,
-      actual,
-      workaround,
-      trace,
-      userRequested,
-      source,
+      ...(userRequested
+        ? { expected, actual, workaround, trace, userRequested, source }
+        : { count: 1 }),
       ...dimensions,
     });
     if (!sent) {

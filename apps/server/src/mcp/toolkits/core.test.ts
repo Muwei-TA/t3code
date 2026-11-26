@@ -455,15 +455,10 @@ it.effect("records only failed calls of tools that hand off no work", () => {
           }),
         ),
         Layer.provide(
-          Layer.succeed(
-            AnalyticsService.AnalyticsService,
-            AnalyticsService.AnalyticsService.of({
-              record: (event, properties) =>
-                Deferred.succeed(recorded, { event, properties: properties ?? {} }),
-              flush: Effect.void,
-              recordOwners: () => Effect.void,
-            }),
-          ),
+          Layer.mock(AnalyticsService.AnalyticsService)({
+            record: (event, properties) =>
+              Deferred.succeed(recorded, { event, properties: properties ?? {} }),
+          }),
         ),
       ),
     ),
@@ -580,14 +575,9 @@ it.effect("handoff analytics read only the caller's active run and its message",
         Layer.provide(NodeCrypto.layer),
         Layer.provide(historyReads(reads, { attachments, dispatched })),
         Layer.provide(
-          Layer.succeed(
-            AnalyticsService.AnalyticsService,
-            AnalyticsService.AnalyticsService.of({
-              record: () => Deferred.succeed(recorded, undefined).pipe(Effect.as(true)),
-              flush: Effect.void,
-              recordOwners: () => Effect.void,
-            }),
-          ),
+          Layer.mock(AnalyticsService.AnalyticsService)({
+            record: () => Deferred.succeed(recorded, undefined).pipe(Effect.as(true)),
+          }),
         ),
       ),
     ),

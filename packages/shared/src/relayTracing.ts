@@ -5,7 +5,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Tracer from "effect/Tracer";
-import type { HttpClient } from "effect/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { OtlpSerialization, OtlpTracer } from "effect/observability";
 
 export interface RelayClientTracingConfig {
@@ -156,6 +156,21 @@ export function layer(
     return Layer.succeed(RelayClientTracer, Option.none());
   }
 
+  const isEnabled = options?.isEnabled;
+  const gateDelivery = Layer.effect(
+    HttpClient.HttpClient,
+    HttpClient.HttpClient.pipe(
+      Effect.map((client) =>
+        HttpClient.make((request) =>
+          isEnabled?.() === false
+            ? Effect.succeed(
+                HttpClientResponse.fromWeb(request, new Response(null, { status: 204 })),
+              )
+            : client.execute(request),
+        ),
+      ),
+    ),
+  );
   const layerTracer = OtlpTracer.layer({
     url: config.tracesUrl,
     headers: {
@@ -174,7 +189,7 @@ export function layer(
         ...resource.attributes,
       },
     },
-  }).pipe(Layer.provide(OtlpSerialization.layerJson));
+  }).pipe(Layer.provide(OtlpSerialization.layerJson), Layer.provide(gateDelivery));
 
   return Layer.effect(
     RelayClientTracer,
