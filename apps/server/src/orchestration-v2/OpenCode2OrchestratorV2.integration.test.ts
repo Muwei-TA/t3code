@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import {
   CommandId,
@@ -20,7 +21,7 @@ import {
   OPENCODE2_HTTP_PROTOCOL,
   OpenCode2OrchestratorReplayHarness,
 } from "./Adapters/OpenCode2AdapterV2.testkit.ts";
-import { OPENCODE_PROVIDER } from "@t3tools/provider-opencode/testing";
+import { OPENCODE_PROVIDER, t3HarnessMcpServerName } from "@t3tools/provider-opencode/testing";
 import { provideDeterministicTestRuntime } from "./testkit/DeterministicRuntime.ts";
 import type { OrchestratorV2ScenarioStep } from "./testkit/OrchestratorScenario.ts";
 import { runOrchestratorV2ProviderReplayScenario } from "./testkit/ProviderReplayHarness.ts";
@@ -61,13 +62,16 @@ const event = (type: string, data: Record<string, unknown>): ProviderReplayEntry
 const labelled = (entry: ProviderReplayEntry, label: string): ProviderReplayEntry =>
   entry.type === "runtime_exit" ? entry : { ...entry, label };
 /** MCP rules are last-match-wins; allow this thread after denying all T3 servers. */
-const mcpRules = (name: string) => [
+const mcpRules = (name: string, harness: string) => [
   { action: "t3-code-*", resource: "*", effect: "deny" },
+  { action: "t3-harness-*", resource: "*", effect: "deny" },
   { action: `t3-code-thread_${name}_*`, resource: "*", effect: "allow" },
+  { action: `${harness}_*`, resource: "*", effect: "allow" },
+  { action: `${harness}-*`, resource: "*", effect: "allow" },
 ];
 const FULL_ACCESS = [{ action: "*", resource: "*", effect: "allow" }];
 
-const t3Rules = (name: string) => [...FULL_ACCESS, ...mcpRules(name)];
+const t3Rules = (name: string, harness: string) => [...FULL_ACCESS, ...mcpRules(name, harness)];
 
 const BUILD_PATHS = [
   {
@@ -109,19 +113,19 @@ const agentList = (directory: string) => ({
   ],
 });
 
-const autoEditRules = (name: string) => [
+const autoEditRules = (name: string, harness: string) => [
   { action: "shell", resource: "*", effect: "ask" },
   { action: "edit", resource: "*", effect: "allow" },
   { action: "external_directory", resource: "*", effect: "ask" },
   ...BUILD_PATHS,
-  ...mcpRules(name),
+  ...mcpRules(name, harness),
 ];
 
-const planRules = (name: string) => [
+const planRules = (name: string, harness: string) => [
   { action: "*", resource: "*", effect: "allow" },
   { action: "edit", resource: "*", effect: "deny" },
   ...PLAN_PATHS,
-  ...mcpRules(name),
+  ...mcpRules(name, harness),
 ];
 
 const sessionInfo = (directory: string, permissions: ReadonlyArray<unknown>, title: string) => ({
@@ -185,7 +189,8 @@ const catalogModel = (id: string, name: string) => ({
 const createdSession = (
   directory: string,
   name: string,
-  permissions: ReadonlyArray<unknown> = t3Rules(name),
+  harness: string,
+  permissions: ReadonlyArray<unknown> = t3Rules(name, harness),
 
   narrows = false,
 ): ReadonlyArray<ProviderReplayEntry> => [
@@ -302,16 +307,19 @@ describe("OpenCode 2 through the orchestrator", () => {
         const name = `opencode2-model-switch-${via.replace(" ", "-")}`;
         const cwd = yield* checkpointWorkspace(name);
         const thread = threadCommands({ name, worktreePath: cwd });
+        const harness = yield* t3HarnessMcpServerName(thread.threadId).pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
         const projection = yield* runScenario({
           name,
           threadId: thread.threadId,
           entries: [
-            ...createdSession(cwd, name),
+            ...createdSession(cwd, name, harness),
             ...instructionsWritten,
             ...answeredPrompt("FIRST"),
 
             out("session.get", { sessionID: SESSION }),
-            reply("session.get", sessionInfo(cwd, t3Rules(name), name)),
+            reply("session.get", sessionInfo(cwd, t3Rules(name, harness), name)),
             out("session.switchModel", {
               sessionID: SESSION,
               model: { providerID: "opencode", id: "mimo-v2.6-flash-free" },
@@ -354,6 +362,9 @@ describe("OpenCode 2 through the orchestrator", () => {
       const name = "opencode2-mode-change";
       const cwd = yield* checkpointWorkspace(name);
       const thread = threadCommands({ name, worktreePath: cwd });
+      const harness = yield* t3HarnessMcpServerName(thread.threadId).pipe(
+        Effect.provide(NodeCrypto.layer),
+      );
       const setMode = (key: string, runtimeMode: RuntimeMode) =>
         ({
           type: "thread.runtime-mode.set",
@@ -365,21 +376,24 @@ describe("OpenCode 2 through the orchestrator", () => {
         name,
         threadId: thread.threadId,
         entries: [
-          ...createdSession(cwd, name),
+          ...createdSession(cwd, name, harness),
           ...instructionsWritten,
           ...answeredPrompt("FIRST"),
 
           out("session.get", { sessionID: SESSION }),
-          reply("session.get", sessionInfo(cwd, t3Rules(name), name)),
+          reply("session.get", sessionInfo(cwd, t3Rules(name, harness), name)),
           out("agent.list", "<any>"),
           reply("agent.list", agentList(cwd)),
-          out("session.update", { sessionID: SESSION, permissions: autoEditRules(name) }),
+          out("session.update", {
+            sessionID: SESSION,
+            permissions: autoEditRules(name, harness),
+          }),
           reply("session.update", null),
           ...answeredPrompt("SECOND"),
 
           out("session.get", { sessionID: SESSION }),
-          reply("session.get", sessionInfo(cwd, autoEditRules(name), name)),
-          out("session.update", { sessionID: SESSION, permissions: t3Rules(name) }),
+          reply("session.get", sessionInfo(cwd, autoEditRules(name, harness), name)),
+          out("session.update", { sessionID: SESSION, permissions: t3Rules(name, harness) }),
           reply("session.update", null),
           ...answeredPrompt("THIRD"),
         ],
@@ -405,19 +419,22 @@ describe("OpenCode 2 through the orchestrator", () => {
       const name = "opencode2-plan-rules";
       const cwd = yield* checkpointWorkspace(name);
       const thread = threadCommands({ name, worktreePath: cwd, interactionMode: "plan" });
+      const harness = yield* t3HarnessMcpServerName(thread.threadId).pipe(
+        Effect.provide(NodeCrypto.layer),
+      );
       const projection = yield* runScenario({
         name,
         threadId: thread.threadId,
         entries: [
-          ...createdSession(cwd, name, planRules(name), true),
+          ...createdSession(cwd, name, harness, planRules(name, harness), true),
 
           out("session.switchAgent", { sessionID: SESSION, agent: "plan" }),
           reply("session.switchAgent", null),
           ...instructionsWritten,
           ...answeredPrompt("PLANNED"),
           out("session.get", { sessionID: SESSION }),
-          reply("session.get", sessionInfo(cwd, planRules(name), name)),
-          out("session.update", { sessionID: SESSION, permissions: t3Rules(name) }),
+          reply("session.get", sessionInfo(cwd, planRules(name, harness), name)),
+          out("session.update", { sessionID: SESSION, permissions: t3Rules(name, harness) }),
           reply("session.update", null),
           out("session.switchAgent", { sessionID: SESSION, agent: "build" }),
           reply("session.switchAgent", null),
@@ -516,6 +533,9 @@ describe("OpenCode 2 through the orchestrator", () => {
       const name = "opencode2-queued-cancel";
       const cwd = yield* checkpointWorkspace(name);
       const thread = threadCommands({ name, worktreePath: cwd });
+      const harness = yield* t3HarnessMcpServerName(thread.threadId).pipe(
+        Effect.provide(NodeCrypto.layer),
+      );
       const queued = (key: string): OrchestrationV2Command => ({
         ...thread.message(key),
         dispatchMode: { type: "queue_after_active" },
@@ -536,7 +556,7 @@ describe("OpenCode 2 through the orchestrator", () => {
         version: "2.0.18",
         scenario: name,
         entries: [
-          ...createdSession(cwd, name),
+          ...createdSession(cwd, name, harness),
           ...instructionsWritten,
           out("session.prompt", { sessionID: SESSION, id: "<any>", text: "<any>" }),
           reply("session.prompt", {
