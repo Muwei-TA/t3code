@@ -1605,10 +1605,21 @@ export const layerWsRpc = (
             detail: "The composer workspace is not available.",
           });
         }
+        const instanceId = shell?.providerInstanceId ?? project.defaultModelSelection?.instanceId;
+        const adapter =
+          instanceId === undefined
+            ? undefined
+            : (yield* providerInstances.getInstance(instanceId))?.orchestrationAdapter;
+        const capabilities =
+          adapter === undefined
+            ? undefined
+            : yield* adapter.getCapabilities().pipe(Effect.orElseSucceed(() => undefined));
         const context = yield* HarnessMcpResourceMentions.resolveContext(
           shell?.worktreePath ?? project.workspaceRoot,
           shell,
           Option.getOrUndefined(harnessLibraryStoreOption),
+          undefined,
+          capabilities?.harness,
         );
         return { gateway: mcpGatewayOption.value, context };
       });

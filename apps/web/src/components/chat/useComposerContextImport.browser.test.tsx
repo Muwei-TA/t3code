@@ -1,9 +1,13 @@
-import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
+import {
+  mcpResourceContextRecord,
+  threadContextRecord,
+} from "@t3tools/shared/composerContextReferences";
 import { useEffect } from "react";
 import {
   type ComposerContextRecord,
   ComposerContextId,
   EnvironmentId,
+  ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
@@ -44,6 +48,56 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+it("retains a pasted resource in an empty draft and refuses one from another project", async () => {
+  const target = DraftId.make("clipboard-mcp-resource");
+  const store = useComposerDraftStore.getState();
+  using _draft = { [Symbol.dispose]: () => store.clearComposerContent(target) };
+  const environmentId = EnvironmentId.make("clipboard-environment");
+  const projectId = ProjectId.make("clipboard-project");
+  const local = mcpResourceContextRecord(
+    environmentId,
+    projectId,
+    "t3-harness://docs/memo%3Aone",
+    "Local",
+  );
+  const other = mcpResourceContextRecord(
+    environmentId,
+    ProjectId.make("other-project"),
+    "t3-harness://docs/memo%3Atwo",
+    "Other",
+  );
+  let importer!: Importer;
+  await using _screen = await render(
+    <Harness
+      input={{
+        environmentId,
+        projectId,
+        linkedEnvironments: new Map(),
+        activeThread: undefined,
+        activeThreadId: null,
+        composerDraftTarget: target,
+        attachmentDraftTarget: target,
+        attachmentTargetKey: target,
+        attachmentTargetKeyRef: { current: target },
+        questionAttachmentTarget: null,
+        pendingUserInputs: [],
+        composerContextRecords: new Map(),
+        composerImages: [],
+        composerFilesRef: { current: [] },
+        promptRef: { current: "" },
+        pendingThreadImportsRef: { current: new Map() },
+        addComposerFilesToDraft: () => [],
+      }}
+      ready={(value) => {
+        importer = value;
+      }}
+    />,
+  );
+  const imported = importer.importContextRecords([local, other], environmentId);
+  expect([...imported.entries()]).toEqual([[local.contextId, local.contextId]]);
+  expect(store.getComposerDraft(target)?.mcpResourceContexts).toEqual([local]);
+});
 
 it.each([
   { kind: "file", edit: "delete" },

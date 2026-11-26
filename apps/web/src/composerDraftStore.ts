@@ -504,6 +504,7 @@ export function composerDraftHasUserContent(
     draft.reviewComments.length > 0 ||
     draft.threadContexts.length > 0 ||
     draft.environmentContexts.length > 0 ||
+    (draft.mcpResourceContexts?.length ?? 0) > 0 ||
     draft.replyTo !== null
   );
 }
@@ -1047,6 +1048,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.reviewComments.length === 0 &&
     draft.threadContexts.length === 0 &&
     draft.environmentContexts.length === 0 &&
+    (draft.mcpResourceContexts?.length ?? 0) === 0 &&
     draft.replyTo === null &&
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
@@ -2309,6 +2311,7 @@ function normalizePersistedDraftsByThreadId(
       reviewComments.length === 0 &&
       threadContexts.length === 0 &&
       environmentContexts.length === 0 &&
+      mcpResourceContexts.length === 0 &&
       replyTo === null &&
       !hasModelData &&
       !runtimeMode &&
@@ -2364,6 +2367,7 @@ function persistedComposerDraftHasUserContent(draft: PersistedComposerThreadDraf
     (draft.reviewComments?.length ?? 0) > 0 ||
     (draft.threadContexts?.length ?? 0) > 0 ||
     (draft.environmentContexts?.length ?? 0) > 0 ||
+    (draft.mcpResourceContexts?.length ?? 0) > 0 ||
     draft.replyTo !== undefined
   );
 }
@@ -2444,6 +2448,7 @@ export function partializeComposerDraftStoreState(
       draft.reviewComments.length === 0 &&
       draft.threadContexts.length === 0 &&
       draft.environmentContexts.length === 0 &&
+      (draft.mcpResourceContexts?.length ?? 0) === 0 &&
       draft.replyTo === null &&
       !hasModelData &&
       draft.runtimeMode === null &&
@@ -2776,6 +2781,7 @@ function toHydratedThreadDraft(
       ...(persistedDraft.previewAnnotations ?? []).map(previewAnnotationContextReference),
       ...(persistedDraft.threadContexts ?? []).map(threadContextReference),
       ...(persistedDraft.environmentContexts ?? []).map(environmentContextReference),
+      ...(persistedDraft.mcpResourceContexts ?? []),
       ...files.map(fileContextReference),
     ]),
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
@@ -4542,6 +4548,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 ...current.reviewComments.map(reviewCommentContextReference),
                 ...current.threadContexts.map(threadContextReference),
                 ...current.environmentContexts.map(environmentContextReference),
+                ...(current.mcpResourceContexts ?? []),
                 ...current.previewAnnotations.map(previewAnnotationContextReference),
               ]),
               images: [],

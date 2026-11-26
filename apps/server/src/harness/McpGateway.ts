@@ -21,11 +21,8 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import type { HarnessNativeMcpServer } from "@t3tools/provider-core/server/mcpSession";
-import {
-  MCP_APP_OUTPUT_KEY,
-  mcpAppToolCallableByApp,
-  mcpAppToolResourceUri,
-} from "@t3tools/shared/mcpApp";
+import { mcpAppToolCallableByApp, mcpAppToolResourceUri } from "@t3tools/shared/mcpApp";
+import { stripMcpAppToolOutput } from "@t3tools/shared/toolOutput";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -1603,15 +1600,31 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         );
       });
 
-    return [...buildGatewayExposedCatalog(stillActive).byExposedName.values()]
-      .filter((binding) => {
-        const policy = upstreamToolPolicy(context, binding);
-        return (
-          (appOwner === undefined || mcpAppToolCallableByApp(binding.tool._meta)) &&
-          (policy === "allow" || (policy === "ask" && context.approval !== undefined))
-        );
-      })
-      .map(({ exposed }) => exposed);
+    return yield* Effect.filter(
+      [...buildGatewayExposedCatalog(stillActive).byExposedName.values()],
+      (binding) =>
+        Effect.gen(function* () {
+          if (appOwner && !mcpAppToolCallableByApp(binding.tool._meta)) return false;
+          const policy = upstreamToolPolicy(context, binding);
+          if (policy === "allow") return true;
+          const approval = context.approval;
+          if (policy !== "ask" || approval === undefined) return false;
+          if (!appOwner || approval.request !== undefined) return true;
+          return approvalAudit === undefined
+            ? false
+            : yield* approvalAudit.hasActiveGatewayGrant({
+                target: {
+                  serverId: binding.server.id,
+                  serverScope: binding.server.scope,
+                  repoRoot: postWorkspace.workspaceRoot,
+                  toolName: binding.tool.name,
+                  configDigest: appOwner.configId,
+                },
+                threadId: approval.threadId,
+                providerSessionId: approval.providerSessionId,
+              });
+        }),
+    ).pipe(Effect.map((bindings) => bindings.map(({ exposed }) => exposed)));
   });
 
   const recordSessionLoadedTools = (
@@ -2036,18 +2049,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         ),
       );
     const rewrittenResultMeta = rewriteMcpAppMeta(serverId, callRes._meta);
-    let structuredContent = callRes.structuredContent;
-    if (
-      structuredContent &&
-      typeof structuredContent === "object" &&
-      !Array.isArray(structuredContent)
-    ) {
-      const { [MCP_APP_OUTPUT_KEY]: _app, ...content } = structuredContent as Record<
-        string,
-        unknown
-      >;
-      structuredContent = content;
-    }
+    const cleaned = stripMcpAppToolOutput(callRes) as UpstreamMcpCallResult;
     const appResourceUri =
       callRes.isError || appOwner !== undefined
         ? undefined
@@ -2058,8 +2060,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         ? undefined
         : yield* approvalConfigDigest(server.config).pipe(Effect.orElseSucceed(() => undefined));
     return {
-      ...callRes,
-      ...(structuredContent === undefined ? {} : { structuredContent }),
+      ...cleaned,
       ...(rewrittenResultMeta === undefined ? {} : { _meta: rewrittenResultMeta }),
       ...(appResourceUri === undefined || appConfigId === undefined
         ? {}

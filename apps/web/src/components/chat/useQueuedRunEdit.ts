@@ -68,7 +68,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ChatComposerHandle } from "./ChatComposer";
 import { fileAttachmentCapabilityBlockReason } from "./composerAttachmentFiles";
-import { composerDraftContentChanged } from "./composerSend.logic";
+import { composerDraftContentChanged, referencedMcpResources } from "./composerSend.logic";
 import {
   attachmentContextIdsForRecord,
   discardQueuedEditDraft,
@@ -167,9 +167,7 @@ async function submitQueuedRunEdit(input: {
         previewAnnotations: content.previewAnnotations,
         threadContexts: content.threadContexts,
         environmentContexts: content.environmentContexts,
-        mcpResourceContexts: content.mcpResourceContexts?.filter((record) =>
-          editText.includes(`/mcp-resource/${record.contextId})`),
-        ),
+        mcpResourceContexts: referencedMcpResources(editText, content.mcpResourceContexts),
         replyTo: content.replyTo ?? null,
         attachments: newAttachments.map((attachment, index) => ({
           attachment,

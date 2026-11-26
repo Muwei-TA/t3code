@@ -271,7 +271,10 @@ export interface ProviderSessionManagerV2Shape {
     Option.Option<ProviderAdapter.ProviderAdapterV2SessionRuntime>,
     ProviderSessionManagerV2Error
   >;
-  readonly isLive: (providerSessionId: ProviderSessionId) => Effect.Effect<boolean>;
+  readonly isLive: (
+    providerSessionId: ProviderSessionId,
+    threadId?: ThreadId,
+  ) => Effect.Effect<boolean>;
   readonly close: (
     providerSessionId: ProviderSessionId,
   ) => Effect.Effect<void, ProviderSessionManagerV2Error>;
@@ -3746,9 +3749,15 @@ export const layerWithOptions = (
               return exposedRuntime;
             }),
           ),
-        isLive: (providerSessionId) =>
+        isLive: (providerSessionId, threadId) =>
           Ref.get(sessions).pipe(
-            Effect.map((current) => current.has(sessionKey(providerSessionId))),
+            Effect.map((current) => {
+              const entry = current.get(sessionKey(providerSessionId));
+              return (
+                entry !== undefined &&
+                (threadId === undefined || entry.attachedThreadIds.has(threadId))
+              );
+            }),
           ),
         get: Effect.fn("ProviderSessionManager.get")(
           function* (providerSessionId) {

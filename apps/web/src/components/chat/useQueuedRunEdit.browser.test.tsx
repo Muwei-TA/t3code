@@ -4,6 +4,7 @@ import {
   ChatAttachmentId,
   ComposerContextId,
   MessageId,
+  ProjectId,
   RunId,
   ThreadId,
   type ScopedThreadRef,
@@ -12,6 +13,8 @@ import { useImperativeHandle, type RefObject } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+  formatComposerContextReference,
+  mcpResourceContextRecord,
   threadContextRecord,
 } from "@t3tools/shared/composerContextReferences";
 import { toastManager } from "../ui/toast";
@@ -454,6 +457,42 @@ describe("useQueuedRunEdit", () => {
             attachments: [keptFile],
             context: { version: 1, records: [keptFileRecord, kept] },
           }),
+        }),
+      }),
+    );
+  });
+
+  it("retries a queued edit with only the resource still linked in its prompt", async () => {
+    const { hook } = setup();
+    mocks.editQueuedRun
+      .mockResolvedValueOnce({ _tag: "Failure" })
+      .mockResolvedValueOnce({ _tag: "Success" });
+    const project = ProjectId.make("docs");
+    const guide = mcpResourceContextRecord(ENV, project, "ui://docs/guide", "Guide");
+    const notes = mcpResourceContextRecord(ENV, project, "ui://docs/notes", "Notes");
+    const prompt = `Read ${formatComposerContextReference(guide)}`;
+    const text = `${prompt} and ${formatComposerContextReference(notes)}`;
+    const messageId = MessageId.make("message-1");
+    const messages = [{ id: messageId, text, context: { version: 1, records: [guide, notes] } }];
+    await using _screen = await render(view(THREAD_A, "queued", hook, messages));
+
+    await act(() => requireHook(hook).beginEdit({ runId: RUN, messageId, text, attachments: [] }));
+    const store = useComposerDraftStore.getState();
+    const draftTarget = requireHook(hook).draftTarget;
+    const records = store.getComposerDraft(draftTarget)?.mcpResourceContexts;
+    expect(records).toEqual([guide, notes]);
+    await act(() => store.setPrompt(draftTarget, prompt));
+    const content = { ...savedContent(prompt), mcpResourceContexts: records };
+    await act(() => requireHook(hook).saveEdit(content, () => {}));
+    expect(requireHook(hook).isEditing).toBe(true);
+    expect(store.getComposerDraft(draftTarget)?.prompt).toBe(prompt);
+    await act(() => requireHook(hook).saveEdit(content, () => {}));
+    expect(mocks.editQueuedRun).toHaveBeenCalledTimes(2);
+    expect(mocks.editQueuedRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          text: prompt,
+          edit: expect.objectContaining({ context: { version: 1, records: [guide] } }),
         }),
       }),
     );

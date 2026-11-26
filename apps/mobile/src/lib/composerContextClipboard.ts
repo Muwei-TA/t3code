@@ -9,6 +9,7 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   COMPOSER_CONTEXT_MAX_RECORDS,
   type EnvironmentId,
+  type ProjectId,
 } from "@t3tools/contracts";
 import {
   decodeComposerContextClipboardHtml,
@@ -16,6 +17,7 @@ import {
   encodeComposerContextFragment,
 } from "@t3tools/shared/composerContextClipboard";
 import {
+  replaceComposerContextReferences,
   threadContextsOutsideEnvironment,
   threadLinkContextReferences,
 } from "@t3tools/shared/composerContextReferences";
@@ -76,6 +78,7 @@ export async function importComposerContextClipboard(
   destinationEnvironmentId?: EnvironmentId,
   /** The machines the destination links to, whose threads its agent can read too. */
   linkedEnvironments: ReadonlyMap<EnvironmentId, string> = new Map(),
+  destinationProjectId?: ProjectId,
 ) {
   const copied =
     decodeComposerContextFragment(input.fragment) ?? decodeComposerContextClipboardHtml(input.html);
@@ -119,6 +122,17 @@ export async function importComposerContextClipboard(
           linkedEnvironments,
         });
   const skippedIds = new Set(skippedThreads.map((record) => record.contextId));
+  const skippedResourceIds = new Set(
+    imported.context.records.flatMap((record) =>
+      record.kind === "mcp-resource" &&
+      "uri" in record &&
+      (record.environmentId !== destinationEnvironmentId ||
+        record.projectId !== destinationProjectId)
+        ? [record.contextId]
+        : [],
+    ),
+  );
+  for (const id of skippedResourceIds) skippedIds.add(id);
   const retained = imported.context.records.filter((record) => !skippedIds.has(record.contextId));
   if (existingContextCount + retained.length > COMPOSER_CONTEXT_MAX_RECORDS)
     throw new Error(m(msg("Remove some context items from the draft before pasting more.")));
@@ -146,7 +160,12 @@ export async function importComposerContextClipboard(
     // The last copy can be cancelled after its own check; a cancelled import must not return files nobody will release.
     checkAborted(signal);
     return {
-      text: imported.text,
+      text:
+        skippedResourceIds.size === 0
+          ? imported.text
+          : replaceComposerContextReferences(imported.text, (reference) =>
+              skippedResourceIds.has(reference.contextId) ? reference.label : reference.source,
+            ),
       context: { version: 1 as const, records },
       attachments,
       failures,

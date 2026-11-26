@@ -109,6 +109,12 @@ export const read = Effect.fn("HarnessMcpResourceMentions.read")(function* (
     remaining -= end;
     if (remaining === 0 || end < block.length) break;
   }
+  if (text === "") {
+    return yield* new HarnessError({
+      code: "not_found",
+      detail: "This MCP resource has no text content.",
+    });
+  }
   return { text };
 });
 

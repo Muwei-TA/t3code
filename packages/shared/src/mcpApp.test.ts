@@ -194,6 +194,35 @@ describe("mcpAppFromToolItem", () => {
     expect(mcpAppFromToolItem({ ...item, nativeItemRef: { nativeId: "tool-1" } })).toBeUndefined();
     expect(mcpAppFromToolItem({ ...item, nativeItemRef: null })).toEqual(app);
   });
+
+  it("does not interpret provider-relayed gateway results as native app references", async () => {
+    const { mcpAppFromToolItem, stripMcpAppToolOutput } = await import("./toolOutput.ts");
+    for (const [toolName, server, tool] of [
+      ["mcp__t3-harness__fixture__show", "t3-harness__fixture", "show"],
+      ["t3-harness.fixture__docs.show", "t3-harness.fixture__docs", "show"],
+    ]) {
+      const data = {
+        summary: "catalog",
+        t3McpApp: {
+          attachmentId: "thread-example-html",
+          server,
+          tool,
+          resourceUri: "ui://fixture/card",
+        },
+      };
+      const output = {
+        content: [{ type: "text", text: JSON.stringify(data) }],
+        structuredContent: { structuredContent: data },
+      };
+      expect(
+        mcpAppFromToolItem({ toolName, output, nativeItemRef: { nativeId: "tool-item" } }),
+      ).toBeUndefined();
+      expect(stripMcpAppToolOutput(output)).toEqual({
+        content: [{ type: "text", text: JSON.stringify({ summary: "catalog" }) }],
+        structuredContent: { structuredContent: { summary: "catalog" } },
+      });
+    }
+  });
   it("reads the app from both the stored output and its compact wire form", async () => {
     const { compactDynamicToolOutput, mcpAppFromToolItem } = await import("./toolOutput.ts");
     const app = {

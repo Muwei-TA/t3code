@@ -85,6 +85,7 @@ export function useComposerContextImport(input: {
   readonly linkedEnvironments: ReadonlyMap<EnvironmentId, string>;
   readonly activeThread: ChatComposerProps["activeThread"];
   readonly activeThreadId: ChatComposerProps["activeThreadId"];
+  readonly projectId?: ChatComposerProps["activeProjectId"];
   readonly composerDraftTarget: ChatComposerProps["composerDraftTarget"];
   readonly attachmentDraftTarget: ChatComposerProps["composerDraftTarget"];
   readonly attachmentTargetKey: string;
@@ -105,6 +106,7 @@ export function useComposerContextImport(input: {
     linkedEnvironments,
     activeThread,
     activeThreadId,
+    projectId,
     composerDraftTarget,
     attachmentDraftTarget,
     attachmentTargetKey,
@@ -428,7 +430,12 @@ export function useComposerContextImport(input: {
           break;
         }
         case "mcp-resource": {
-          if (questionAttachmentTarget !== null || record.environmentId !== environmentId) break;
+          if (
+            questionAttachmentTarget !== null ||
+            record.environmentId !== environmentId ||
+            record.projectId !== projectId
+          )
+            break;
           const store = useComposerDraftStore.getState();
           const records = store.getComposerDraft(composerDraftTarget)?.mcpResourceContexts ?? [];
           if (!records.some((entry) => entry.contextId === record.contextId)) {

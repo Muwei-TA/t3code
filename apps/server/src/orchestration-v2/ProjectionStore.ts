@@ -6921,6 +6921,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             return {
               toolName: typeof item.toolName === "string" ? item.toolName : null,
               output: item.output,
+              nativeItemRef: item.nativeItemRef,
             };
           }),
         ),

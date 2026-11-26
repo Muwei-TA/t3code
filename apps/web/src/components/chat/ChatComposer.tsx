@@ -1505,6 +1505,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     linkedEnvironments,
     activeThread,
     activeThreadId,
+    projectId: activeProjectId,
     composerDraftTarget,
     attachmentDraftTarget,
     attachmentTargetKey,
@@ -1812,6 +1813,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       restoredEnvironments.length > 0
     ) {
       setComposerDraftEnvironmentContexts(composerDraftTarget, nextEnvironments);
+    }
+
+    const store = useComposerDraftStore.getState();
+    const liveResources = store.getComposerDraft(composerDraftTarget)?.mcpResourceContexts ?? [];
+    const nextResources = liveResources.filter((record) => {
+      if (referenced.has(record.contextId)) return true;
+      retained.mcpResources.set(record.contextId, record);
+      return false;
+    });
+    const liveResourceIds = new Set<string>(liveResources.map((record) => record.contextId));
+    for (const contextId of referenced) {
+      if (liveResourceIds.has(contextId)) continue;
+      const record = retained.mcpResources.get(contextId);
+      if (record) nextResources.push(record);
+    }
+    if (
+      nextResources.length !== liveResources.length ||
+      nextResources.some((record, index) => record !== liveResources[index])
+    ) {
+      store.setMcpResourceContexts(composerDraftTarget, nextResources);
     }
 
     for (const comment of composerReviewComments) {

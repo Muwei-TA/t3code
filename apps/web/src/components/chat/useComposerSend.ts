@@ -110,6 +110,7 @@ import {
   composerDraftContentChanged,
   loadBalancingSendWarning,
   multipleModelSendBlock,
+  referencedMcpResources,
   referencedThreadContexts,
 } from "./composerSend.logic";
 import { useMultipleModelSend } from "./useMultipleModelSend";
@@ -637,6 +638,7 @@ export function useComposerSend(input: ComposerSendInput) {
       const replyTo =
         useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.replyTo ?? null;
       const prompt = withReplyReference(sideChatCommand.prompt, replyTo);
+      const mcpResourceContexts = referencedMcpResources(prompt, sendCtx.mcpResourceContexts);
       const { sendableTerminalContexts, hasSendableContent } = deriveComposerSendState({
         prompt,
         imageCount: sendCtx.images.length + sendCtx.files.length,
@@ -646,7 +648,8 @@ export function useComposerSend(input: ComposerSendInput) {
           sendCtx.previewAnnotations.length +
           sendCtx.reviewComments.length +
           sendCtx.threadContexts.length +
-          sendCtx.environmentContexts.length,
+          sendCtx.environmentContexts.length +
+          mcpResourceContexts.length,
       });
       // An answer's text and attachments live in the question's draft, apart from this one.
       if (
@@ -658,7 +661,8 @@ export function useComposerSend(input: ComposerSendInput) {
           sendCtx.previewAnnotations.length > 0 ||
           sendCtx.reviewComments.length > 0 ||
           sendCtx.threadContexts.length > 0 ||
-          sendCtx.environmentContexts.length > 0)
+          sendCtx.environmentContexts.length > 0 ||
+          mcpResourceContexts.length > 0)
       ) {
         toastManager.add(
           stackedThreadToast({
@@ -673,6 +677,7 @@ export function useComposerSend(input: ComposerSendInput) {
       const snapshot = snapshotComposerSend({
         ...sendCtx,
         prompt,
+        mcpResourceContexts,
         sendableTerminalContexts,
         replyTo,
       });
@@ -844,12 +849,10 @@ export function useComposerSend(input: ComposerSendInput) {
     const replyTo =
       useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.replyTo ?? null;
     const promptForSend = withReplyReference(draftPrompt, replyTo);
-    const referencedResources = draftMcpResourceContexts?.length
-      ? new Set(collectInlineContextIds(promptForSend))
-      : null;
-    const composerMcpResourceContexts = referencedResources
-      ? draftMcpResourceContexts!.filter((record) => referencedResources.has(record.contextId))
-      : [];
+    const composerMcpResourceContexts = referencedMcpResources(
+      promptForSend,
+      draftMcpResourceContexts,
+    );
     if (warnStrandedThreadContext(promptForSend, composerThreadContexts)) return;
     if (queuedRunEdit.isEditing) {
       // A queued message stays in its thread, so saving `/side` would send it to main.
@@ -898,7 +901,8 @@ export function useComposerSend(input: ComposerSendInput) {
         composerPreviewAnnotations.length +
         composerReviewComments.length +
         composerThreadContexts.length +
-        composerEnvironmentContexts.length,
+        composerEnvironmentContexts.length +
+        composerMcpResourceContexts.length,
     });
     const feedbackCommand =
       ctxSelectedProvider === "codex" &&
@@ -908,7 +912,8 @@ export function useComposerSend(input: ComposerSendInput) {
       composerPreviewAnnotations.length === 0 &&
       composerReviewComments.length === 0 &&
       composerThreadContexts.length === 0 &&
-      composerEnvironmentContexts.length === 0
+      composerEnvironmentContexts.length === 0 &&
+      composerMcpResourceContexts.length === 0
         ? parseCodexFeedbackCommand(trimmed)
         : null;
     if (feedbackCommand && multipleModelSelections === null) {

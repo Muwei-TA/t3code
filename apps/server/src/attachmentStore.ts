@@ -131,7 +131,7 @@ export function parseThreadSegmentFromAttachmentId(attachmentId: string): string
 /** Only this thread's ids qualify, preserving source pages when deleting a fork. */
 export function threadHtmlRenderAttachmentIds(
   threadId: string,
-  items: Iterable<{ readonly toolName: string | null | undefined; readonly output?: unknown }>,
+  items: Iterable<Parameters<typeof mcpAppFromToolItem>[0]>,
 ) {
   const segment = toSafeThreadAttachmentSegment(threadId);
   if (segment === null) return [];

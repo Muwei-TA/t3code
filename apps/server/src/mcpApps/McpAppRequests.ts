@@ -177,6 +177,14 @@ const make = Effect.gen(function* () {
       const providerThread = projection.providerThreads.find(
         (candidate) => candidate.id === providerThreadId,
       );
+      const sessionId =
+        providerThread?.providerInstanceId === shell.providerInstanceId
+          ? providerThread.providerSessionId
+          : undefined;
+      const liveSessionId =
+        sessionId != null && (yield* providerSessions.isLive(sessionId, threadId))
+          ? sessionId
+          : undefined;
       const capabilities = yield* adapters.value
         .get(shell.providerInstanceId)
         .pipe(Effect.flatMap((adapter) => adapter.getCapabilities()));
@@ -188,7 +196,7 @@ const make = Effect.gen(function* () {
         override: activeRun?.harnessMode,
       });
       return {
-        providerSessionId: providerThread?.providerSessionId ?? threadId,
+        providerSessionId: liveSessionId ?? threadId,
         workspaceRoot,
         interactionMode,
         runtimeMode: shell.runtimeMode,
@@ -199,7 +207,7 @@ const make = Effect.gen(function* () {
         approval: {
           threadId,
           providerInstanceId: shell.providerInstanceId,
-          providerSessionId: providerThread?.providerSessionId ?? undefined,
+          providerSessionId: liveSessionId,
         },
       } satisfies McpGateway.GatewaySessionContext;
     });
@@ -316,15 +324,15 @@ const make = Effect.gen(function* () {
     if (app.app.server === HARNESS_MCP_APP_SERVER) {
       const { gateway, context, owner } = yield* resolveGateway(input.threadId, app);
       const { serverId } = owner;
-      const canonical = McpGateway.decodeCanonicalExposedResourceUri(input.uri);
-      const originalUri = McpGateway.decodeCanonicalExposedResourceUri(
-        app.app.resourceUri,
-      )?.upstreamUri;
-      if (canonical !== null && canonical.serverId !== serverId && input.uri !== originalUri) {
+      const explicitGatewayUri = input.uri.startsWith("t3-harness://");
+      if (
+        explicitGatewayUri &&
+        McpGateway.decodeCanonicalExposedResourceUri(input.uri)?.serverId !== serverId
+      ) {
         return yield* fail(input.threadId, "request-failed");
       }
       const uri =
-        canonical?.serverId === serverId
+        explicitGatewayUri || input.uri === app.app.resourceUri
           ? input.uri
           : McpGateway.canonicalExposedResourceUri(serverId, input.uri);
       return yield* gateway.readResourceForSession({ context, uri, appOwner: owner }).pipe(

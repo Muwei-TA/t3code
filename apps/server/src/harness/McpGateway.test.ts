@@ -346,7 +346,40 @@ describe("McpGateway", () => {
 
         decision = "acceptForSession";
         yield* invoke();
-        yield* invoke();
+        const sessionGrant = (yield* audit.list()).find((rule) => rule.scope === "session")!;
+        const appOwner = { serverId: id, configId: sessionGrant.target!.configDigest };
+        const appContext = {
+          ...context,
+          approval: {
+            threadId,
+            providerInstanceId: context.approval.providerInstanceId,
+            providerSessionId: nativeSession,
+          },
+        };
+        expect(
+          (yield* gateway.listAppTools(appContext, appOwner)).map((tool) => tool.exposedName),
+        ).toEqual(["approval__write"]);
+        expect(
+          (yield* gateway.callToolForSession({
+            context: appContext,
+            appOwner,
+            toolName: "approval__write",
+            arguments: {},
+          })).isError,
+        ).not.toBe(true);
+        const detached = {
+          ...appContext,
+          approval: { ...appContext.approval, providerSessionId: undefined },
+        };
+        expect(yield* gateway.listAppTools(detached, appOwner)).toEqual([]);
+        expect(
+          (yield* gateway.callToolForSession({
+            context: detached,
+            appOwner,
+            toolName: "approval__write",
+            arguments: {},
+          })).isError,
+        ).toBe(true);
         expect(approvals).toBe(4);
         expect(executions).toBe(4);
         const newSession = {

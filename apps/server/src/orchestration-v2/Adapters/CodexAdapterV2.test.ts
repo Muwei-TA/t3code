@@ -9546,76 +9546,121 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
-  it.effect("captures an MCP app's resource and holds the turn open until it lands", () =>
-    Effect.gen(function* () {
-      const appCaptured = yield* Deferred.make<OrchestrationV2TurnItem>();
-      const harness = yield* makeCodexReplayHarness(mcpAppTranscript, (event) =>
-        event.type === "turn_item.updated" &&
-        event.turnItem.type === "dynamic_tool" &&
-        event.turnItem.status === "completed"
-          ? Deferred.succeed(appCaptured, event.turnItem)
-          : Effect.void,
-      );
-      const now = yield* DateTime.now;
-
-      yield* harness.runtime.startTurn(
-        makeCodexTestTurnInput({
-          threadId: harness.threadId,
-          providerThread: harness.providerThread,
-          now,
-          attemptId: RunAttemptId.make("attempt-codex-mcp-app"),
-          text: MCP_APP_PROMPT,
-        }),
-      );
-      const item = yield* Deferred.await(appCaptured);
-      assert.equal(harness.terminalEvents()[0]?.status, "completed");
-
-      const completedRows = harness.events.filter(
-        (event) =>
+  it.effect.each([false, true])(
+    "captures a native MCP app and leaves gateway capture to the server (gateway: %s)",
+    (gateway) =>
+      Effect.gen(function* () {
+        const appCaptured = yield* Deferred.make<OrchestrationV2TurnItem>();
+        const transcript = gateway
+          ? makeCodexReplayTranscript({
+              scenario: MCP_APP_SCENARIO,
+              entries: mcpAppTranscript.entries.flatMap<CodexReplay.CodexAppServerReplayEntry>(
+                (entry) => {
+                  if (!("label" in entry)) return [entry];
+                  if (entry.label === "mcpServer/resource/read") return [];
+                  if (
+                    entry.label !== "item/started/app-tool" &&
+                    entry.label !== "item/completed/app-tool"
+                  )
+                    return [entry];
+                  const completed = entry.label === "item/completed/app-tool";
+                  return [
+                    {
+                      type: "emit_inbound",
+                      label: entry.label,
+                      frame: {
+                        method: completed ? "item/completed" : "item/started",
+                        params: {
+                          item: {
+                            ...mcpAppToolItem(completed ? "completed" : "inProgress"),
+                            server: "t3-harness",
+                          },
+                          threadId: MCP_APP_NATIVE_THREAD,
+                          turnId: MCP_APP_NATIVE_TURN,
+                          ...(completed
+                            ? { completedAtMs: 1782622441500 }
+                            : { startedAtMs: 1782622440500 }),
+                        },
+                      },
+                    },
+                  ];
+                },
+              ),
+            })
+          : mcpAppTranscript;
+        const harness = yield* makeCodexReplayHarness(transcript, (event) =>
           event.type === "turn_item.updated" &&
           event.turnItem.type === "dynamic_tool" &&
-          event.turnItem.status === "completed",
-      );
-      assert.lengthOf(completedRows, 1);
+          event.turnItem.status === "completed"
+            ? Deferred.succeed(appCaptured, event.turnItem)
+            : Effect.void,
+        );
+        const now = yield* DateTime.now;
 
-      assert.equal(item.type, "dynamic_tool");
-      const output = item.type === "dynamic_tool" ? (item.output as Record<string, unknown>) : {};
-      const reference = readMcpAppReference(output[MCP_APP_OUTPUT_KEY]);
-      assert.deepEqual(
-        { ...reference, attachmentId: undefined },
-        {
-          attachmentId: undefined,
-          server: "weather",
-          tool: "get_weather",
-          resourceUri: MCP_APP_RESOURCE,
-          csp: { connectDomains: ["https://api.weather.test"] },
-        },
-      );
-      assert.deepEqual(output.result, {
-        content: [{ type: "text", text: "Sunny" }],
-        structuredContent: { temp: 21 },
-      });
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-codex-mcp-app"),
+            text: MCP_APP_PROMPT,
+          }),
+        );
+        const item = yield* Deferred.await(appCaptured);
+        yield* harness.firstTerminal;
+        assert.equal(harness.terminalEvents()[0]?.status, "completed");
 
-      const fileSystem = yield* FileSystem.FileSystem;
-      const stored = yield* fileSystem.readFileString(
-        resolveAttachmentPathById({
-          attachmentsDir: harness.serverConfig.attachmentsDir,
-          attachmentId: reference!.attachmentId,
-        })!,
-      );
-      assert.include(stored, "connect-src https://api.weather.test");
-      assert.isBelow(stored.indexOf("Content-Security-Policy"), stored.indexOf("<script>"));
-      assert.isFalse(yield* harness.hasPendingBackgroundWork);
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          IdAllocator.layer,
-          McpProviderSessions.layer,
-          NodeServices.layer,
-          NodeCrypto.layer,
+        const completedRows = harness.events.filter(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "dynamic_tool" &&
+            event.turnItem.status === "completed",
+        );
+        assert.lengthOf(completedRows, 1);
+
+        assert.equal(item.type, "dynamic_tool");
+        const output = item.type === "dynamic_tool" ? (item.output as Record<string, unknown>) : {};
+        const reference = readMcpAppReference(output[MCP_APP_OUTPUT_KEY]);
+        if (gateway) {
+          assert.isUndefined(reference);
+          assert.isFalse(yield* harness.hasPendingBackgroundWork);
+          return;
+        }
+        assert.deepEqual(
+          { ...reference, attachmentId: undefined },
+          {
+            attachmentId: undefined,
+            server: "weather",
+            tool: "get_weather",
+            resourceUri: MCP_APP_RESOURCE,
+            csp: { connectDomains: ["https://api.weather.test"] },
+          },
+        );
+        assert.deepEqual(output.result, {
+          content: [{ type: "text", text: "Sunny" }],
+          structuredContent: { temp: 21 },
+        });
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        const stored = yield* fileSystem.readFileString(
+          resolveAttachmentPathById({
+            attachmentsDir: harness.serverConfig.attachmentsDir,
+            attachmentId: reference!.attachmentId,
+          })!,
+        );
+        assert.include(stored, "connect-src https://api.weather.test");
+        assert.isBelow(stored.indexOf("Content-Security-Policy"), stored.indexOf("<script>"));
+        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
         ),
       ),
-    ),
   );
 
   const MCP_APP_DEFERRED_RESULT = {

@@ -52,105 +52,130 @@ const make = Effect.gen(function* () {
   const publish: GatewayMcpAppCapture["Service"]["publish"] = Effect.fn(
     "GatewayMcpAppCapture.publish",
   )(
-    function* ({ threadId, run, context, tool, source, arguments: args, result }) {
-      const owner = McpGateway.decodeCanonicalExposedToolName(tool);
-      if (owner === null || !run.activeAttemptId || !run.providerThreadId) return;
-      const resourceUri = source.uri;
-      const resource = yield* gateway
-        .readResourceForSession({
-          context,
-          uri: resourceUri,
-          appOwner: {
-            serverId: HarnessMcpServerId.make(owner.serverId),
-            configId: source.configId,
-          },
-          connectedOnly: true,
-        })
-        .pipe(Effect.timeoutOption("3 seconds"));
-      if (Option.isNone(resource)) return;
-      const app = yield* snapshotMcpApp({
-        attachmentsDir: config.attachmentsDir,
-        threadId,
-        server: HARNESS_MCP_APP_SERVER,
-        tool,
-        resourceUri,
-        contents: resource.value.contents,
-      }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
-      if (app === undefined) return;
+    ({ threadId, run, context, tool, source, arguments: args, result }) =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const owner = McpGateway.decodeCanonicalExposedToolName(tool);
+          const activeAttemptId = run.activeAttemptId;
+          if (owner === null || !activeAttemptId) return;
+          const resourceUri = source.uri;
+          const resource = yield* restore(
+            gateway
+              .readResourceForSession({
+                context,
+                uri: resourceUri,
+                appOwner: {
+                  serverId: HarnessMcpServerId.make(owner.serverId),
+                  configId: source.configId,
+                },
+                connectedOnly: true,
+              })
+              .pipe(Effect.timeoutOption("3 seconds")),
+          );
+          if (Option.isNone(resource)) return;
+          const app = yield* snapshotMcpApp({
+            attachmentsDir: config.attachmentsDir,
+            threadId,
+            server: HARNESS_MCP_APP_SERVER,
+            tool,
+            resourceUri,
+            contents: resource.value.contents,
+          }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+          if (app === undefined) return;
 
-      // The gateway is the source of truth even if the provider omits the tool event or its identity.
-      const signal = gatewayAppTurnItemSignal(app.attachmentId);
-      const itemId = ids.derive.runSignalTurnItem({ runId: run.id, signal });
-      const commandId = CommandId.make(signal);
-      const now = yield* DateTime.now;
-      const committed = yield* Effect.gen(function* () {
-        const current = yield* projections.getRun(threadId, run.id);
-        if (
-          current?.activeAttemptId !== run.activeAttemptId ||
-          (current.status !== "starting" && current.status !== "running")
-        )
-          return false;
-        const ordinal = yield* positions.allocate({
-          threadId,
-          turnItemId: itemId,
-          runId: run.id,
-          runOrdinal: run.ordinal,
-        });
-        const id = yield* ids.allocate.event({ threadId, commandId });
-        const written = yield* sink.writeIfRunCurrent({
-          commandId,
-          threadId,
-          runId: run.id,
-          activeAttemptId: run.activeAttemptId!,
-          expectedStatus: current.status,
-          events: [
-            {
-              id,
-              type: "turn-item.updated",
+          // The gateway is the source of truth even if the provider omits the tool event or its identity.
+          const signal = gatewayAppTurnItemSignal(app.attachmentId);
+          const itemId = ids.derive.runSignalTurnItem({ runId: run.id, signal });
+          const commandId = CommandId.make(signal);
+          const now = yield* DateTime.now;
+          const committed = yield* Effect.gen(function* () {
+            const current = yield* projections.getRun(threadId, run.id);
+            if (
+              current?.activeAttemptId !== activeAttemptId ||
+              current.providerThreadId === null ||
+              (current.status !== "starting" && current.status !== "running")
+            )
+              return false;
+            const ordinal = yield* positions.allocate({
               threadId,
+              turnItemId: itemId,
               runId: run.id,
-              providerInstanceId: run.providerInstanceId,
-              occurredAt: now,
-              payload: stripUnservedToolOutputImageBytes({
-                id: itemId,
-                type: "dynamic_tool",
+              runOrdinal: run.ordinal,
+            });
+            const id = yield* ids.allocate.event({ threadId, commandId });
+            const write = (expectedStatus: "starting" | "running") =>
+              sink.writeIfRunCurrent({
+                commandId,
                 threadId,
                 runId: run.id,
-                nodeId: run.rootNodeId,
-                providerThreadId: run.providerThreadId,
-                providerTurnId: null,
-                nativeItemRef: null,
-                parentItemId: null,
-                ordinal,
-                status: "completed",
-                title: null,
-                toolName: `${HARNESS_MCP_APP_SERVER}.${tool}`,
-                input: args,
-                output: { [MCP_APP_OUTPUT_KEY]: app, result, gatewayConfigId: source.configId },
-                startedAt: now,
-                completedAt: now,
-                updatedAt: now,
-              }),
-            },
-          ],
-        });
-        return written.committed;
-      }).pipe(
-        Effect.catch(() =>
-          projections.getTurnItem({ threadId, itemId }).pipe(
-            Effect.map((item) => item !== null),
-            Effect.orElseSucceed(() => true),
-          ),
-        ),
-        Effect.uninterruptible,
-      );
-      if (committed) return;
-      const path = resolveAttachmentRelativePath({
-        attachmentsDir: config.attachmentsDir,
-        relativePath: `${app.attachmentId}.html`,
-      });
-      if (path !== null) yield* fileSystem.remove(path, { force: true }).pipe(Effect.ignore);
-    },
+                activeAttemptId,
+                expectedStatus,
+                unlessInterruptRequested: {
+                  requestId: ids.derive.runSignalTurnItem({
+                    runId: run.id,
+                    signal: "interrupt-request",
+                  }),
+                  resultId: ids.derive.runSignalTurnItem({
+                    runId: run.id,
+                    signal: "interrupt-result",
+                  }),
+                },
+                events: [
+                  {
+                    id,
+                    type: "turn-item.updated",
+                    threadId,
+                    runId: run.id,
+                    providerInstanceId: run.providerInstanceId,
+                    occurredAt: now,
+                    payload: stripUnservedToolOutputImageBytes({
+                      id: itemId,
+                      type: "dynamic_tool",
+                      threadId,
+                      runId: run.id,
+                      nodeId: current.rootNodeId,
+                      providerThreadId: current.providerThreadId,
+                      providerTurnId: null,
+                      nativeItemRef: null,
+                      parentItemId: null,
+                      ordinal,
+                      status: "completed",
+                      title: null,
+                      toolName: `${HARNESS_MCP_APP_SERVER}.${tool}`,
+                      input: args,
+                      output: {
+                        [MCP_APP_OUTPUT_KEY]: app,
+                        result,
+                        gatewayConfigId: source.configId,
+                      },
+                      startedAt: now,
+                      completedAt: now,
+                      updatedAt: now,
+                    }),
+                  },
+                ],
+              });
+            const written = yield* write(current.status);
+            if (!written.committed && current.status === "starting") {
+              return (yield* write("running")).committed;
+            }
+            return written.committed;
+          }).pipe(
+            Effect.catch(() =>
+              projections.getTurnItem({ threadId, itemId }).pipe(
+                Effect.map((item) => item !== null),
+                Effect.orElseSucceed(() => true),
+              ),
+            ),
+          );
+          if (committed) return;
+          const path = resolveAttachmentRelativePath({
+            attachmentsDir: config.attachmentsDir,
+            relativePath: `${app.attachmentId}.html`,
+          });
+          if (path !== null) yield* fileSystem.remove(path, { force: true }).pipe(Effect.ignore);
+        }),
+      ),
     Effect.catchCause(() => Effect.logDebug("Gateway MCP app capture did not complete")),
   );
   return GatewayMcpAppCapture.of({ publish });
