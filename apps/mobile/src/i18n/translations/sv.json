@@ -5994,5 +5994,17 @@
   "34735826d0694cc6": "Tvinga hämtning",
   "02b3fbf612e5a864": "Konflikter vid hämtning",
   "90285a3737126abb": "Tvingad hämtning ersätter lokala ändringar som står i konflikt med fjärrversionen, inklusive borttagningar.",
-  "0dce15f46a89dcbd": "Terminalåtkomst krävs för att aktivera kommandokrokar."
+  "0dce15f46a89dcbd": "Terminalåtkomst krävs för att aktivera kommandokrokar.",
+  "940120f9e812f27c": "Det gick inte att koppla från MCP-inloggningen.",
+  "980533591b2e08c8": "Det gick inte att starta MCP-inloggningen.",
+  "45d1a02c930871db": "Inloggningen är inte klar. Godkänn åtkomsten eller klistra in återanropsadressen.",
+  "2cf284a7b130b411": "Logga in igen",
+  "b69f16a17e170ccc": "Koppla från inloggning",
+  "c7fdce5691d7bfeb": "OAuth-återanropsadress",
+  "f95c26bb70c25451": "OAuth-klient-ID",
+  "1bb070cb5fcbb458": "OAuth-behörigheter (kommaseparerade)",
+  "5ccdd85b584946ab": "URL till OAuth-auktoriseringsservern",
+  "4f40598caa97ab7b": "Inloggning krävs",
+  "7a45e9a9f2f0b41d": "Godkänn åtkomsten i webbläsaren. Klistra in adressen här om återanropssidan inte går att öppna.",
+  "b3d555b9f91c09ab": "OAuth-inställningar (valfritt)"
 }

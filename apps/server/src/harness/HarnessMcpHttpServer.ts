@@ -34,6 +34,7 @@ import { resolveRunHarnessMode, runInteractionMode } from "./HarnessTurnPreproce
 import * as HarnessHooksService from "./HarnessHooksService.ts";
 import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import * as HarnessMemoryStore from "./HarnessMemoryStore.ts";
+import * as HarnessMcpOAuthNotice from "./HarnessMcpOAuthNotice.ts";
 import * as McpGateway from "./McpGateway.ts";
 import * as PluginHost from "./PluginHost.ts";
 
@@ -100,6 +101,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
   readonly gateway: McpGateway.McpGateway["Service"];
   readonly libraryStore: Option.Option<HarnessLibraryStore.HarnessLibraryStore["Service"]>;
   readonly memoryStore: Option.Option<HarnessMemoryStore.HarnessMemoryStore["Service"]>;
+  readonly oauthNotice: Option.Option<HarnessMcpOAuthNotice.HarnessMcpOAuthNotice["Service"]>;
   readonly hooksService: Option.Option<HarnessHooksService.HarnessHooksService["Service"]>;
   readonly pluginHost: Option.Option<PluginHost.PluginHost["Service"]>;
   readonly projections: ProjectionStore.ProjectionStoreV2["Service"];
@@ -119,6 +121,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     gateway,
     libraryStore,
     memoryStore,
+    oauthNotice,
     hooksService,
     pluginHost,
     projections,
@@ -286,12 +289,29 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     };
   });
 
+  const publishAuthNotice = (serverId: HarnessMcpServerId) =>
+    Option.isSome(oauthNotice)
+      ? oauthNotice.value.publish(scope.thread.threadId, serverId)
+      : Effect.void;
+
   if (method === "tools/list") {
     const state = yield* resolveThreadState;
     if (state === null) {
       return forbiddenResponse("The calling provider no longer owns this thread.");
     }
     const tools = yield* gateway.listToolsForSession(state.context);
+    if (
+      Option.isSome(oauthNotice) &&
+      state.shell.activeRunId !== null &&
+      state.managedPolicyAllowsHarness
+    ) {
+      const snapshot = yield* gateway.getSnapshot(state.context.workspaceRoot);
+      yield* Effect.forEach(
+        snapshot.servers.filter((server) => server.state === "auth_required"),
+        (server) => publishAuthNotice(server.id),
+        { discard: true },
+      );
+    }
     const pluginTools =
       state.managedPolicyAllowsHarness && Option.isSome(pluginHost)
         ? pluginHost.value.listActiveSdkTools().filter(
@@ -1228,12 +1248,19 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     const result = yield* gateway
       .callToolForSession({ context: state.context, toolName, arguments: toolArgs })
       .pipe(
-        Effect.catch((error: HarnessError) =>
-          Effect.succeed({
-            isError: true as const,
-            content: [{ type: "text", text: error.detail }],
-          }),
-        ),
+        Effect.catch((error: HarnessError) => {
+          const server = decodeMcpServerId(error.serverId);
+          const notice =
+            error.code === "auth_required" && Option.isSome(server)
+              ? publishAuthNotice(server.value)
+              : Effect.void;
+          return notice.pipe(
+            Effect.as({
+              isError: true as const,
+              content: [{ type: "text", text: error.detail }],
+            }),
+          );
+        }),
       );
     yield* emitPostToolHook(result.isError === true);
     return jsonRpcSuccess(rpc.id, result, sessionId);
@@ -1273,6 +1300,7 @@ export const layer = Layer.unwrap(
     const gateway = yield* McpGateway.McpGateway;
     const libraryStore = yield* Effect.serviceOption(HarnessLibraryStore.HarnessLibraryStore);
     const memoryStore = yield* Effect.serviceOption(HarnessMemoryStore.HarnessMemoryStore);
+    const oauthNotice = yield* Effect.serviceOption(HarnessMcpOAuthNotice.HarnessMcpOAuthNotice);
     const hooksService = yield* Effect.serviceOption(HarnessHooksService.HarnessHooksService);
     const pluginHost = yield* Effect.serviceOption(PluginHost.PluginHost);
     const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -1285,6 +1313,7 @@ export const layer = Layer.unwrap(
       gateway,
       libraryStore,
       memoryStore,
+      oauthNotice,
       hooksService,
       pluginHost,
       projections,

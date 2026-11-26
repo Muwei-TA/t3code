@@ -27,6 +27,7 @@ import {
   type ThreadId,
   type TurnItemId,
 } from "@t3tools/contracts";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -731,6 +732,7 @@ export const layer: Layer.Layer<
     const harnessLibraryStore = yield* Effect.serviceOption(
       HarnessLibraryStore.HarnessLibraryStore,
     );
+    const mcpSessions = yield* Effect.serviceOption(McpProviderSessions.McpProviderSessions);
     const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
     const previewAgentActivity = yield* PreviewAgentActivity.PreviewAgentActivity;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
@@ -2322,12 +2324,17 @@ export const layer: Layer.Layer<
                 override: input.run.harnessMode,
               });
               const capabilities = input.session.providerSession.capabilities;
+              const codexMount =
+                capabilities.harness.skillMount === "managed-home" && Option.isSome(mcpSessions)
+                  ? (yield* mcpSessions.value.read(input.run.threadId))?.harnessCodexSkillRoot
+                  : undefined;
               const projected = projectHarnessContext({
                 library: librarySnapshot,
                 harnessCapabilities: capabilities.harness,
                 activeMode,
                 nativeSkills,
                 nativeReadsProjectAgentsMd: true,
+                codexSkillMount: codexMount?.mounts.size ? "mounted" : undefined,
                 promptText: input.message.text,
                 attachmentPaths: input.message.attachments.map((att) => att.name),
                 supportsMcpTools: capabilities.tools.supportsMcpTools,

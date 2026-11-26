@@ -732,16 +732,29 @@ export const layerWithOptions = (
                   activeMode,
                   nativeSkills,
                   nativeReadsProjectAgentsMd: true,
+                  codexSkillMount: "prepare",
                   supportsMcpTools: adapterCapabilities.value.tools.supportsMcpTools,
                 })
               : null;
+          const skillMount = Option.isSome(adapterCapabilities)
+            ? adapterCapabilities.value.harness.skillMount
+            : undefined;
           const harnessSkillPluginDir =
+            skillMount === "plugin-dir" &&
             Option.isSome(harnessLibraryStore) &&
             projectedLibrary !== null &&
             projectedLibrary.nativeMountSkills.length > 0
               ? yield* harnessLibraryStore.value
                   .materializeClaudePluginDir({ skills: projectedLibrary.nativeMountSkills })
                   .pipe(Effect.orElseSucceed(() => undefined))
+              : undefined;
+          const harnessCodexSkillRootDir =
+            skillMount === "managed-home" &&
+            Option.isSome(harnessLibraryStore) &&
+            projectedLibrary !== null
+              ? yield* harnessLibraryStore.value.materializeCodexSkillRoot({
+                  skills: projectedLibrary.nativeMountSkills,
+                })
               : undefined;
           const libraryDigest =
             librarySnapshot !== null
@@ -791,12 +804,13 @@ export const layerWithOptions = (
                   )
               : { harnessActive: false, gatewayServersDigest: "", nativeMcpServers: [] };
           const nativeServersKey = serializeNativeServers(harnessInjection.nativeMcpServers);
-          const harnessFingerprint = `${harnessInjection.harnessActive ? "1" : "0"}\u0000${harnessInjection.gatewayServersDigest}\u0000${nativeServersKey}\u0000${harnessSkillPluginDir ?? ""}`;
+          const harnessFingerprint = `${harnessInjection.harnessActive ? "1" : "0"}\u0000${harnessInjection.gatewayServersDigest}\u0000${nativeServersKey}\u0000${harnessSkillPluginDir ?? ""}\u0000${harnessCodexSkillRootDir ?? ""}`;
           return {
             adapterCapabilities,
             threadRecord,
             harnessInjection,
             harnessSkillPluginDir,
+            harnessCodexSkillRootDir,
             nativeServersKey,
             harnessFingerprint,
           };
@@ -831,6 +845,7 @@ export const layerWithOptions = (
                   threadRecord,
                   harnessInjection,
                   harnessSkillPluginDir,
+                  harnessCodexSkillRootDir,
                   nativeServersKey,
                   harnessFingerprint,
                 } = yield* computeHarnessInjection(threadId, providerInstanceId);
@@ -882,6 +897,7 @@ export const layerWithOptions = (
                     (resolved.thread.subagent === true) === subagent &&
                     existing.harnessEndpoint === expectedHarnessEndpoint &&
                     existing.harnessSkillPluginDir === harnessSkillPluginDir &&
+                    existing.harnessCodexSkillRoot?.path === harnessCodexSkillRootDir &&
                     existingNativeKey === nativeServersKey
                   ) {
                     return {
@@ -905,6 +921,14 @@ export const layerWithOptions = (
                   ...credential.config,
                   ...(harnessEndpoint !== undefined ? { harnessEndpoint } : {}),
                   ...(harnessSkillPluginDir !== undefined ? { harnessSkillPluginDir } : {}),
+                  ...(harnessCodexSkillRootDir !== undefined
+                    ? {
+                        harnessCodexSkillRoot: {
+                          path: harnessCodexSkillRootDir,
+                          mounts: new Set(),
+                        },
+                      }
+                    : {}),
                   ...(harnessInjection.nativeMcpServers.length > 0
                     ? { nativeMcpServers: harnessInjection.nativeMcpServers }
                     : {}),

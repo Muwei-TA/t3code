@@ -1,8 +1,22 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { AuthSettingsWriteScope, AuthTerminalOperateScope } from "./auth.ts";
+import {
+  AuthProvidersManageScope,
+  AuthSettingsWriteScope,
+  AuthTerminalOperateScope,
+} from "./auth.ts";
 import { clientRpcRequiredScopes } from "./clientRpcPermissions.ts";
 import { WS_METHODS } from "./rpc.ts";
+
+it("requires provider management for all managed MCP OAuth operations", () => {
+  for (const method of [
+    WS_METHODS.harnessMcpOAuthStart,
+    WS_METHODS.harnessMcpOAuthComplete,
+    WS_METHODS.harnessMcpOAuthDisconnect,
+  ]) {
+    expect(clientRpcRequiredScopes(method, undefined)).toEqual([AuthProvidersManageScope]);
+  }
+});
 
 describe("clientRpcRequiredScopes for hook changes", () => {
   const input = {

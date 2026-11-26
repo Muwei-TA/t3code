@@ -38,6 +38,12 @@ export interface McpProviderSessionConfig {
   readonly nativeMcpServers?: ReadonlyArray<HarnessNativeMcpServer> | undefined;
   /** Managed local Claude plugin directory mounting portable skills when `skillMount === "plugin-dir"`. */
   readonly harnessSkillPluginDir?: string | undefined;
+  readonly harnessCodexSkillRoot?:
+    | {
+        readonly path: string;
+        readonly mounts: Set<symbol>;
+      }
+    | undefined;
   /** Omit preview_* instructions when the user withholds agent browser access. */
   readonly browserToolsAvailable: boolean;
   readonly capabilities?: ReadonlySet<string>;

@@ -505,6 +505,8 @@ import {
   HarnessMcpLogsResult,
   HarnessMcpRemoveInput,
   HarnessMcpRestartInput,
+  HarnessMcpOAuthStartResult,
+  HarnessMcpOAuthCompleteInput,
   HarnessMcpRevokeProjectTrustInput,
   HarnessMcpScanImportsResult,
   HarnessMcpSetEnabledInput,
@@ -815,6 +817,9 @@ export const WS_METHODS = {
   harnessMcpTrustProjectServer: "harness.mcp.trustProjectServer",
   harnessMcpRevokeProjectTrust: "harness.mcp.revokeProjectTrust",
   harnessMcpRestart: "harness.mcp.restart",
+  harnessMcpOAuthStart: "harness.mcp.oauth.start",
+  harnessMcpOAuthComplete: "harness.mcp.oauth.complete",
+  harnessMcpOAuthDisconnect: "harness.mcp.oauth.disconnect",
   harnessMcpLogs: "harness.mcp.logs",
   harnessMcpScanImports: "harness.mcp.scanImports",
   harnessMcpApplyImports: "harness.mcp.applyImports",
@@ -2618,6 +2623,24 @@ const WsHarnessMcpRestartRpc = Rpc.make(WS_METHODS.harnessMcpRestart, {
   error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
 });
 
+const WsHarnessMcpOAuthStartRpc = Rpc.make(WS_METHODS.harnessMcpOAuthStart, {
+  payload: HarnessMcpRestartInput,
+  success: HarnessMcpOAuthStartResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpOAuthCompleteRpc = Rpc.make(WS_METHODS.harnessMcpOAuthComplete, {
+  payload: HarnessMcpOAuthCompleteInput,
+  success: HarnessMcpSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessMcpOAuthDisconnectRpc = Rpc.make(WS_METHODS.harnessMcpOAuthDisconnect, {
+  payload: HarnessMcpRestartInput,
+  success: HarnessMcpSnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
 const WsHarnessMcpLogsRpc = Rpc.make(WS_METHODS.harnessMcpLogs, {
   payload: HarnessMcpLogsInput,
   success: HarnessMcpLogsResult,
@@ -3158,6 +3181,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsHarnessMcpTrustProjectServerRpc,
   WsHarnessMcpRevokeProjectTrustRpc,
   WsHarnessMcpRestartRpc,
+  WsHarnessMcpOAuthStartRpc,
+  WsHarnessMcpOAuthCompleteRpc,
+  WsHarnessMcpOAuthDisconnectRpc,
   WsHarnessMcpLogsRpc,
   WsHarnessMcpScanImportsRpc,
   WsHarnessMcpApplyImportsRpc,

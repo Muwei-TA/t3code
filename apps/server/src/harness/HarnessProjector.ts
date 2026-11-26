@@ -259,6 +259,7 @@ export function projectHarnessContext(input: {
   readonly harnessCapabilities: OrchestrationV2HarnessCapabilities;
   readonly activeMode?: HarnessModeEntry | null | undefined;
   readonly nativeSkills?: ReadonlyArray<NativeDiscoveredSkill> | undefined;
+  readonly codexSkillMount?: "prepare" | "mounted" | undefined;
   readonly nativeReadsProjectAgentsMd?: boolean | undefined;
   readonly promptText?: string | undefined;
   readonly attachmentPaths?: ReadonlyArray<string> | undefined;
@@ -320,7 +321,10 @@ export function projectHarnessContext(input: {
       });
       continue;
     }
-    if (harnessCapabilities.skillMount === "plugin-dir") {
+    if (
+      harnessCapabilities.skillMount === "plugin-dir" ||
+      (harnessCapabilities.skillMount === "managed-home" && input.codexSkillMount !== undefined)
+    ) {
       nativeMountSkills.push(skill);
       skillItems.push({
         id: skill.id,
@@ -516,7 +520,10 @@ export function projectHarnessContext(input: {
   // Pack whole blocks into segments without EVER truncating a block AND guaranteeing
   // emitted total bytes (including fixed scaffold and `\n\n` inter-block separators) <= totalBudget.
   const preliminaryNeedsGateway =
-    input.supportsMcpTools && (gatewaySkills.length > 0 || hasOnDemandOrDegradedRules);
+    input.supportsMcpTools &&
+    (gatewaySkills.length > 0 ||
+      hasOnDemandOrDegradedRules ||
+      (input.codexSkillMount === "prepare" && nativeMountSkills.length > 0));
   const scaffoldText = T3_CODE_HARNESS_SCAFFOLD_INSTRUCTIONS;
   const scaffoldByteSize = utf8Bytes(scaffoldText);
 

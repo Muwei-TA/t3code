@@ -13424,5 +13424,17 @@
   "02b3fbf612e5a864": "Conflits lors de la récupération",
   "90285a3737126abb": "La récupération forcée remplace les modifications locales en conflit par la version distante, y applique aussi les suppressions.",
   "15a0e7308e320bc1": "Forcer la récupération",
-  "0dce15f46a89dcbd": "L’activation des hooks de commande nécessite l’accès au terminal."
+  "0dce15f46a89dcbd": "L’activation des hooks de commande nécessite l’accès au terminal.",
+  "940120f9e812f27c": "Impossible de déconnecter la session MCP.",
+  "980533591b2e08c8": "Impossible de démarrer la connexion MCP.",
+  "45d1a02c930871db": "La connexion est incomplète. Autorisez l’accès ou collez l’adresse de retour.",
+  "6c1594d1f8872ff9": "Connexion requise",
+  "c7fdce5691d7bfeb": "Adresse de retour OAuth",
+  "32111e0efc4c768e": "Se reconnecter",
+  "e2dd98f1b8c413c4": "Déconnecter la session",
+  "7a45e9a9f2f0b41d": "Autorisez l’accès dans votre navigateur. Si la page de retour ne s’ouvre pas, collez son adresse ici.",
+  "8f189cff2f574e73": "Paramètres OAuth",
+  "a0667ced094dbc02": "Identifiant client OAuth",
+  "27c3a89b09fba053": "Autorisations OAuth séparées par des virgules",
+  "3e8d634eff0e1578": "URL du serveur d’autorisation OAuth"
 }

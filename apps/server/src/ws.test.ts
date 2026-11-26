@@ -11,6 +11,7 @@ import {
   type AuthEnvironmentScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  AuthProvidersManageScope,
   type WorkflowRun,
   type WorkflowStep,
   AuthSessionId,
@@ -22,7 +23,9 @@ import {
   EnvironmentId,
   EventId,
   GitManagerError,
+  HarnessError,
   HarnessHookId,
+  HarnessMcpServerId,
   VcsProcessSpawnError,
   MessageId,
   ProjectId,
@@ -69,6 +72,7 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as HarnessHooksService from "./harness/HarnessHooksService.ts";
 import * as HarnessStore from "./harness/HarnessStore.ts";
+import * as McpGateway from "./harness/McpGateway.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as ProviderInstallationGate from "./provider/ProviderInstallationGate.ts";
 import * as Ws from "./ws.ts";
@@ -2776,6 +2780,90 @@ const layerHookRpcTest = HarnessHooksService.layer.pipe(
   Layer.provide(HarnessStore.layer),
   Layer.provide(Layer.merge(T3ProjectFileLoader.layer, ManagedPolicy.layerTest())),
   Layer.provideMerge(layerWorkflowRpcTest),
+);
+
+it.effect("restricts managed MCP OAuth RPCs to clients with provider management", () =>
+  Effect.gen(function* () {
+    const tags = [
+      WS_METHODS.harnessMcpOAuthStart,
+      WS_METHODS.harnessMcpOAuthComplete,
+      WS_METHODS.harnessMcpOAuthDisconnect,
+    ] as const;
+    type OAuthTag = (typeof tags)[number];
+    const rpcs = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (tag): tag is Exclude<keyof typeof RpcAuthorization.RPC_REQUIRED_SCOPES, OAuthTag> =>
+          !(tags as ReadonlyArray<string>).includes(tag),
+      ),
+    );
+    const browser = yield* ServerBrowser.ServerBrowser;
+    const invalid = new HarnessError({ code: "invalid_config", detail: "Fixture route reached." });
+    const gateway = yield* McpGateway.McpGateway.pipe(
+      Effect.provide(
+        Layer.mock(McpGateway.McpGateway)({
+          startOAuth: () => Effect.succeed({ authorizationUrl: "https://example.com/authorize" }),
+          completeOAuth: () => Effect.fail(invalid),
+          disconnectOAuth: () => Effect.fail(invalid),
+        }),
+      ),
+    );
+    const services = Layer.mergeAll(
+      layerUnusedConfigRpcServices,
+      Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+      Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+      Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+      Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+      Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+      Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+      Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+    );
+    const connect = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
+      RpcTest.makeClient(rpcs).pipe(
+        Effect.provide(
+          layerWsRpc(
+            {
+              sessionId: AuthSessionId.make("harness-oauth-test"),
+              subject: "harness-oauth-test",
+              method: "browser-session-cookie",
+              scopes: [...scopes],
+            },
+            {},
+            browser,
+            () => Effect.void,
+            { secretReferences: true },
+            { mcpGateway: gateway },
+          ).pipe(Layer.provide(services), Layer.merge(RpcAuthorization.layer(scopes))),
+        ),
+      );
+    const withoutAccess = yield* connect([AuthSettingsWriteScope, AuthOrchestrationOperateScope]);
+    const withAccess = yield* connect([AuthProvidersManageScope]);
+    const input = { serverId: HarnessMcpServerId.make("oauth") };
+    const callback = {
+      callbackUrl: TrimmedNonEmptyString.make("http://127.0.0.1/oauth/harness/callback"),
+    };
+    const denied = yield* Effect.all([
+      withoutAccess[WS_METHODS.harnessMcpOAuthStart](input).pipe(Effect.flip),
+      withoutAccess[WS_METHODS.harnessMcpOAuthComplete](callback).pipe(Effect.flip),
+      withoutAccess[WS_METHODS.harnessMcpOAuthDisconnect](input).pipe(Effect.flip),
+    ]);
+    for (const error of denied) {
+      assert.strictEqual(error._tag, "EnvironmentAuthorizationError");
+    }
+    assert.strictEqual(
+      (yield* withAccess[WS_METHODS.harnessMcpOAuthStart](input)).authorizationUrl,
+      "https://example.com/authorize",
+    );
+    assert.strictEqual(
+      (yield* withAccess[WS_METHODS.harnessMcpOAuthComplete](callback).pipe(Effect.flip))._tag,
+      "HarnessError",
+    );
+    assert.strictEqual(
+      (yield* withAccess[WS_METHODS.harnessMcpOAuthDisconnect](input).pipe(Effect.flip))._tag,
+      "HarnessError",
+    );
+  }).pipe(Effect.provide(layerWorkflowRpcTest)),
 );
 
 it.effect("requires terminal access to save or enable a command hook", () =>

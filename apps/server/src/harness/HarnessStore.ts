@@ -146,6 +146,7 @@ function computeProjectTrustDigest(config: HarnessMcpServerConfig): string {
           headers: config.transport.headers
             ? Object.entries(config.transport.headers).sort(([a], [b]) => a.localeCompare(b))
             : [],
+          ...(config.transport.oauth === undefined ? {} : { oauth: config.transport.oauth }),
         };
   const canonical = JSON.stringify({
     version: 2,

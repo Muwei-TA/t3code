@@ -13419,5 +13419,17 @@
   "02b3fbf612e5a864": "Conflictos al traer cambios",
   "90285a3737126abb": "Forzar la descarga reemplaza los cambios locales en conflicto con la versión remota, incluidas las eliminaciones.",
   "15a0e7308e320bc1": "Forzar descarga",
-  "0dce15f46a89dcbd": "Para habilitar los hooks de comando, se necesita acceso a la terminal."
+  "0dce15f46a89dcbd": "Para habilitar los hooks de comando, se necesita acceso a la terminal.",
+  "940120f9e812f27c": "No se pudo desconectar la sesión de MCP.",
+  "980533591b2e08c8": "No se pudo iniciar sesión en MCP.",
+  "45d1a02c930871db": "El inicio de sesión está incompleto. Autoriza el acceso o pega la dirección de retorno.",
+  "6c1594d1f8872ff9": "Inicio de sesión obligatorio",
+  "c7fdce5691d7bfeb": "Dirección de retorno de OAuth",
+  "32111e0efc4c768e": "Volver a iniciar sesión",
+  "e2dd98f1b8c413c4": "Desconectar sesión",
+  "7a45e9a9f2f0b41d": "Autoriza el acceso en el navegador. Si la página de retorno no se abre, pega aquí su dirección.",
+  "8f189cff2f574e73": "Configuración de OAuth",
+  "a0667ced094dbc02": "ID de cliente de OAuth",
+  "27c3a89b09fba053": "Permisos de OAuth separados por comas",
+  "3e8d634eff0e1578": "URL del servidor de autorización de OAuth"
 }

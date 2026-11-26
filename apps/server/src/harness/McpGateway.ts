@@ -5,6 +5,7 @@ import {
   type HarnessMcpLogsResult,
   type HarnessMcpServerConfig,
   type HarnessMcpServerId,
+  type HarnessMcpRestartInput,
   type HarnessMcpServerState,
   type HarnessMcpServerView,
   type HarnessMcpSnapshot,
@@ -20,6 +21,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -43,6 +45,7 @@ import {
   type UpstreamMcpResourceReadResult,
   type UpstreamMcpTool,
 } from "./McpUpstreamClient.ts";
+import * as HarnessMcpOAuthService from "./HarnessMcpOAuthService.ts";
 
 const HARNESS_TOOL_SEARCH_NAME = "harness_tool_search";
 export const HARNESS_PROPOSE_PLAN_NAME = "propose_plan";
@@ -224,7 +227,7 @@ function poolKeyFor(
 }
 
 interface DigestRuntimeState {
-  state: "idle" | "starting" | "connected" | "error";
+  state: "idle" | "starting" | "connected" | "error" | "auth_required";
   lastError: string | null;
 }
 
@@ -710,6 +713,15 @@ export class McpGateway extends Context.Service<
       readonly authorize?: (config: HarnessMcpServerConfig) => Effect.Effect<void, E>;
     }) => Effect.Effect<HarnessMcpSnapshot, HarnessError | E>;
     readonly invalidateServer: (serverId: HarnessMcpServerId) => Effect.Effect<void>;
+    readonly startOAuth: (
+      input: HarnessMcpRestartInput,
+    ) => Effect.Effect<{ readonly authorizationUrl: string }, HarnessError>;
+    readonly completeOAuth: (
+      callbackUrl: string,
+    ) => Effect.Effect<HarnessMcpSnapshot, HarnessError>;
+    readonly disconnectOAuth: (
+      input: HarnessMcpRestartInput,
+    ) => Effect.Effect<HarnessMcpSnapshot, HarnessError>;
     readonly resolveSessionInjection: (input: {
       readonly workspaceRoot?: string | undefined;
       readonly interactionMode: ProviderInteractionMode;
@@ -748,6 +760,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
   const store = yield* HarnessStore.HarnessStore;
   const secretResolver = yield* SecretResolver.SecretResolver;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
+  const oauth = Option.getOrUndefined(
+    yield* Effect.serviceOption(HarnessMcpOAuthService.HarnessMcpOAuthService),
+  );
 
   const idleTtlMs = options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
   const connect = options.connect ?? connectUpstream;
@@ -962,6 +977,16 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         resolvedEnvOrHeaders: resolved,
         sensitiveValues,
         logs: record.logs,
+        ...(oauth?.supports(server)
+          ? {
+              oauth: {
+                bearer: oauth.bearer(server),
+                unauthorized: (header, rejectedBearer) =>
+                  oauth.unauthorized(server, header, rejectedBearer),
+                logs: record.logs,
+              },
+            }
+          : {}),
       }).pipe(
         Effect.mapError(
           (error) =>
@@ -973,7 +998,12 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         ),
         Effect.tapError((error) =>
           Effect.sync(() => {
-            setDigestState(record, scopeKey, "error", error.detail);
+            setDigestState(
+              record,
+              scopeKey,
+              error.code === "auth_required" ? "auth_required" : "error",
+              error.detail,
+            );
           }),
         ),
       );
@@ -990,7 +1020,12 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         ),
         Effect.tapError((error) =>
           Effect.sync(() => {
-            setDigestState(record, scopeKey, "error", error.detail);
+            setDigestState(
+              record,
+              scopeKey,
+              error.code === "auth_required" ? "auth_required" : "error",
+              error.detail,
+            );
           }),
         ),
       );
@@ -1109,8 +1144,8 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       state = "connected";
     } else if (digestState?.state === "starting") {
       state = "starting";
-    } else if (digestState?.state === "error") {
-      state = "error";
+    } else if (digestState?.state === "error" || digestState?.state === "auth_required") {
+      state = digestState.state;
     } else {
       state = "idle";
     }
@@ -1148,11 +1183,22 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
   const getSnapshot: McpGateway["Service"]["getSnapshot"] = Effect.fn("McpGateway.getSnapshot")(
     function* (workspaceRoot) {
       const workspace = yield* store.resolveWorkspace(workspaceRoot);
+      const servers =
+        oauth === undefined
+          ? workspace.servers.map(deriveServerView)
+          : yield* Effect.forEach(
+              workspace.servers,
+              (server) =>
+                oauth
+                  .status(server)
+                  .pipe(Effect.map((status) => ({ ...deriveServerView(server), ...status }))),
+              { concurrency: 4 },
+            );
       return {
         harnessDir: workspace.harnessDir,
         configPath: workspace.configPath,
         workspaceRoot: workspace.workspaceRoot,
-        servers: workspace.servers.map(deriveServerView),
+        servers,
         invalidEntries: workspace.invalidEntries,
         managedPolicyAllowsHarness: workspace.managedPolicyAllowsHarness,
         managedPolicyAllowsStdio: workspace.managedPolicyAllowsStdio,
@@ -1174,6 +1220,23 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     "McpGateway.invalidateServer",
   )(function* (serverId) {
     yield* closeAllForServer(serverId);
+  });
+
+  const noOAuth = Effect.fail(
+    new HarnessError({ code: "invalid_config", detail: "Harness OAuth is unavailable." }),
+  );
+  const startOAuth = (input: HarnessMcpRestartInput) => oauth?.start(input) ?? noOAuth;
+  const completeOAuth = Effect.fn("McpGateway.completeOAuth")(function* (callbackUrl: string) {
+    const input = yield* oauth?.complete(callbackUrl) ?? noOAuth;
+    yield* invalidateServer(input.serverId);
+    return yield* getSnapshot(input.workspaceRoot);
+  });
+  const disconnectOAuth = Effect.fn("McpGateway.disconnectOAuth")(function* (
+    input: HarnessMcpRestartInput,
+  ) {
+    yield* oauth?.disconnect(input) ?? noOAuth;
+    yield* invalidateServer(input.serverId);
+    return yield* getSnapshot(input.workspaceRoot);
   });
 
   const restartServer: McpGateway["Service"]["restartServer"] = Effect.fn(
@@ -1832,6 +1895,9 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     getLogs,
     restartServer,
     invalidateServer,
+    startOAuth,
+    completeOAuth,
+    disconnectOAuth,
     resolveSessionInjection,
     listToolsForSession,
     callToolForSession,

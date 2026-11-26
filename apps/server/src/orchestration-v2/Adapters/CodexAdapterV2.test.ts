@@ -1243,6 +1243,93 @@ describe("CodexAdapterV2 session initialize", () => {
   const replayPreamble = (nativeThreadId: string) =>
     codexReplayPreamble({ nativeThreadId, nativeTurnId: "unused", prompt: "unused" });
 
+  it.effect.each([true, false])(
+    "mounts portable skills without sharing roots across unrelated threads (RPC supported: %s)",
+    (supported) =>
+      Effect.gen(function* () {
+        const firstId = "portable-first";
+        const secondId = "portable-second";
+        const path = "/isolated/t3/harness-mounts/codex-skills";
+        const mounts = new Set<symbol>();
+        yield* (yield* McpProviderSessions.McpProviderSessions).set({
+          environmentId: EnvironmentId.make("portable-test"),
+          threadId: ThreadId.make(firstId),
+          providerSessionId: "portable-test-credential",
+          providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: "Bearer fixture-token",
+          browserToolsAvailable: false,
+          harnessCodexSkillRoot: { path, mounts },
+        });
+
+        const reply = (
+          id: number,
+          method: string,
+          params: unknown,
+          data: { readonly result: unknown } | { readonly error: unknown },
+        ): Array<CodexReplay.CodexAppServerReplayEntry> => [
+          { type: "expect_outbound", label: method, frame: { id, method, params } },
+          { type: "emit_inbound", label: method, frame: { id, ...data } },
+        ];
+        const config = (id: number) =>
+          reply(
+            id,
+            "config/read",
+            { includeLayers: false },
+            { result: { config: {}, origins: {} } },
+          );
+        const mount = (id: number, extraRoots: ReadonlyArray<string>) =>
+          reply(
+            id,
+            "skills/extraRoots/set",
+            { extraRoots },
+            supported ? { result: {} } : { error: { code: -32601, message: "Method not found" } },
+          );
+        const nativeStart = (id: number, thread: string) =>
+          replayPreamble(thread)
+            .slice(3, 5)
+            .map((entry) => withReplayRequestId(entry, id));
+        const session = yield* openReplaySession(
+          makeCodexReplayTranscript({
+            scenario: "portable-codex-skill-roots",
+            entries: [
+              ...replayPreamble(firstId).slice(0, 3),
+              ...config(2),
+              ...mount(3, [path]),
+              ...nativeStart(4, firstId),
+              ...config(5),
+              ...(supported
+                ? [
+                    ...mount(6, []),
+                    ...nativeStart(7, secondId),
+                    ...reply(8, "thread/archive", { threadId: secondId }, { result: {} }),
+                    ...mount(9, [path]),
+                  ]
+                : nativeStart(6, secondId)),
+            ],
+          }),
+        );
+        yield* session.ensureThread(firstId);
+        assert.equal(mounts.size, supported ? 1 : 0);
+        const second = yield* session.ensureThread(secondId);
+        assert.equal(mounts.size, 0);
+        if (supported) {
+          yield* session.runtime.unloadThread!({ providerThread: second, archive: true });
+          assert.equal(mounts.size, 1);
+        }
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+  );
+
   it.effect("sends one initialize when two threads start on a fresh session at once", () =>
     Effect.gen(function* () {
       const initializeAwaitingResponse = yield* Deferred.make<void>();

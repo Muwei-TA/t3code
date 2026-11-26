@@ -107,6 +107,9 @@ import * as HarnessExporter from "./harness/HarnessExporter.ts";
 import * as McpGateway from "./harness/McpGateway.ts";
 import * as HarnessContextService from "./harness/HarnessContextService.ts";
 import * as HarnessMcpHttpServer from "./harness/HarnessMcpHttpServer.ts";
+import * as HarnessMcpOAuthNotice from "./harness/HarnessMcpOAuthNotice.ts";
+import * as HarnessMcpOAuthHttp from "./harness/harnessMcpOAuthHttp.ts";
+import * as HarnessMcpOAuthService from "./harness/HarnessMcpOAuthService.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
 import * as PeerClientPairing from "./peer/PeerClientPairing.ts";
@@ -251,6 +254,8 @@ import * as ThreadIssueService from "./orchestration-v2/ThreadIssueService.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
+import * as TurnItemPositionStore from "./orchestration-v2/TurnItemPositionStore.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
 import { closeNonPrivateNetworkConnections, loopbackUrlHostForAddress } from "./startupAccess.ts";
 import * as OrchestrationHttp from "./orchestration-v2/http.ts";
@@ -664,6 +669,7 @@ const layerHarness = Layer.mergeAll(HarnessLibraryImporter.layer, HarnessExporte
       HarnessImporter.layer,
       McpGateway.layer.pipe(
         Layer.provide(SecretResolver.layer.pipe(Layer.provide(layerServerSettings))),
+        Layer.provide(HarnessMcpOAuthService.layer),
         Layer.provide(ServerSecretStore.layer),
       ),
     ),
@@ -939,6 +945,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerOtlpTracesProxyRoute,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
+    HarnessMcpOAuthHttp.layer,
     GuestHttp.layer,
     LinkThreadHttp.layer,
     DeviceHubProxy.layer,
@@ -954,6 +961,18 @@ const layerMakeRoutes = Layer.mergeAll(
     Layer.provide(ProjectionStoreV2.layer),
   ),
   HarnessMcpHttpServer.layer.pipe(
+    Layer.provide(
+      HarnessMcpOAuthNotice.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            ProjectionStoreV2.layer,
+            RuntimeLayer.layerEventSink,
+            IdAllocator.layer,
+            TurnItemPositionStore.layer,
+          ),
+        ),
+      ),
+    ),
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
     Layer.provide(ProjectionStoreV2.layer),
   ),

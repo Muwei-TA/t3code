@@ -13433,5 +13433,17 @@
   "02b3fbf612e5a864": "Pull conflicts",
   "90285a3737126abb": "Force Pull replaces conflicting local changes with the remote version, including deletions.",
   "15a0e7308e320bc1": "Force Pull",
-  "0dce15f46a89dcbd": "Enabling command hooks requires terminal access."
+  "0dce15f46a89dcbd": "Enabling command hooks requires terminal access.",
+  "940120f9e812f27c": "Couldn't disconnect MCP sign-in.",
+  "980533591b2e08c8": "Couldn't start MCP sign-in.",
+  "45d1a02c930871db": "Sign-in is incomplete. Approve access or paste the callback address.",
+  "6c1594d1f8872ff9": "Sign-in required",
+  "c7fdce5691d7bfeb": "OAuth callback address",
+  "32111e0efc4c768e": "Sign in again",
+  "e2dd98f1b8c413c4": "Disconnect sign-in",
+  "7a45e9a9f2f0b41d": "Approve access in your browser. If the callback page cannot open, paste its address here.",
+  "8f189cff2f574e73": "OAuth settings",
+  "a0667ced094dbc02": "OAuth client ID",
+  "27c3a89b09fba053": "OAuth scopes (comma-separated)",
+  "3e8d634eff0e1578": "OAuth authorization server URL"
 }

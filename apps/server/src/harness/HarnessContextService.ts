@@ -11,6 +11,7 @@ import {
   type ThreadContextTokenUsage,
   type ThreadId,
 } from "@t3tools/contracts";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -50,6 +51,7 @@ const make = Effect.gen(function* () {
     HarnessApprovalAuditStore.HarnessApprovalAuditStore,
   );
   const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
+  const mcpSessions = yield* Effect.serviceOption(McpProviderSessions.McpProviderSessions);
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const adapterRegistry = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
@@ -126,6 +128,10 @@ const make = Effect.gen(function* () {
             })
             .pipe(Effect.orElseSucceed(() => null))
         : null;
+      const codexMount =
+        harnessCapabilities.skillMount === "managed-home" && Option.isSome(mcpSessions)
+          ? (yield* mcpSessions.value.read(threadId))?.harnessCodexSkillRoot
+          : undefined;
       const projected =
         librarySnapshot !== null
           ? projectHarnessContext({
@@ -134,6 +140,7 @@ const make = Effect.gen(function* () {
               activeMode,
               nativeSkills,
               nativeReadsProjectAgentsMd: true,
+              codexSkillMount: codexMount?.mounts.size ? "mounted" : undefined,
               supportsMcpTools,
             })
           : null;
@@ -224,7 +231,7 @@ const make = Effect.gen(function* () {
               "Provider does not support native passthrough for this transport; routed via T3 Gateway.";
             degradedItems.push({ kind: "mcp", id: server.id, reason });
           }
-          if (server.state === "error" && server.lastError) {
+          if ((server.state === "error" || server.state === "auth_required") && server.lastError) {
             reason = server.lastError;
             degradedItems.push({ kind: "mcp", id: server.id, reason });
           }

@@ -16,6 +16,7 @@ import {
   type HarnessMcpServerConfig,
   type HarnessMcpServerView,
   type HarnessMcpTransport,
+  supportsHarnessMcpOAuth,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { T, useGT, Var } from "gt-react-native";
@@ -29,6 +30,7 @@ import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { m } from "../../i18n/messages";
+import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { useProjects } from "../../state/entities";
 import { harnessEnvironment } from "../../state/harness";
 import { useEnvironmentQuery } from "../../state/query";
@@ -192,6 +194,14 @@ function EnvironmentHarnessSection({
   const removeMcp = useAtomCommand(harnessEnvironment.removeMcp, { reportFailure: false });
   const setMcpEnabled = useAtomCommand(harnessEnvironment.setMcpEnabled, { reportFailure: false });
   const restartMcp = useAtomCommand(harnessEnvironment.restartMcp, { reportFailure: false });
+  const startMcpOAuth = useAtomCommand(harnessEnvironment.startMcpOAuth, { reportFailure: false });
+  const completeMcpOAuth = useAtomCommand(harnessEnvironment.completeMcpOAuth, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const disconnectMcpOAuth = useAtomCommand(harnessEnvironment.disconnectMcpOAuth, {
+    reportFailure: false,
+  });
   const logsMcp = useAtomCommand(harnessEnvironment.logsMcp, { reportFailure: false });
   const scanImports = useAtomCommand(harnessEnvironment.scanImports, { reportFailure: false });
   const applyImports = useAtomCommand(harnessEnvironment.applyImports, { reportFailure: false });
@@ -203,11 +213,21 @@ function EnvironmentHarnessSection({
   });
 
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [signIn, setSignIn] = useState<{
+    readonly server: HarnessMcpServerView;
+    readonly url: string;
+  } | null>(null);
+  const [callbackUrl, setCallbackUrl] = useState("");
+  const [finishingOAuth, setFinishingOAuth] = useState(false);
+  const [oauthError, setOAuthError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<MobileHarnessTab>("mcp");
   const [addOpen, setAddOpen] = useState(false);
   const [newId, setNewId] = useState("");
   const [newTransportType, setNewTransportType] = useState<"http" | "sse" | "stdio">("http");
   const [newUrl, setNewUrl] = useState("");
+  const [newOAuthClientId, setNewOAuthClientId] = useState("");
+  const [newOAuthScopes, setNewOAuthScopes] = useState("");
+  const [newOAuthIssuer, setNewOAuthIssuer] = useState("");
   const [newCommand, setNewCommand] = useState("");
   const [newArgs, setNewArgs] = useState("");
   const [logsModal, setLogsModal] = useState<{
@@ -217,6 +237,50 @@ function EnvironmentHarnessSection({
   const [importCandidates, setImportCandidates] =
     useState<ReadonlyArray<FlattenedImportCandidate> | null>(null);
   const [selectedImportKeys, setSelectedImportKeys] = useState<ReadonlySet<string>>(new Set());
+
+  const handleOAuth = async (server: HarnessMcpServerView, disconnect: boolean) => {
+    const input = {
+      serverId: server.id,
+      ...(activeWorkspaceRoot ? { workspaceRoot: activeWorkspaceRoot } : {}),
+    };
+    setBusyId(server.id);
+    if (disconnect) {
+      const result = await disconnectMcpOAuth({ environmentId, input });
+      if (result._tag === "Success") listQuery.refresh();
+      else if (!isAtomCommandInterrupted(result))
+        Dialog.alert(gt("Couldn't disconnect MCP sign-in."));
+    } else {
+      const result = await startMcpOAuth({ environmentId, input });
+      if (result._tag === "Success") {
+        setCallbackUrl("");
+        setOAuthError(null);
+        setSignIn({ server, url: result.value.authorizationUrl });
+      } else if (!isAtomCommandInterrupted(result)) {
+        Dialog.alert(gt("Couldn't start MCP sign-in."));
+      }
+    }
+    setBusyId(null);
+  };
+
+  const finishOAuth = async () => {
+    if (!signIn || finishingOAuth) return;
+    const address = callbackUrl.trim();
+    setOAuthError(null);
+    if (address.length === 0) {
+      listQuery.refresh();
+      setSignIn(null);
+      return;
+    }
+    setFinishingOAuth(true);
+    const result = await completeMcpOAuth({ environmentId, input: { callbackUrl: address } });
+    setFinishingOAuth(false);
+    if (result._tag === "Success") {
+      listQuery.refresh();
+      setSignIn(null);
+    } else if (!isAtomCommandInterrupted(result)) {
+      setOAuthError(gt("Sign-in is incomplete. Approve access or paste the callback address."));
+    }
+  };
 
   const servers = listQuery.data?.servers ?? [];
   const invalidEntries = listQuery.data?.invalidEntries ?? [];
@@ -457,6 +521,9 @@ function EnvironmentHarnessSection({
       setAddOpen(false);
       setNewId("");
       setNewUrl("");
+      setNewOAuthClientId("");
+      setNewOAuthScopes("");
+      setNewOAuthIssuer("");
       setNewCommand("");
       setNewArgs("");
       listQuery.refresh();
@@ -540,11 +607,21 @@ function EnvironmentHarnessSection({
       Dialog.alert(gt("Enter a valid http:// or https:// endpoint URL"));
       return;
     }
+    const scopes = newOAuthScopes
+      .split(",")
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+    const oauth = {
+      ...(newOAuthClientId.trim() ? { clientId: newOAuthClientId.trim() } : {}),
+      ...(scopes.length > 0 ? { scopes } : {}),
+      ...(newOAuthIssuer.trim() ? { authorizationServerUrl: newOAuthIssuer.trim() } : {}),
+    };
     void commitAddServer(parsedId, {
       enabled: true,
       transport: {
         type: newTransportType,
         url: trimmedUrl,
+        ...(Object.keys(oauth).length > 0 ? { oauth } : {}),
       },
       injectionMode: "gateway",
       approvalPolicy: "auto-read",
@@ -851,6 +928,17 @@ function EnvironmentHarnessSection({
                                 {server.config.transport.type.toUpperCase()} · {server.scope} ·{" "}
                                 {server.state} · {gt("{count} tools", { count: server.toolCount })}
                               </Text>
+                              {server.state === "auth_required" ||
+                              server.oauthStatus === "required" ||
+                              server.oauthStatus === "expired" ? (
+                                <Text className="text-xs text-foreground-muted">
+                                  <T>Sign-in required</T>
+                                </Text>
+                              ) : server.oauthStatus === "connected" ? (
+                                <Text className="text-xs text-foreground-muted">
+                                  <T>Signed in</T>
+                                </Text>
+                              ) : null}
                             </View>
                             {server.scope === "user" ? (
                               <Switch
@@ -877,6 +965,31 @@ function EnvironmentHarnessSection({
                           ) : null}
 
                           <View className="flex-row flex-wrap gap-2 pt-1">
+                            {canManageProviders &&
+                            server.effectiveEnabled &&
+                            supportsHarnessMcpOAuth(server.config) ? (
+                              <>
+                                <Button
+                                  label={
+                                    server.oauthStatus === "connected"
+                                      ? gt("Sign in again")
+                                      : gt("Sign in")
+                                  }
+                                  tone="secondary"
+                                  disabled={busyId === server.id}
+                                  onPress={() => void handleOAuth(server, false)}
+                                />
+                                {server.oauthStatus === "connected" ||
+                                server.oauthStatus === "expired" ? (
+                                  <Button
+                                    label={gt("Disconnect sign-in")}
+                                    tone="secondary"
+                                    disabled={busyId === server.id}
+                                    onPress={() => void handleOAuth(server, true)}
+                                  />
+                                ) : null}
+                              </>
+                            ) : null}
                             {server.needsTrustConfirmation ? (
                               <Button
                                 label={gt("Review & trust")}
@@ -928,6 +1041,59 @@ function EnvironmentHarnessSection({
           </>
         )}
       </View>
+
+      <Modal
+        visible={signIn !== null}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => {
+          if (!finishingOAuth) setSignIn(null);
+        }}
+      >
+        <ScrollView
+          className="flex-1 bg-sheet-solid"
+          contentContainerClassName="gap-4 p-5"
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text className="font-t3-semibold text-xl text-foreground">
+            {gt("Sign in to {server}", { server: signIn?.server.id ?? "" })}
+          </Text>
+          <Text className="text-sm text-foreground-muted">
+            <T>
+              Approve access in your browser. If the callback page cannot open, paste its address
+              here.
+            </T>
+          </Text>
+          <Button
+            label={gt("Open sign-in page")}
+            tone="secondary"
+            onPress={() => {
+              if (signIn) void tryOpenExternalUrl(signIn.url, "provider-auth");
+            }}
+          />
+          <TextInput
+            className="rounded-lg border border-border px-3 py-2 text-foreground"
+            accessibilityLabel={gt("OAuth callback address")}
+            value={callbackUrl}
+            onChangeText={setCallbackUrl}
+            autoCorrect={false}
+            autoCapitalize="none"
+            editable={!finishingOAuth}
+          />
+          {oauthError ? <Text className="text-sm text-destructive">{oauthError}</Text> : null}
+          <Button
+            label={gt("Finish sign-in")}
+            disabled={!canManageProviders || finishingOAuth}
+            onPress={() => void finishOAuth()}
+          />
+          <Button
+            label={gt("Close")}
+            tone="secondary"
+            disabled={finishingOAuth}
+            onPress={() => setSignIn(null)}
+          />
+        </ScrollView>
+      </Modal>
 
       <Modal
         visible={addOpen}
@@ -1008,6 +1174,36 @@ function EnvironmentHarnessSection({
                 value={newUrl}
                 onChangeText={setNewUrl}
                 placeholder="https://mcp.example.com/mcp"
+                autoCapitalize="none"
+                autoCorrect={false}
+                className="rounded-xl border border-border bg-card px-3 py-2.5 text-foreground"
+              />
+              <Text className="text-sm font-t3-medium text-foreground">
+                <T>OAuth settings (optional)</T>
+              </Text>
+              <TextInput
+                accessibilityLabel={gt("OAuth client ID")}
+                placeholder={gt("OAuth client ID")}
+                value={newOAuthClientId}
+                onChangeText={setNewOAuthClientId}
+                autoCapitalize="none"
+                autoCorrect={false}
+                className="rounded-xl border border-border bg-card px-3 py-2.5 text-foreground"
+              />
+              <TextInput
+                accessibilityLabel={gt("OAuth scopes (comma-separated)")}
+                placeholder={gt("OAuth scopes (comma-separated)")}
+                value={newOAuthScopes}
+                onChangeText={setNewOAuthScopes}
+                autoCapitalize="none"
+                autoCorrect={false}
+                className="rounded-xl border border-border bg-card px-3 py-2.5 text-foreground"
+              />
+              <TextInput
+                accessibilityLabel={gt("OAuth authorization server URL")}
+                placeholder={gt("OAuth authorization server URL")}
+                value={newOAuthIssuer}
+                onChangeText={setNewOAuthIssuer}
                 autoCapitalize="none"
                 autoCorrect={false}
                 className="rounded-xl border border-border bg-card px-3 py-2.5 text-foreground"

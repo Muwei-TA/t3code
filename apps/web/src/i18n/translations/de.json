@@ -13424,5 +13424,17 @@
   "02b3fbf612e5a864": "Konflikte beim Abrufen",
   "90285a3737126abb": "Beim erzwungenen Abrufen werden lokale Änderungen mit Konflikten durch die Remote-Version ersetzt, einschließlich gelöschter Dateien.",
   "15a0e7308e320bc1": "Abrufen erzwingen",
-  "0dce15f46a89dcbd": "Zum Aktivieren von Befehls-Hooks ist Terminalzugriff erforderlich."
+  "0dce15f46a89dcbd": "Zum Aktivieren von Befehls-Hooks ist Terminalzugriff erforderlich.",
+  "940120f9e812f27c": "MCP-Anmeldung konnte nicht getrennt werden.",
+  "980533591b2e08c8": "MCP-Anmeldung konnte nicht gestartet werden.",
+  "45d1a02c930871db": "Die Anmeldung ist noch nicht abgeschlossen. Genehmige den Zugriff oder füge die Rückrufadresse ein.",
+  "6c1594d1f8872ff9": "Anmeldung erforderlich",
+  "c7fdce5691d7bfeb": "OAuth-Rückrufadresse",
+  "32111e0efc4c768e": "Erneut anmelden",
+  "e2dd98f1b8c413c4": "Anmeldung trennen",
+  "7a45e9a9f2f0b41d": "Genehmige den Zugriff im Browser. Falls sich die Rückrufseite nicht öffnet, füge ihre Adresse hier ein.",
+  "8f189cff2f574e73": "OAuth-Einstellungen",
+  "a0667ced094dbc02": "OAuth-Client-ID",
+  "27c3a89b09fba053": "OAuth-Berechtigungen (kommagetrennt)",
+  "3e8d634eff0e1578": "URL des OAuth-Autorisierungsservers"
 }

@@ -22,6 +22,7 @@ import {
   HarnessMcpServerId,
   type HarnessMcpServerView,
   type HarnessMcpSnapshot,
+  supportsHarnessMcpOAuth,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
@@ -41,6 +42,7 @@ import {
 import { useState } from "react";
 
 import type { EnvironmentPresentation } from "../../state/environments";
+import { ensureLocalApi } from "../../localApi";
 import { harnessEnvironment } from "../../state/harness";
 import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -258,11 +260,26 @@ function EnvironmentHarnessMcpSection({
     reportFailure: false,
   });
   const restartMcp = useAtomCommand(harnessEnvironment.restartMcp, { reportFailure: false });
+  const startMcpOAuth = useAtomCommand(harnessEnvironment.startMcpOAuth, { reportFailure: false });
+  const completeMcpOAuth = useAtomCommand(harnessEnvironment.completeMcpOAuth, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const disconnectMcpOAuth = useAtomCommand(harnessEnvironment.disconnectMcpOAuth, {
+    reportFailure: false,
+  });
   const logsMcp = useAtomCommand(harnessEnvironment.logsMcp, { reportFailure: false });
   const scanImports = useAtomCommand(harnessEnvironment.scanImports, { reportFailure: false });
   const applyImports = useAtomCommand(harnessEnvironment.applyImports, { reportFailure: false });
 
   const [busyServerId, setBusyServerId] = useState<string | null>(null);
+  const [signIn, setSignIn] = useState<{
+    readonly server: HarnessMcpServerView;
+    readonly url: string;
+  } | null>(null);
+  const [callbackUrl, setCallbackUrl] = useState("");
+  const [finishingOAuth, setFinishingOAuth] = useState(false);
+  const [oauthError, setOAuthError] = useState<string | null>(null);
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<string>>(new Set());
   const [editorState, setEditorState] = useState<
     | null
@@ -289,6 +306,59 @@ function EnvironmentHarnessMcpSection({
     if (result._tag === "Success") {
       setOverrideSnapshot(result.value);
     }
+  };
+
+  const handleOAuth = async (server: HarnessMcpServerView, disconnect: boolean) => {
+    const input = { serverId: server.id, ...(workspaceRoot ? { workspaceRoot } : {}) };
+    setBusyServerId(server.id);
+    if (disconnect) {
+      const result = await disconnectMcpOAuth({ environmentId, input });
+      if (result._tag === "Success") setOverrideSnapshot(result.value);
+      else if (!isAtomCommandInterrupted(result))
+        toastManager.add({ type: "error", title: gt("Couldn't disconnect MCP sign-in.") });
+    } else {
+      const result = await startMcpOAuth({ environmentId, input });
+      if (result._tag === "Success") {
+        setCallbackUrl("");
+        setOAuthError(null);
+        setSignIn({ server, url: result.value.authorizationUrl });
+      } else if (!isAtomCommandInterrupted(result)) {
+        const failure = squashAtomCommandFailure(result);
+        toastManager.add({
+          type: "error",
+          title: failure instanceof Error ? failure.message : gt("Couldn't start MCP sign-in."),
+        });
+      }
+    }
+    setBusyServerId(null);
+  };
+
+  const finishOAuth = async () => {
+    if (!signIn || finishingOAuth) return;
+    setFinishingOAuth(true);
+    setOAuthError(null);
+    const address = callbackUrl.trim();
+    const result =
+      address.length > 0
+        ? await completeMcpOAuth({ environmentId, input: { callbackUrl: address } })
+        : await listMcp({ environmentId, input: workspaceRoot ? { workspaceRoot } : {} });
+    setFinishingOAuth(false);
+    if (result._tag === "Success") {
+      setOverrideSnapshot(result.value);
+      if (
+        address ||
+        result.value.servers.some(
+          (entry) =>
+            entry.id === signIn.server.id &&
+            entry.scope === signIn.server.scope &&
+            entry.oauthStatus === "connected",
+        )
+      ) {
+        setSignIn(null);
+        return;
+      }
+    } else if (isAtomCommandInterrupted(result)) return;
+    setOAuthError(gt("Sign-in is incomplete. Approve access or paste the callback address."));
   };
 
   const handleToggleEnabled = async (server: HarnessMcpServerView, nextEnabled: boolean) => {
@@ -724,6 +794,30 @@ function EnvironmentHarnessMcpSection({
                 }
               >
                 <div className="flex items-center gap-1.5">
+                  {canManageProviders &&
+                  server.effectiveEnabled &&
+                  supportsHarnessMcpOAuth(server.config) ? (
+                    <>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={isBusy}
+                        onClick={() => void handleOAuth(server, false)}
+                      >
+                        {server.oauthStatus === "connected" ? <T>Sign in again</T> : <T>Sign in</T>}
+                      </Button>
+                      {server.oauthStatus === "connected" || server.oauthStatus === "expired" ? (
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          disabled={isBusy}
+                          onClick={() => void handleOAuth(server, true)}
+                        >
+                          <T>Disconnect sign-in</T>
+                        </Button>
+                      ) : null}
+                    </>
+                  ) : null}
                   {server.scope === "user" && canWriteSettings ? (
                     <Switch
                       size="sm"
@@ -785,6 +879,60 @@ function EnvironmentHarnessMcpSection({
           })
         )}
       </SettingsSection>
+
+      <Dialog
+        open={signIn !== null}
+        onOpenChange={(open) => {
+          if (!open && !finishingOAuth) setSignIn(null);
+        }}
+      >
+        <DialogPopup>
+          <DialogHeader>
+            <DialogTitle>
+              {gt("Sign in to {server}", { server: signIn?.server.id ?? "" })}
+            </DialogTitle>
+            <DialogDescription>
+              <T>
+                Approve access in your browser. If the callback page cannot open, paste its address
+                here.
+              </T>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel>
+            <div className="grid gap-3">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (signIn) void ensureLocalApi().shell.openExternal(signIn.url);
+                }}
+              >
+                <T>Open sign-in page</T>
+              </Button>
+              <Input
+                aria-label={gt("OAuth callback address")}
+                value={callbackUrl}
+                onChange={(event) => setCallbackUrl(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                disabled={finishingOAuth}
+              />
+              {oauthError ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {oauthError}
+                </p>
+              ) : null}
+            </div>
+          </DialogPanel>
+          <DialogFooter>
+            <Button
+              disabled={!canManageProviders || finishingOAuth}
+              onClick={() => void finishOAuth()}
+            >
+              <T>Finish sign-in</T>
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
 
       <Dialog
         open={editorState !== null}
@@ -1008,6 +1156,16 @@ function EnvironmentHarnessMcpSection({
 }
 
 function renderStateBadge(server: HarnessMcpServerView, gt: ReturnType<typeof useGT>) {
+  if (
+    server.state === "auth_required" ||
+    server.oauthStatus === "required" ||
+    server.oauthStatus === "expired"
+  ) {
+    return <Badge variant="warning">{gt("Sign-in required")}</Badge>;
+  }
+  if (server.oauthStatus === "connected" && server.state === "idle") {
+    return <Badge variant="success">{gt("Signed in")}</Badge>;
+  }
   switch (server.state) {
     case "connected":
       return (
@@ -1081,6 +1239,11 @@ function McpServerEditorForm({
       ? formatKeyValueLines(initial?.config.transport.headers)
       : "",
   );
+  const initialOAuth =
+    initial?.config.transport.type === "stdio" ? undefined : initial?.config.transport.oauth;
+  const [oauthClientId, setOAuthClientId] = useState(initialOAuth?.clientId ?? "");
+  const [oauthScopes, setOAuthScopes] = useState(initialOAuth?.scopes?.join(", ") ?? "");
+  const [oauthIssuer, setOAuthIssuer] = useState(initialOAuth?.authorizationServerUrl ?? "");
   const [injectionMode, setInjectionMode] = useState<HarnessMcpInjectionMode>(
     initial?.config.injectionMode ?? "gateway",
   );
@@ -1133,10 +1296,18 @@ function McpServerEditorForm({
         return;
       }
       const parsedHeaders = parseKeyValueLines(headersText);
+      const scopes = parseCommaList(oauthScopes);
+      const oauth = {
+        ...(initialOAuth?.enabled === undefined ? {} : { enabled: initialOAuth.enabled }),
+        ...(oauthClientId.trim() ? { clientId: oauthClientId.trim() } : {}),
+        ...(scopes.length > 0 ? { scopes } : {}),
+        ...(oauthIssuer.trim() ? { authorizationServerUrl: oauthIssuer.trim() } : {}),
+      };
       transport = {
         type: transportType,
         url: trimmedUrl,
         ...(Object.keys(parsedHeaders).length > 0 ? { headers: parsedHeaders } : {}),
+        ...(Object.keys(oauth).length > 0 ? { oauth } : {}),
       };
     }
 
@@ -1328,6 +1499,39 @@ function McpServerEditorForm({
                   onChange={(event) => setHeadersText(event.target.value)}
                 />
               </label>
+              {injectionMode === "gateway" ? (
+                <details>
+                  <summary className="cursor-pointer text-xs font-medium text-foreground">
+                    <T>OAuth settings</T>
+                  </summary>
+                  <div className="mt-2 grid gap-2">
+                    <label className="grid gap-1 text-xs">
+                      <T>OAuth client ID</T>
+                      <Input
+                        value={oauthClientId}
+                        onChange={(event) => setOAuthClientId(event.target.value)}
+                        disabled={saving}
+                      />
+                    </label>
+                    <label className="grid gap-1 text-xs">
+                      <T>OAuth scopes (comma-separated)</T>
+                      <Input
+                        value={oauthScopes}
+                        onChange={(event) => setOAuthScopes(event.target.value)}
+                        disabled={saving}
+                      />
+                    </label>
+                    <label className="grid gap-1 text-xs">
+                      <T>OAuth authorization server URL</T>
+                      <Input
+                        value={oauthIssuer}
+                        onChange={(event) => setOAuthIssuer(event.target.value)}
+                        disabled={saving}
+                      />
+                    </label>
+                  </div>
+                </details>
+              ) : null}
             </>
           )}
 

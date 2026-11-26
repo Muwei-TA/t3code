@@ -195,6 +195,26 @@ describe("HarnessProjector", () => {
     expect(codexProjected.skills.find((s) => s.id === "portable-one")?.channel).toBe("gateway");
     expect(codexProjected.needsGatewayTools).toBe(true);
     expect(codexProjected.scaffoldBytes).toBeGreaterThan(0);
+
+    const codexNative = (codexSkillMount: "prepare" | "mounted") =>
+      projectHarnessContext({
+        library: lib,
+        harnessCapabilities: {
+          ...DEFAULT_HARNESS_CAPABILITIES,
+          skillMount: "managed-home",
+          maxSystemContextBytes: 3600,
+        },
+        codexSkillMount,
+        supportsMcpTools: true,
+      });
+    expect(codexNative("prepare").nativeMountSkills.map((skill) => skill.id)).toContain(
+      "portable-one",
+    );
+    expect(codexNative("prepare").needsGatewayTools).toBe(true);
+    expect(
+      codexNative("mounted").skills.find((skill) => skill.id === "portable-one")?.channel,
+    ).toBe("native-mount");
+    expect(codexNative("mounted").needsGatewayTools).toBe(false);
   });
 
   it("never silently truncates rules, degrades overflowing blocks whole-block to on-demand, and enforces Codex <= 3600 B per segment", () => {

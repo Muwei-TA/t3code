@@ -5988,5 +5988,17 @@
   "34735826d0694cc6": "Forçar atualização",
   "02b3fbf612e5a864": "Conflitos ao baixar alterações",
   "90285a3737126abb": "Forçar a atualização substitui as alterações locais em conflito pela versão remota, incluindo exclusões.",
-  "0dce15f46a89dcbd": "Ativar hooks de comando exige acesso ao terminal."
+  "0dce15f46a89dcbd": "Ativar hooks de comando exige acesso ao terminal.",
+  "940120f9e812f27c": "Não foi possível desconectar a sessão do MCP.",
+  "980533591b2e08c8": "Não foi possível iniciar a sessão do MCP.",
+  "45d1a02c930871db": "O login está incompleto. Autorize o acesso ou cole o endereço de retorno.",
+  "2cf284a7b130b411": "Entrar novamente",
+  "b69f16a17e170ccc": "Desconectar sessão",
+  "c7fdce5691d7bfeb": "Endereço de retorno do OAuth",
+  "f95c26bb70c25451": "ID de cliente do OAuth",
+  "1bb070cb5fcbb458": "Escopos do OAuth separados por vírgulas",
+  "5ccdd85b584946ab": "URL do servidor de autorização OAuth",
+  "4f40598caa97ab7b": "Login obrigatório",
+  "7a45e9a9f2f0b41d": "Autorize o acesso no navegador. Se a página de retorno não abrir, cole o endereço dela aqui.",
+  "b3d555b9f91c09ab": "Configurações do OAuth (opcional)"
 }

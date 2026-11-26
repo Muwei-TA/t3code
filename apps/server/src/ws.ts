@@ -3899,6 +3899,21 @@ export const layerWsRpc = (
             onNone: () => harnessUnavailable("McpGateway"),
             onSome: (gateway) => gateway.getLogs(input.serverId),
           }),
+        [WS_METHODS.harnessMcpOAuthStart]: (input) =>
+          Option.match(mcpGatewayOption, {
+            onNone: () => harnessUnavailable("McpGateway"),
+            onSome: (gateway) => gateway.startOAuth(input),
+          }),
+        [WS_METHODS.harnessMcpOAuthComplete]: (input) =>
+          Option.match(mcpGatewayOption, {
+            onNone: () => harnessUnavailable("McpGateway"),
+            onSome: (gateway) => gateway.completeOAuth(input.callbackUrl),
+          }),
+        [WS_METHODS.harnessMcpOAuthDisconnect]: (input) =>
+          Option.match(mcpGatewayOption, {
+            onNone: () => harnessUnavailable("McpGateway"),
+            onSome: (gateway) => gateway.disconnectOAuth(input),
+          }),
         [WS_METHODS.harnessMcpScanImports]: () =>
           Option.match(harnessImporterOption, {
             onNone: () => harnessUnavailable("HarnessImporter"),

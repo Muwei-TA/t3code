@@ -162,7 +162,7 @@ function utf8Bytes(text: string): typeof NonNegativeInt.Type {
 
 function serializePluginSkillsDigest(skills: ReadonlyArray<HarnessSkillEntry>): string {
   return sha256Hex(
-    JSON.stringify(skills.map((skill) => [skill.id, skill.name, skill.contentDigest])),
+    JSON.stringify(skills.map((skill) => [skill.id, skill.sourcePath, skill.contentDigest])),
   ).slice(0, 16);
 }
 
@@ -411,6 +411,9 @@ export class HarnessLibraryStore extends Context.Service<
     }) => Effect.Effect<Option.Option<HarnessRuleDetail>>;
     /** Materializes a read-only Claude local plugin directory for portable skills when `skillMount === "plugin-dir"`. */
     readonly materializeClaudePluginDir: (input: {
+      readonly skills: ReadonlyArray<HarnessSkillEntry>;
+    }) => Effect.Effect<string | undefined>;
+    readonly materializeCodexSkillRoot: (input: {
       readonly skills: ReadonlyArray<HarnessSkillEntry>;
     }) => Effect.Effect<string | undefined>;
   }
@@ -1209,7 +1212,9 @@ const make = Effect.gen(function* () {
   ) {
     const out: Array<string> = [];
     const queue: Array<string> = [skillDir];
-    while (queue.length > 0 && out.length < MAX_COMPANION_FILES) {
+    let visitedDirectories = 0;
+    while (queue.length > 0 && out.length < MAX_COMPANION_FILES && visitedDirectories < 256) {
+      visitedDirectories += 1;
       const current = queue.shift()!;
       const entries = yield* fs.readDirectory(current).pipe(Effect.orElseSucceed(() => []));
       for (const name of entries) {
@@ -1217,11 +1222,11 @@ const make = Effect.gen(function* () {
         const full = path.join(current, name);
         const rel = path.relative(skillDir, full).replaceAll("\\", "/");
         if (rel === "SKILL.md") continue;
-        const info = yield* fs.stat(full).pipe(Effect.option);
-        if (Option.isNone(info)) continue;
-        if (info.value.type === "Directory") {
+        const info = yield* Effect.promise(() => NodeFSP.lstat(full).catch(() => null));
+        if (info === null) continue;
+        if (info.isDirectory() && visitedDirectories + queue.length < 256) {
           queue.push(full);
-        } else if (info.value.type === "File") {
+        } else if (info.isFile()) {
           out.push(rel);
           if (out.length >= MAX_COMPANION_FILES) break;
         }
@@ -1318,41 +1323,50 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const materializeClaudePluginDir: HarnessLibraryStore["Service"]["materializeClaudePluginDir"] =
-    Effect.fn("HarnessLibraryStore.materializeClaudePluginDir")(function* ({ skills }) {
-      if (skills.length === 0) return undefined;
-      const sorted = [...skills].sort((a, b) => a.id.localeCompare(b.id));
-      const digest = serializePluginSkillsDigest(sorted);
-      const pluginDir = path.join(mountsRoot, `claude-plugin-${digest}`);
-      const manifestPath = path.join(pluginDir, ".claude-plugin", "plugin.json");
-      const alreadyExists = yield* fs.exists(manifestPath).pipe(Effect.orElseSucceed(() => false));
-      if (alreadyExists) return pluginDir;
+  const materializeSkillMount = Effect.fn("HarnessLibraryStore.materializeSkillMount")(function* (
+    kind: "claude-plugin" | "codex-skills",
+    skills: ReadonlyArray<HarnessSkillEntry>,
+  ) {
+    if (skills.length === 0) return undefined;
+    const sorted = [...skills].sort((a, b) => a.id.localeCompare(b.id));
+    const digest = serializePluginSkillsDigest(sorted);
+    const mountName = `${kind}-${digest}`;
+    const mountDir = path.join(mountsRoot, mountName);
+    const readyPath =
+      kind === "claude-plugin"
+        ? path.join(mountDir, ".claude-plugin", "plugin.json")
+        : path.join(mountDir, ".ready");
+    const checkedReady = Effect.tryPromise({
+      try: () => assertContainedNoSymlinks(mountsRoot, readyPath, { createRoot: true }),
+      catch: () => new HarnessError({ code: "io_error", detail: "Invalid skill mount path." }),
+    }).pipe(Effect.option);
+    const checked = yield* checkedReady;
+    if (Option.isNone(checked)) return undefined;
+    const alreadyExists = yield* fs
+      .exists(checked.value.resolvedTarget)
+      .pipe(Effect.orElseSucceed(() => false));
+    if (alreadyExists) return path.join(checked.value.canonicalRoot, mountName);
 
-      return yield* writeLock.withPermits(1)(
-        Effect.gen(function* () {
-          if (yield* fs.exists(manifestPath).pipe(Effect.orElseSucceed(() => false))) {
-            return pluginDir;
-          }
-          const stageDir = `${pluginDir}.${NodeCrypto.randomUUID()}.stage`;
-          yield* fs
-            .makeDirectory(path.join(stageDir, ".claude-plugin"), { recursive: true })
-            .pipe(Effect.ignore);
-          yield* fs
-            .writeFileString(
-              path.join(stageDir, ".claude-plugin", "plugin.json"),
-              CLAUDE_HARNESS_PLUGIN_MANIFEST,
-            )
-            .pipe(Effect.ignore);
-
+    return yield* writeLock.withPermits(1)(
+      Effect.gen(function* () {
+        const fresh = yield* checkedReady;
+        if (Option.isNone(fresh)) return undefined;
+        const target = path.join(fresh.value.canonicalRoot, mountName);
+        if (yield* fs.exists(fresh.value.resolvedTarget).pipe(Effect.orElseSucceed(() => false))) {
+          return target;
+        }
+        const stageDir = `${target}.${NodeCrypto.randomUUID()}.stage`;
+        const stage = Effect.gen(function* () {
+          yield* fs.makeDirectory(stageDir, { mode: 0o700 });
+          const skillRoot = kind === "claude-plugin" ? path.join(stageDir, "skills") : stageDir;
           for (const skill of sorted) {
-            const targetSkillDir = path.join(stageDir, "skills", skill.id);
+            const targetSkillDir = path.join(skillRoot, skill.id);
             const sourceSkillDir = path.dirname(skill.sourcePath);
             const raw = yield* readBoundedContainedFile(sourceSkillDir, skill.sourcePath);
-            if (Option.isNone(raw) || raw.value.text.length === 0) continue;
-            yield* fs.makeDirectory(targetSkillDir, { recursive: true }).pipe(Effect.ignore);
-            yield* fs
-              .writeFileString(path.join(targetSkillDir, "SKILL.md"), raw.value.text)
-              .pipe(Effect.ignore);
+            if (Option.isNone(raw) || sha256Hex(raw.value.text) !== skill.contentDigest)
+              return false;
+            yield* fs.makeDirectory(targetSkillDir, { recursive: true });
+            yield* fs.writeFileString(path.join(targetSkillDir, "SKILL.md"), raw.value.text);
 
             // Copy bounded non-escaping companion files (e.g., references/, scripts/, checklists)
             // alongside SKILL.md so Claude plugin-dir skills have full relative asset access.
@@ -1376,46 +1390,53 @@ const make = Effect.gen(function* () {
               if (Option.isNone(fileBytes) || fileBytes.value.byteLength > MAX_READ_BYTES) {
                 continue;
               }
-              yield* fs
-                .makeDirectory(path.dirname(destFile), { recursive: true })
-                .pipe(Effect.ignore);
-              yield* fs.writeFile(destFile, fileBytes.value).pipe(Effect.ignore);
+              yield* fs.makeDirectory(path.dirname(destFile), { recursive: true });
+              yield* fs.writeFile(destFile, fileBytes.value);
             }
           }
-
-          const promoted = yield* fs.rename(stageDir, pluginDir).pipe(
-            Effect.as(true),
-            Effect.catch(() =>
-              fs
-                .remove(stageDir, { recursive: true, force: true })
-                .pipe(Effect.ignore, Effect.as(false)),
-            ),
+          const marker = path.join(stageDir, path.relative(mountDir, readyPath));
+          yield* fs.makeDirectory(path.dirname(marker), { recursive: true });
+          yield* fs.writeFileString(
+            marker,
+            kind === "claude-plugin" ? CLAUDE_HARNESS_PLUGIN_MANIFEST : "",
           );
-          if (
-            !promoted &&
-            !(yield* fs.exists(manifestPath).pipe(Effect.orElseSucceed(() => false)))
-          ) {
-            return undefined;
-          }
+          yield* fs.rename(stageDir, target);
+          return true;
+        });
+        const promoted = yield* stage.pipe(
+          Effect.orElseSucceed(() => false),
+          Effect.ensuring(
+            fs.remove(stageDir, { recursive: true, force: true }).pipe(Effect.ignore),
+          ),
+        );
+        if (!promoted) return undefined;
 
-          // Prune older staging directories beyond the 6 most recent to avoid stateDir bloat.
-          const mountEntries = yield* fs
-            .readDirectory(mountsRoot)
-            .pipe(Effect.orElseSucceed(() => []));
-          const stale = mountEntries.filter(
-            (name) => name.startsWith("claude-plugin-") && name !== `claude-plugin-${digest}`,
-          );
-          if (stale.length > 6) {
-            for (const oldName of stale.slice(0, stale.length - 6)) {
-              yield* fs
-                .remove(path.join(mountsRoot, oldName), { recursive: true, force: true })
-                .pipe(Effect.ignore);
-            }
+        if (kind === "codex-skills") return target;
+
+        // Prune older staging directories beyond the 6 most recent to avoid stateDir bloat.
+        const mountEntries = yield* fs
+          .readDirectory(mountsRoot)
+          .pipe(Effect.orElseSucceed(() => []));
+        const stale = mountEntries.filter(
+          (name) => name.startsWith("claude-plugin-") && name !== mountName,
+        );
+        if (stale.length > 6) {
+          for (const oldName of stale.slice(0, stale.length - 6)) {
+            yield* fs
+              .remove(path.join(mountsRoot, oldName), { recursive: true, force: true })
+              .pipe(Effect.ignore);
           }
-          return pluginDir;
-        }),
-      );
-    });
+        }
+        return target;
+      }),
+    );
+  });
+
+  const materializeClaudePluginDir: HarnessLibraryStore["Service"]["materializeClaudePluginDir"] =
+    ({ skills }) => materializeSkillMount("claude-plugin", skills);
+  const materializeCodexSkillRoot: HarnessLibraryStore["Service"]["materializeCodexSkillRoot"] = ({
+    skills,
+  }) => materializeSkillMount("codex-skills", skills);
 
   const loadModesFromDir = Effect.fn("HarnessLibraryStore.loadModesFromDir")(function* (input: {
     readonly modesDir: string;
@@ -1624,6 +1645,7 @@ const make = Effect.gen(function* () {
     getSkillDetail,
     getRuleDetail,
     materializeClaudePluginDir,
+    materializeCodexSkillRoot,
   });
 });
 

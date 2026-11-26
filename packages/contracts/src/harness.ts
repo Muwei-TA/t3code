@@ -165,9 +165,21 @@ const HarnessMcpRemoteUrl = TrimmedNonEmptyString.check(
   }),
 );
 
+const HarnessMcpOAuthConfig = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  clientId: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(2048))),
+  scopes: Schema.optionalKey(
+    Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(256))).check(
+      Schema.isMaxLength(32),
+    ),
+  ),
+  authorizationServerUrl: Schema.optionalKey(HarnessMcpRemoteUrl),
+});
+
 export const HarnessMcpHttpTransport = Schema.Struct({
   type: Schema.Literal("http"),
   url: HarnessMcpRemoteUrl,
+  oauth: Schema.optionalKey(HarnessMcpOAuthConfig),
   /** Header values may contain `${secret:NAME}` or `${secret:PROVIDER:REF}` placeholders resolved on the server. */
   headers: Schema.optionalKey(
     Schema.Record(
@@ -181,6 +193,7 @@ export type HarnessMcpHttpTransport = typeof HarnessMcpHttpTransport.Type;
 export const HarnessMcpSseTransport = Schema.Struct({
   type: Schema.Literal("sse"),
   url: HarnessMcpRemoteUrl,
+  oauth: Schema.optionalKey(HarnessMcpOAuthConfig),
   headers: Schema.optionalKey(
     Schema.Record(
       TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
@@ -233,6 +246,17 @@ export const HarnessMcpServerConfig = Schema.Struct({
 });
 export type HarnessMcpServerConfig = typeof HarnessMcpServerConfig.Type;
 
+export function supportsHarnessMcpOAuth(config: HarnessMcpServerConfig): boolean {
+  const { transport, injectionMode } = config;
+  return (
+    injectionMode === "gateway" &&
+    transport.type !== "stdio" &&
+    transport.oauth?.enabled !== false &&
+    (transport.oauth?.enabled === true ||
+      !Object.keys(transport.headers ?? {}).some((name) => name.toLowerCase() === "authorization"))
+  );
+}
+
 export const HarnessConfigFile = Schema.Struct({
   schemaVersion: Schema.Literal(1).pipe(Schema.withDecodingDefault(Effect.succeed(1 as const))),
   mcpServers: Schema.Record(HarnessMcpServerId, HarnessMcpServerConfig).pipe(
@@ -276,6 +300,7 @@ export const HarnessMcpServerState = Schema.Literals([
   "idle",
   "starting",
   "connected",
+  "auth_required",
   "error",
   "untrusted",
   "blocked_by_policy",
@@ -312,6 +337,8 @@ export const HarnessMcpServerView = Schema.Struct({
   repoRoot: Schema.NullOr(Schema.String),
   overriddenByProject: Schema.Boolean,
   stderrLinesCount: NonNegativeInt,
+  oauthStatus: Schema.optionalKey(Schema.Literals(["required", "connected", "expired"])),
+  oauthExpiresAt: Schema.optionalKey(IsoDateTime),
 });
 export type HarnessMcpServerView = typeof HarnessMcpServerView.Type;
 
@@ -877,6 +904,11 @@ export const HarnessMcpRestartInput = Schema.Struct({
 });
 export type HarnessMcpRestartInput = typeof HarnessMcpRestartInput.Type;
 
+export const HarnessMcpOAuthStartResult = Schema.Struct({ authorizationUrl: Schema.String });
+export const HarnessMcpOAuthCompleteInput = Schema.Struct({
+  callbackUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(8192)),
+});
+
 export const HarnessMcpLogsInput = Schema.Struct({
   serverId: HarnessMcpServerId,
 });
@@ -1264,6 +1296,7 @@ export const HarnessErrorCode = Schema.Literals([
   "untrusted",
   "upstream_error",
   "io_error",
+  "auth_required",
 ]);
 export type HarnessErrorCode = typeof HarnessErrorCode.Type;
 

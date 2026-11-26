@@ -42,6 +42,18 @@ export function createHarnessEnvironmentAtoms<R, E>(
       label: "environment-command:harness:mcp:restart",
       tag: WS_METHODS.harnessMcpRestart,
     }),
+    startMcpOAuth: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:mcp:oauth:start",
+      tag: WS_METHODS.harnessMcpOAuthStart,
+    }),
+    completeMcpOAuth: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:mcp:oauth:complete",
+      tag: WS_METHODS.harnessMcpOAuthComplete,
+    }),
+    disconnectMcpOAuth: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness:mcp:oauth:disconnect",
+      tag: WS_METHODS.harnessMcpOAuthDisconnect,
+    }),
     logsMcp: createEnvironmentRpcCommand(runtime, {
       label: "environment-command:harness:mcp:logs",
       tag: WS_METHODS.harnessMcpLogs,

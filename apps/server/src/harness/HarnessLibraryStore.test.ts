@@ -162,6 +162,12 @@ describe("HarnessLibraryStore", () => {
           expect(
             yield* fs.exists(path.join(mountDir!, "skills", "audit-sql", "checklist.md")),
           ).toBe(true);
+          const skills = snap.skills.filter((skill) => skill.effectiveEnabled);
+          const codexRoot = yield* lib.materializeCodexSkillRoot({ skills });
+          expect(codexRoot).toBeDefined();
+          expect(yield* fs.exists(path.join(codexRoot!, "audit-sql", "SKILL.md"))).toBe(true);
+          expect(yield* fs.exists(path.join(codexRoot!, "audit-sql", "checklist.md"))).toBe(true);
+          expect(yield* lib.materializeCodexSkillRoot({ skills })).toBe(codexRoot);
 
           // 4. Rules CRUD + t3.json disabledRules
           yield* lib.upsertUserRule({

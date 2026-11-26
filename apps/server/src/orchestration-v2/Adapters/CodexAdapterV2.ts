@@ -2295,6 +2295,73 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 },
               }),
             );
+        type SkillRoot = McpProviderSession.McpProviderSessionConfig["harnessCodexSkillRoot"];
+        const skillRoots = new Map<ThreadId, SkillRoot>();
+        const skillMountOwner = Symbol();
+        const skillMountPermit = yield* Semaphore.make(1);
+        let appliedSkillRoot: string | undefined;
+        let skillRootsUnsupported = false;
+        yield* Scope.addFinalizer(
+          scope,
+          Effect.sync(() => {
+            for (const root of skillRoots.values()) root?.mounts.delete(skillMountOwner);
+          }),
+        );
+        const syncSkillRoot = Effect.fn("CodexAdapterV2.syncSkillRoot")(function* (
+          threadId: ThreadId | null,
+          change: { readonly root: SkillRoot } | null,
+        ) {
+          if (threadId === null || skillRootsUnsupported) return;
+          yield* skillMountPermit.withPermit(
+            Effect.gen(function* () {
+              yield* rejectIfRetired;
+              if (change === null && !skillRoots.has(threadId)) return;
+              if (
+                change !== null &&
+                skillRoots.has(threadId) &&
+                skillRoots.get(threadId) === change.root
+              )
+                return;
+              const next = new Map(skillRoots);
+              if (change === null) next.delete(threadId);
+              else next.set(threadId, change.root);
+
+              // Extra roots are global to the app-server. A shared process can only see a
+              // mount when every attached thread is entitled to exactly that root.
+              const paths = new Set(Array.from(next.values(), (entry) => entry?.path));
+              const desired = paths.size === 1 ? paths.values().next().value : undefined;
+              if (desired !== appliedSkillRoot) {
+                const supported = yield* client
+                  .request("skills/extraRoots/set", {
+                    extraRoots: desired === undefined ? [] : [desired],
+                  })
+                  .pipe(
+                    Effect.as(true),
+                    Effect.catchTags({
+                      CodexAppServerRequestError: (error) =>
+                        error.code === -32601 && appliedSkillRoot === undefined
+                          ? Effect.succeed(false)
+                          : Effect.fail(error),
+                    }),
+                    withAppServerDeadline("skills/extraRoots/set"),
+                  );
+                if (!supported) {
+                  skillRootsUnsupported = true;
+                  skillRoots.clear();
+                  return;
+                }
+                appliedSkillRoot = desired;
+              }
+              for (const root of skillRoots.values()) root?.mounts.delete(skillMountOwner);
+              skillRoots.clear();
+              for (const [id, root] of next) {
+                skillRoots.set(id, root);
+                if (root !== undefined && root.path === appliedSkillRoot)
+                  root.mounts.add(skillMountOwner);
+              }
+            }).pipe(Effect.uninterruptible),
+          );
+        });
         // Read per thread: a workspace's project config can add its own servers.
         const readStdioMcpServers = (cwd: string | null | undefined) =>
           ensureInitialized.pipe(
@@ -7827,6 +7894,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ) {
             const threadId = yield* getNativeThreadId(turnInput.providerThread);
             const mcpSession = yield* mcpSessions.read(turnInput.threadId);
+            yield* syncSkillRoot(turnInput.threadId, { root: mcpSession?.harnessCodexSkillRoot });
             const models = adapterOptions.models === undefined ? [] : yield* adapterOptions.models;
             const configuredReasoningSummary = yield* client
               .request("config/read", { cwd: turnInput.runtimePolicy.cwd, includeLayers: false })
@@ -8071,14 +8139,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 readStdioMcpServers(undefined),
               ]).pipe(
                 Effect.flatMap(([mcpSession, stdioMcpServers]) =>
-                  resumeNativeThread(threadId, {
-                    excludeTurns: true,
-                    ...codexThreadRuntimeParams({
-                      threadId: providerThread.appThreadId,
-                      mcpSession,
-                      stdioMcpServers,
-                    }),
-                  }),
+                  syncSkillRoot(providerThread.appThreadId, {
+                    root: mcpSession?.harnessCodexSkillRoot,
+                  }).pipe(
+                    Effect.andThen(
+                      resumeNativeThread(threadId, {
+                        excludeTurns: true,
+                        ...codexThreadRuntimeParams({
+                          threadId: providerThread.appThreadId,
+                          mcpSession,
+                          stdioMcpServers,
+                        }),
+                      }),
+                    ),
+                  ),
                 ),
                 Effect.andThen(request),
               ),
@@ -8250,19 +8324,25 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ]),
               ),
               Effect.flatMap(([mcpSession, stdioMcpServers]) =>
-                client.request("thread/start", {
-                  ...codexThreadRuntimeParams({
-                    threadId: threadInput.threadId,
-                    mcpSession,
-                    stdioMcpServers,
-                    modelSelection: threadInput.modelSelection,
-                    runtimePolicy: threadInput.runtimePolicy,
-                  }),
-                  // Codex tags the child's MCP calls with thread_source "subagent".
-                  ...(IdAllocator.isDelegatedTaskThread(threadInput.threadId)
-                    ? { threadSource: "subagent" }
-                    : {}),
-                }),
+                syncSkillRoot(threadInput.threadId, {
+                  root: mcpSession?.harnessCodexSkillRoot,
+                }).pipe(
+                  Effect.andThen(
+                    client.request("thread/start", {
+                      ...codexThreadRuntimeParams({
+                        threadId: threadInput.threadId,
+                        mcpSession,
+                        stdioMcpServers,
+                        modelSelection: threadInput.modelSelection,
+                        runtimePolicy: threadInput.runtimePolicy,
+                      }),
+                      // Codex tags the child's MCP calls with thread_source "subagent".
+                      ...(IdAllocator.isDelegatedTaskThread(threadInput.threadId)
+                        ? { threadSource: "subagent" }
+                        : {}),
+                    }),
+                  ),
+                ),
               ),
               Effect.map((response): OrchestrationV2ProviderThread =>
                 providerThreadFromCodexThread({
@@ -8289,11 +8369,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* rejectIfRetired;
               const nativeThreadId = yield* getNativeThreadId(threadInput.providerThread);
               const appThreadId = threadInput.threadId ?? threadInput.providerThread.appThreadId;
+              const mcpSession = yield* readMcpSession(appThreadId);
               const resume = resumeNativeThread(nativeThreadId, {
                 excludeTurns: true,
                 ...codexThreadRuntimeParams({
                   threadId: appThreadId,
-                  mcpSession: yield* readMcpSession(appThreadId),
+                  mcpSession,
                   stdioMcpServers: yield* readStdioMcpServers(threadInput.runtimePolicy?.cwd),
                   ...(threadInput.modelSelection === undefined
                     ? {}
@@ -8308,6 +8389,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               rootProviderThreads.set(nativeThreadId, threadInput.providerThread);
               goalUpdatesHeld.add(nativeThreadId);
               const response = yield* ensureInitialized.pipe(
+                Effect.andThen(
+                  syncSkillRoot(appThreadId, { root: mcpSession?.harnessCodexSkillRoot }),
+                ),
                 Effect.andThen(resume),
                 withAppServerDeadline("thread/resume"),
                 Effect.flatMap(decodeCodexResumeMetadata),
@@ -8556,6 +8640,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 }
                 yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
               }
+              yield* syncSkillRoot(unloadInput.providerThread.appThreadId, null);
               // No turn/completed arrives for an unloaded thread, so a Stop Codex never
               // confirmed would otherwise keep its turn open for the life of the session.
               const interrupting = yield* Ref.get(interruptingNativeTurns);
@@ -9347,13 +9432,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             function* (threadInput) {
               const threadId = yield* getNativeThreadId(threadInput.sourceProviderThread);
               const boundary = yield* resolveCodexForkBoundary(threadInput);
+              const mcpSession = yield* mcpSessions.read(threadInput.targetThreadId);
               const fork = client.request("thread/fork", {
                 threadId,
                 excludeTurns: true,
                 ...(boundary.lastTurnId === undefined ? {} : { lastTurnId: boundary.lastTurnId }),
                 ...codexThreadRuntimeParams({
                   threadId: threadInput.targetThreadId,
-                  mcpSession: yield* mcpSessions.read(threadInput.targetThreadId),
+                  mcpSession,
                   stdioMcpServers: yield* readStdioMcpServers(threadInput.runtimePolicy?.cwd),
                   ...(threadInput.modelSelection === undefined
                     ? {}
@@ -9364,6 +9450,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 }),
               });
               const response = yield* ensureInitialized.pipe(
+                Effect.andThen(
+                  syncSkillRoot(threadInput.targetThreadId, {
+                    root: mcpSession?.harnessCodexSkillRoot,
+                  }),
+                ),
                 Effect.andThen(
                   fork.pipe(
                     Effect.catchTags({
