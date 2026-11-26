@@ -159,7 +159,7 @@ function computeProjectTrustDigest(config: HarnessMcpServerConfig): string {
   return NodeCrypto.createHash("sha256").update(canonical).digest("hex");
 }
 
-function computeCanonicalConfigFingerprint(config: HarnessMcpServerConfig): string {
+export function computeCanonicalConfigFingerprint(config: HarnessMcpServerConfig): string {
   return JSON.stringify({
     enabled: config.enabled,
     description: config.description ?? null,

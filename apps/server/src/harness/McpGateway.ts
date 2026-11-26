@@ -168,7 +168,7 @@ function checkUpstreamToolPolicy(
   if (denied !== null) return { deny: denied };
   if (
     (input.serverPolicy === "auto-all" && input.runtimeMode === "full-access") ||
-    (input.serverPolicy === "auto-read" &&
+    (input.serverPolicy !== "always-ask" &&
       input.readOnly &&
       (input.runtimeMode !== "approval-required" || input.explicitlyAllowlisted === true))
   )
@@ -802,6 +802,25 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
   const approvalAudit = Option.getOrUndefined(
     yield* Effect.serviceOption(HarnessApprovalAuditStore.HarnessApprovalAuditStore),
   );
+  let approvalDigestKey: Uint8Array | undefined;
+  const approvalConfigDigest = Effect.fn("McpGateway.approvalConfigDigest")(function* (
+    config: HarnessMcpServerConfig,
+  ) {
+    approvalDigestKey ??= yield* secretStore
+      .getOrCreateRandom("harness-approval-config-digest-key", 32)
+      .pipe(
+        Effect.mapError(
+          () =>
+            new HarnessError({
+              code: "io_error",
+              detail: "Could not load the key for MCP approval rules.",
+            }),
+        ),
+      );
+    return NodeCrypto.createHmac("sha256", approvalDigestKey)
+      .update(HarnessStore.computeCanonicalConfigFingerprint(config))
+      .digest("hex");
+  });
 
   const idleTtlMs = options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
   const connect = options.connect ?? connectUpstream;
@@ -1832,16 +1851,20 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       serverScope: server.scope,
       repoRoot: workspace.workspaceRoot,
       toolName: upstreamToolName,
-      configDigest: server.configDigest,
+      configDigest:
+        policy === "ask" && approval && approvalAudit
+          ? yield* approvalConfigDigest(server.config)
+          : server.configDigest,
     } satisfies HarnessGatewayApprovalTarget;
     const grantTarget =
-      approval?.providerSessionId === undefined
+      approval === undefined
         ? undefined
         : { target, threadId: approval.threadId, providerSessionId: approval.providerSessionId };
     const hasGrant =
       policy === "ask" && grantTarget && approvalAudit
         ? yield* approvalAudit.hasActiveGatewayGrant(grantTarget)
         : false;
+    let grantScope: "always" | "session" | undefined;
     if (policy === "ask" && !hasGrant) {
       if (!approval?.request) {
         return {
@@ -1879,82 +1902,89 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
           ],
         };
       }
-      if (decision === "acceptAlways" || decision === "acceptForSession") {
-        if (!grantTarget || !approvalAudit) {
+      if (decision === "acceptAlways") grantScope = "always";
+      if (decision === "acceptForSession") grantScope = "session";
+    }
+    const expectedPoolKey = yield* getOrCreateRecord(serverId).lock.withPermits(1)(
+      Effect.gen(function* () {
+        yield* (
+          approval?.validate?.({ serverId, readOnly: binding.exposed.readOnly }) ?? Effect.void
+        );
+        // Re-verify live workspace trust, policy, config revision, and pool membership right before
+        // dispatch so a revocation or edit occurring while sibling candidates connected can never execute.
+        const preDispatchWorkspace = yield* store.resolveWorkspace(context.workspaceRoot);
+        if (!preDispatchWorkspace.managedPolicyAllowsHarness) {
           return yield* new HarnessError({
             code: "policy_denied",
             serverId,
-            detail: "The selected MCP approval could not be saved.",
+            detail: "Organization policy does not allow portable harness extensions.",
           });
         }
-        yield* approval.validate?.({ serverId, readOnly: binding.exposed.readOnly }) ?? Effect.void;
-        yield* approvalAudit.recordGatewayGrant({
-          ...grantTarget,
-          providerInstanceId: approval.providerInstanceId,
-          workspaceRoot: workspace.workspaceRoot,
-          requestKind: "permission",
-          scope: decision === "acceptAlways" ? "always" : "session",
-          summary: `${serverId}: ${upstreamToolName}`,
-        });
-      }
-    }
-    yield* approval?.validate?.({ serverId, readOnly: binding.exposed.readOnly }) ?? Effect.void;
+        const latestServer = preDispatchWorkspace.servers.find(
+          (candidate) => candidate.id === server.id && candidate.scope === server.scope,
+        );
+        if (latestServer === undefined) {
+          return yield* new HarnessError({
+            code: "not_found",
+            serverId,
+            detail: `MCP server "${serverId}" is no longer configured.`,
+          });
+        }
+        yield* assertServerRunnable(latestServer);
+        if (resolveServerChannel(latestServer.config, context.harnessCapabilities) !== "gateway") {
+          return yield* new HarnessError({
+            code: "not_found",
+            serverId,
+            detail: `MCP server "${serverId}" is routed natively for this provider and is not callable through the T3 Harness gateway.`,
+          });
+        }
+        const expectedPoolKey = poolKeyFor(latestServer);
+        if (
+          latestServer.configDigest !== server.configDigest ||
+          preDispatchWorkspace.workspaceRoot !== workspace.workspaceRoot ||
+          runtimeScopeKey(latestServer) !== runtimeScopeKey(server) ||
+          pooled.connection.isClosed() ||
+          pool.get(expectedPoolKey) !== pooled
+        ) {
+          return yield* new HarnessError({
+            code: "invalid_config",
+            serverId,
+            detail: `MCP server "${serverId}" configuration or trust changed before tool execution. Retry the call.`,
+          });
+        }
 
-    // Re-verify live workspace trust, policy, config revision, and pool membership right before
-    // dispatch so a revocation or edit occurring while sibling candidates connected can never execute.
-    const preDispatchWorkspace = yield* store.resolveWorkspace(context.workspaceRoot);
-    if (!preDispatchWorkspace.managedPolicyAllowsHarness) {
-      return yield* new HarnessError({
-        code: "policy_denied",
-        serverId,
-        detail: "Organization policy does not allow portable harness extensions.",
-      });
-    }
-    const latestServer = preDispatchWorkspace.servers.find(
-      (candidate) => candidate.id === server.id && candidate.scope === server.scope,
+        if (
+          hasGrant &&
+          grantTarget &&
+          approvalAudit &&
+          !(yield* approvalAudit.hasActiveGatewayGrant(grantTarget))
+        ) {
+          return yield* new HarnessError({
+            code: "policy_denied",
+            serverId,
+            detail: "The MCP approval was revoked. Retry to request approval.",
+          });
+        }
+        if (grantScope !== undefined) {
+          if (!grantTarget || !approval || !approvalAudit) {
+            return yield* new HarnessError({
+              code: "policy_denied",
+              serverId,
+              detail: "The selected MCP approval could not be saved.",
+            });
+          }
+          yield* approvalAudit.recordGatewayGrant({
+            ...grantTarget,
+            providerInstanceId: approval.providerInstanceId,
+            workspaceRoot: workspace.workspaceRoot,
+            requestKind: "permission",
+            scope: grantScope,
+            summary: `${serverId}: ${upstreamToolName}`,
+          });
+        }
+        return expectedPoolKey;
+      }),
     );
-    if (latestServer === undefined) {
-      return yield* new HarnessError({
-        code: "not_found",
-        serverId,
-        detail: `MCP server "${serverId}" is no longer configured.`,
-      });
-    }
-    yield* assertServerRunnable(latestServer);
-    if (resolveServerChannel(latestServer.config, context.harnessCapabilities) !== "gateway") {
-      return yield* new HarnessError({
-        code: "not_found",
-        serverId,
-        detail: `MCP server "${serverId}" is routed natively for this provider and is not callable through the T3 Harness gateway.`,
-      });
-    }
-    const expectedPoolKey = poolKeyFor(latestServer);
-    if (
-      latestServer.configDigest !== server.configDigest ||
-      preDispatchWorkspace.workspaceRoot !== workspace.workspaceRoot ||
-      runtimeScopeKey(latestServer) !== runtimeScopeKey(server) ||
-      pooled.connection.isClosed() ||
-      pool.get(expectedPoolKey) !== pooled
-    ) {
-      return yield* new HarnessError({
-        code: "invalid_config",
-        serverId,
-        detail: `MCP server "${serverId}" configuration or trust changed before tool execution. Retry the call.`,
-      });
-    }
-
-    if (
-      hasGrant &&
-      grantTarget &&
-      approvalAudit &&
-      !(yield* approvalAudit.hasActiveGatewayGrant(grantTarget))
-    ) {
-      return yield* new HarnessError({
-        code: "policy_denied",
-        serverId,
-        detail: "The MCP approval was revoked. Retry to request approval.",
-      });
-    }
 
     pooled.lastUsedMs = yield* Clock.currentTimeMillis;
     const callRes = yield* pooled.connection

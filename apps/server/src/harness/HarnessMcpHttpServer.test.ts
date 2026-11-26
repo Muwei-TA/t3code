@@ -570,8 +570,13 @@ describe("HarnessMcpHttpServer", () => {
               "full-access",
               ["allowed__read_issue", "tracker__read_issue"],
             ],
-            ["default", undefined, "approval-required", []],
-            ["default", undefined, "auto-accept-edits", []],
+            ["default", undefined, "approval-required", ["allowed__read_issue"]],
+            [
+              "default",
+              undefined,
+              "auto-accept-edits",
+              ["allowed__read_issue", "tracker__read_issue"],
+            ],
             ["default", undefined, "full-access", toolNames],
           ] as const) {
             mutableShell.interactionMode = interaction;

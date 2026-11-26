@@ -1,5 +1,6 @@
 // @effect-diagnostics processEnvInEffect:off -- Test sets and restores process.env.OPENAI_API_KEY to verify stdio child env stripping.
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import {
   DEFAULT_HARNESS_CAPABILITIES,
@@ -113,14 +114,17 @@ const makeGatewayTestLayer = (
     error: undefined,
   } as unknown as ManagedPolicy.ManagedPolicy["Service"]);
 
-  const secretStoreLayer = Layer.succeed(ServerSecretStore.ServerSecretStore, {
-    get: (name: string) =>
-      Effect.succeed(
-        secretsMap[name] !== undefined
-          ? Option.some(new TextEncoder().encode(secretsMap[name]))
-          : Option.none<Uint8Array>(),
-      ),
-  } as unknown as ServerSecretStore.ServerSecretStore["Service"]);
+  const secretStoreLayer =
+    options?.secrets === undefined
+      ? ServerSecretStore.layer.pipe(Layer.provide(Layer.mergeAll(configLayer, NodeCrypto.layer)))
+      : Layer.succeed(ServerSecretStore.ServerSecretStore, {
+          get: (name: string) =>
+            Effect.succeed(
+              secretsMap[name] !== undefined
+                ? Option.some(new TextEncoder().encode(secretsMap[name]))
+                : Option.none<Uint8Array>(),
+            ),
+        } as unknown as ServerSecretStore.ServerSecretStore["Service"]);
 
   const secretResolverLayer = Layer.succeed(SecretResolver.SecretResolver, {
     read: () => Effect.succeed([]),
@@ -150,6 +154,7 @@ describe("McpGateway", () => {
   it.effect("executes gateway approvals once, for a session, or until revocation", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
       const baseDir = yield* fs.makeTempDirectoryScoped();
       const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
       let executions = 0;
@@ -244,21 +249,38 @@ describe("McpGateway", () => {
         expect(grant.source).toBe("gateway");
         expect(grant.target).toMatchObject({ serverId: id, toolName: "write" });
 
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const restarted = yield* McpGateway.McpGateway;
+            yield* restarted.callToolForSession({
+              context: {
+                ...context,
+                approval: { ...context.approval, providerSessionId: undefined },
+              },
+              toolName: "approval__write",
+              arguments: {},
+            });
+          }).pipe(Effect.provide(makeGatewayTestLayer(baseDir, paths, { connect }))),
+        );
+        expect(approvals).toBe(5);
+        expect(executions).toBe(7);
+
         const inPlan = yield* invoke({ ...newSession, interactionMode: "plan" });
         expect(inPlan.isError).toBe(true);
-        expect(executions).toBe(6);
+        expect(executions).toBe(7);
         expect(approvals).toBe(5);
         yield* audit.revoke(grant.id);
         decision = "decline";
         yield* invoke(newSession);
         expect(approvals).toBe(6);
-        expect(executions).toBe(6);
+        expect(executions).toBe(7);
 
         yield* store.upsertUserServer({ id, config: { ...config, description: "Changed" } });
         yield* invoke(context);
         expect(approvals).toBe(7);
-        expect(executions).toBe(6);
+        expect(executions).toBe(7);
 
+        const rulesBeforeRaces = yield* audit.list({ includeRevoked: true });
         const stale = yield* invoke({
           ...context,
           approval: {
@@ -269,11 +291,55 @@ describe("McpGateway", () => {
                   id,
                   config: { ...config, description: "Changed while awaiting approval" },
                 })
-                .pipe(Effect.as({ decision: "accept" as const })),
+                .pipe(Effect.as({ decision: "acceptAlways" as const })),
           },
         }).pipe(Effect.flip);
         expect(stale.code).toBe("invalid_config");
-        expect(executions).toBe(6);
+        expect(executions).toBe(7);
+        const disabled = yield* invoke({
+          ...context,
+          approval: {
+            ...context.approval,
+            request: () =>
+              store
+                .setServerEnabled({ id, enabled: false })
+                .pipe(Effect.as({ decision: "acceptForSession" as const })),
+          },
+        }).pipe(Effect.flip);
+        expect(disabled.code).toBe("invalid_config");
+
+        const projectServerId = HarnessMcpServerId.make("approval-project");
+        yield* fs.writeFileString(
+          path.join(project, "t3.json"),
+          JSON.stringify({
+            harness: { mcpServers: { [projectServerId]: config } },
+          }),
+        );
+        const projectServer = (yield* store.resolveWorkspace(project)).servers.find(
+          (entry) => entry.id === projectServerId,
+        )!;
+        const trust = {
+          repoRoot: projectServer.repoRoot!,
+          serverId: projectServerId,
+          digest: projectServer.trustDigest!,
+        };
+        yield* store.trustProjectServer(trust);
+        const projectCall = (approval: McpGateway.GatewayApprovalContext) =>
+          gateway.callToolForSession({
+            context: { ...context, approval },
+            toolName: "approval-project__write",
+            arguments: {},
+          });
+        const revoked = yield* projectCall({
+          ...context.approval,
+          request: () =>
+            store.revokeProjectTrust(trust).pipe(Effect.as({ decision: "acceptAlways" as const })),
+        }).pipe(Effect.flip);
+        expect(revoked.code).toBe("untrusted");
+        yield* store.trustProjectServer(trust);
+        expect((yield* projectCall(context.approval)).isError).toBe(true);
+        expect(yield* audit.list({ includeRevoked: true })).toEqual(rulesBeforeRaces);
+        expect(executions).toBe(7);
       }).pipe(Effect.provide(makeGatewayTestLayer(baseDir, paths, { connect })));
     }).pipe(Effect.provide(NodeServices.layer)),
   );

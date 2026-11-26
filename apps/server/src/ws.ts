@@ -3848,17 +3848,15 @@ export const layerWsRpc = (
             : harnessUnavailable("HarnessStore"),
         [WS_METHODS.harnessMcpSetEnabled]: (input) =>
           Option.isSome(harnessStoreOption) && Option.isSome(mcpGatewayOption)
-            ? harnessStoreOption.value
-                .setServerEnabled({
+            ? mcpGatewayOption.value.updateServer(
+                { serverId: input.id, scope: "user", workspaceRoot: input.workspaceRoot },
+                harnessStoreOption.value.setServerEnabled({
                   id: input.id,
                   enabled: input.enabled,
                   expectedDigest: input.expectedDigest,
                   authorize: authorizeHarnessConfig,
-                })
-                .pipe(
-                  Effect.andThen(mcpGatewayOption.value.invalidateServer(input.id)),
-                  Effect.andThen(mcpGatewayOption.value.getSnapshot(input.workspaceRoot)),
-                )
+                }),
+              )
             : harnessUnavailable("HarnessStore"),
         [WS_METHODS.harnessMcpTrustProjectServer]: (input) =>
           Option.isSome(harnessStoreOption) && Option.isSome(mcpGatewayOption)

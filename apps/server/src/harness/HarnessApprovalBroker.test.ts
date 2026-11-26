@@ -20,7 +20,7 @@ it.effect("delivers a decision only to the owning thread and cancels expired app
         threadId,
         open: (requestId) => Deferred.succeed(opened, requestId).pipe(Effect.asVoid),
         cancel: (requestId) => Deferred.succeed(cancelled, requestId).pipe(Effect.asVoid),
-        invalidated: Effect.never,
+        invalidated: () => Effect.never,
       })
       .pipe(Effect.forkChild);
     const requestId = yield* Deferred.await(opened);
@@ -52,7 +52,7 @@ it.effect("delivers a decision only to the owning thread and cancels expired app
         threadId,
         open: (id) => Deferred.succeed(expiring, id).pipe(Effect.asVoid),
         cancel: (id) => Deferred.succeed(cancelled, id).pipe(Effect.asVoid),
-        invalidated: Effect.never,
+        invalidated: () => Effect.never,
       })
       .pipe(Effect.flip, Effect.forkChild);
     const pending = yield* Deferred.await(expiring);

@@ -1280,6 +1280,13 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
     const rootNodeId = run?.rootNodeId;
     const attemptId = run?.activeAttemptId;
     const threadId = scope.thread.threadId;
+    const session = context.approval?.providerSessionId;
+    const approvalThread = {
+      runtimeMode: state.shell.runtimeMode,
+      interactionMode: state.shell.interactionMode,
+      ...(state.shell.modeId === undefined ? {} : { modeId: state.shell.modeId }),
+      ...(session === undefined ? {} : { providerSessionId: session }),
+    };
     const expiry = new HarnessError({
       code: "policy_denied",
       detail: "The MCP call no longer belongs to the same active run.",
@@ -1309,6 +1316,8 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
                     context.approval?.providerSessionId ||
                   current.context.workspaceRoot !== context.workspaceRoot ||
                   current.context.runtimeMode !== context.runtimeMode ||
+                  current.shell.modeId !== approvalThread.modeId ||
+                  current.shell.interactionMode !== approvalThread.interactionMode ||
                   !isMcpServerAllowedByMode(serverId, current.context.activeMode) ||
                   (!readOnly &&
                     (current.context.interactionMode === "plan" ||
@@ -1346,6 +1355,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
                         runId: run.id,
                         rootNodeId,
                         attemptId,
+                        approvalThread,
                         title: `MCP tool approval for ${target.serverId}`,
                         prompt,
                       })
@@ -1362,9 +1372,8 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
                         requestId,
                       })
                       .pipe(Effect.ignore),
-                  invalidated: orchestrator
-                    .streamStoredEventsFrom({ threadId, afterSequence })
-                    .pipe(
+                  invalidated: (requestId) =>
+                    orchestrator.streamStoredEventsFrom({ threadId, afterSequence }).pipe(
                       Stream.filter(
                         ({ event }) =>
                           (event.type === "run.updated" &&
@@ -1377,7 +1386,24 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
                           (event.type === "turn-item.updated" &&
                             event.payload.type === "run_interrupt_request" &&
                             event.payload.runId === run.id &&
-                            event.payload.nodeId === rootNodeId),
+                            event.payload.nodeId === rootNodeId) ||
+                          event.type === "thread.archived" ||
+                          event.type === "thread.deleted" ||
+                          (event.type === "thread.runtime-mode-updated" &&
+                            event.payload.runtimeMode !== approvalThread.runtimeMode) ||
+                          (event.type === "thread.interaction-mode-updated" &&
+                            (event.payload.interactionMode !== approvalThread.interactionMode ||
+                              event.payload.modeId !== approvalThread.modeId)) ||
+                          (event.type === "provider-session.detached" &&
+                            event.payload.providerSessionId === session) ||
+                          (event.type === "provider-session.updated" &&
+                            event.payload.id === session &&
+                            (event.payload.status === "error" ||
+                              event.payload.status === "stopped")) ||
+                          (event.type === "runtime-request.updated" &&
+                            event.payload.id === requestId &&
+                            (event.payload.status === "cancelled" ||
+                              event.payload.status === "expired")),
                       ),
                       Stream.runHead,
                       Effect.andThen(Effect.fail(expiry)),

@@ -11492,10 +11492,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const getApprovableHarnessRun = Effect.fn("Orchestrator.getApprovableHarnessRun")(function* (
     threadId: ThreadId,
     runId: RunId,
+    expected?: Extract<
+      OrchestrationV2InternalCommand,
+      { type: "harness_approval.open" }
+    >["approvalThread"],
   ) {
-    const { thread, runs, turnItems } = yield* projectionStore.getThreadRecords(
+    const { thread, runs, turnItems, providerThreads } = yield* projectionStore.getThreadRecords(
       threadId,
-      ["runs", "turnItems"],
+      ["runs", "turnItems", "providerThreads"],
       { runIds: [runId], turnItemRunIds: [runId], turnItemTypes: ["run_interrupt_request"] },
     );
     const run = runs.find((entry) => entry.id === runId);
@@ -11503,6 +11507,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       thread.archivedAt === null &&
       run &&
       isLiveRun(run) &&
+      (expected === undefined ||
+        (thread.runtimeMode === expected.runtimeMode &&
+          thread.interactionMode === expected.interactionMode &&
+          thread.modeId === expected.modeId &&
+          (expected.providerSessionId === undefined ||
+            providerThreads.some(
+              (providerThread) =>
+                providerThread.id === run.providerThreadId &&
+                providerThread.providerSessionId === expected.providerSessionId,
+            )))) &&
       !turnItems.some(
         (item) => item.type === "run_interrupt_request" && item.nodeId === run.rootNodeId,
       )
@@ -11557,9 +11571,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return;
     }
 
-    const run = yield* getApprovableHarnessRun(threadId, command.runId).pipe(
-      mapDispatchError(command),
-    );
+    const run = yield* getApprovableHarnessRun(
+      threadId,
+      command.runId,
+      command.approvalThread,
+    ).pipe(mapDispatchError(command));
     if (
       !run ||
       run.rootNodeId !== command.rootNodeId ||
@@ -11611,7 +11627,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         nativeRequestRef: null,
         kind: "permission",
         status: "pending",
-        responseCapability: { type: "harness_gateway", supportsFeedback: true },
+        responseCapability: {
+          type: "harness_gateway",
+          supportsFeedback: true,
+          thread: command.approvalThread,
+        },
         createdAt: now,
         resolvedAt: null,
       },
@@ -11687,14 +11707,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
       const gatewayApproval = runtimeRequest.responseCapability.type === "harness_gateway";
-      if (gatewayApproval) {
+      if (runtimeRequest.responseCapability.type === "harness_gateway") {
         const node = context.node;
         const run =
           node?.runId == null
             ? undefined
-            : yield* getApprovableHarnessRun(command.threadId, node.runId).pipe(
-                mapDispatchError(command),
-              );
+            : yield* getApprovableHarnessRun(
+                command.threadId,
+                node.runId,
+                runtimeRequest.responseCapability.thread,
+              ).pipe(mapDispatchError(command));
         if (command.decision === undefined || !run || run.rootNodeId !== node?.rootNodeId) {
           return yield* new OrchestratorDispatchError({
             commandId: command.commandId,

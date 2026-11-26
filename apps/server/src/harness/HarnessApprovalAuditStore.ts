@@ -50,7 +50,7 @@ interface GrantInput {
 interface GatewayGrantTarget {
   readonly target: HarnessGatewayApprovalTarget;
   readonly threadId: ThreadId;
-  readonly providerSessionId: ProviderSessionId;
+  readonly providerSessionId?: ProviderSessionId | undefined;
 }
 
 function matchesGatewayGrant(
@@ -66,7 +66,9 @@ function matchesGatewayGrant(
     rule.target.toolName === target.toolName &&
     rule.target.configDigest === target.configDigest &&
     (rule.scope === "always" ||
-      (rule.threadId === threadId && rule.providerSessionId === providerSessionId))
+      (providerSessionId !== undefined &&
+        rule.threadId === threadId &&
+        rule.providerSessionId === providerSessionId))
   );
 }
 
@@ -152,7 +154,16 @@ const make = Effect.gen(function* () {
             (rule) => rule.scope === record.scope && matchesGatewayGrant(rule, gateway),
           );
         if (duplicate) return duplicate;
-        const next = [record, ...existing].slice(0, MAX_APPROVAL_AUDIT_RECORDS);
+        const ordered = [record, ...existing];
+        const active = ordered.filter(
+          (rule) => rule.source === "gateway" && rule.scope === "always" && rule.revokedAt === null,
+        );
+        const activeIds = new Set(active.map((rule) => rule.id));
+        const history = ordered
+          .filter((rule) => !activeIds.has(rule.id))
+          .slice(0, Math.max(0, MAX_APPROVAL_AUDIT_RECORDS - active.length));
+        const keep = new Set([...active, ...history].map((rule) => rule.id));
+        const next = ordered.filter((rule) => keep.has(rule.id));
         yield* saveRules(next);
         return record;
       }),
@@ -167,12 +178,19 @@ const make = Effect.gen(function* () {
   const recordGatewayGrant = Effect.fn("HarnessApprovalAuditStore.recordGatewayGrant")(function* (
     input: GrantInput & GatewayGrantTarget,
   ) {
+    if (input.scope === "session" && input.providerSessionId === undefined)
+      return yield* new HarnessError({
+        code: "policy_denied",
+        detail: "This call has no provider session to approve.",
+      });
     return yield* saveGrant(
       {
         ...(yield* makeRecord(input)),
         source: "gateway",
         target: input.target,
-        providerSessionId: input.providerSessionId,
+        ...(input.providerSessionId === undefined
+          ? {}
+          : { providerSessionId: input.providerSessionId }),
       },
       input,
     );

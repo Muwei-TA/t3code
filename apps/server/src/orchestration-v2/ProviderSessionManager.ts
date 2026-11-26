@@ -1135,8 +1135,11 @@ export const layerWithOptions = (
           const releasedRequests = projection.runtimeRequests.filter(
             (request) =>
               request.status === "pending" &&
-              request.responseCapability.type === "live" &&
-              request.responseCapability.providerSessionId === providerSessionId &&
+              ((request.responseCapability.type === "live" &&
+                request.responseCapability.providerSessionId === providerSessionId) ||
+                (request.responseCapability.type === "harness_gateway" &&
+                  input.reason !== "server_shutdown" &&
+                  request.responseCapability.thread?.providerSessionId === providerSessionId)) &&
               DateTime.isLessThanOrEqualTo(request.createdAt, input.releasedAt) &&
               // Shutdown reconciliation decides which questions can survive the lost callback.
               !(input.reason === "server_shutdown" && request.kind === "user_input"),

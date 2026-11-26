@@ -1442,6 +1442,13 @@ export function isQueuedProviderThreadPlaceholder(
   );
 }
 
+const HarnessGatewayApprovalThread = Schema.Struct({
+  providerSessionId: Schema.optionalKey(ProviderSessionId),
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  modeId: Schema.optionalKey(HarnessModeId),
+});
+
 export const OrchestrationV2RuntimeRequest = Schema.Struct({
   id: RuntimeRequestId,
   nodeId: NodeId,
@@ -1461,6 +1468,7 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
     Schema.Struct({
       type: Schema.Literal("harness_gateway"),
       supportsFeedback: Schema.optional(Schema.Boolean),
+      thread: Schema.optionalKey(HarnessGatewayApprovalThread),
     }),
     Schema.Struct({ type: Schema.Literal("message") }),
     Schema.Struct({ type: Schema.Literal("not_resumable"), reason: Schema.String }),
@@ -4090,6 +4098,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     rootNodeId: NodeId,
     attemptId: RunAttemptId,
     requestId: RuntimeRequestId,
+    approvalThread: HarnessGatewayApprovalThread,
     title: Schema.String,
     prompt: Schema.String,
   }),

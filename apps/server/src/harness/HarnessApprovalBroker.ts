@@ -19,7 +19,7 @@ interface ApprovalWait {
   readonly threadId: ThreadId;
   readonly open: (id: RuntimeRequestId) => Effect.Effect<void, HarnessError>;
   readonly cancel: (id: RuntimeRequestId) => Effect.Effect<void>;
-  readonly invalidated: Effect.Effect<never, HarnessError>;
+  readonly invalidated: (id: RuntimeRequestId) => Effect.Effect<never, HarnessError>;
 }
 
 export class HarnessApprovalBroker extends Context.Service<
@@ -52,7 +52,7 @@ const make = Effect.gen(function* () {
       Effect.sync(() => pending.set(requestId, { threadId: input.threadId, decision })),
       () =>
         input.open(requestId).pipe(
-          Effect.andThen(Effect.raceFirst(Deferred.await(decision), input.invalidated)),
+          Effect.andThen(Effect.raceFirst(Deferred.await(decision), input.invalidated(requestId))),
           Effect.timeoutOrElse({
             duration: "5 minutes",
             orElse: () =>

@@ -509,16 +509,37 @@ export const layerExecutor: Layer.Layer<
               );
           case "runtime-request.respond": {
             if (effect.request.target === "harness_gateway") {
-              return Option.isSome(approvalBroker)
-                ? approvalBroker.value
-                    .resolveApproval({
-                      threadId: effect.threadId,
-                      requestId: effect.request.requestId,
-                      decision: effect.request.decision,
-                      feedback: effect.request.feedback,
-                    })
-                    .pipe(Effect.asVoid)
-                : Effect.void;
+              const { requestId, decision, feedback } = effect.request;
+              const delivery = Option.isSome(approvalBroker)
+                ? approvalBroker.value.resolveApproval({
+                    threadId: effect.threadId,
+                    requestId,
+                    decision,
+                    feedback,
+                  })
+                : Effect.succeed(false);
+              return delivery.pipe(
+                Effect.flatMap((resolved) =>
+                  resolved
+                    ? Effect.void
+                    : threads
+                        .dispatch({
+                          type: "runtime-request.delivery.fail",
+                          commandId: CommandId.make(`${effect.commandId}:delivery-failed`),
+                          threadId: effect.threadId,
+                          requestId,
+                        })
+                        .pipe(
+                          Effect.asVoid,
+                          Effect.catchCause((cause) =>
+                            Effect.logWarning("Failed to record MCP approval delivery failure", {
+                              effectId: effect.id,
+                              cause,
+                            }),
+                          ),
+                        ),
+                ),
+              );
             }
             const { requestId, decision } = effect.request;
             return runtimeRequests
