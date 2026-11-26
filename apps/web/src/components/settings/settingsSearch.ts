@@ -74,6 +74,8 @@ export interface SettingsSearchItem {
   readonly peerLinksOnly?: boolean;
   readonly fastWorktreeCheckoutOnly?: boolean;
   readonly agentFeedbackOnly?: boolean;
+  readonly productTelemetrySettingsOnly?: boolean;
+  readonly relayTracingOnly?: boolean;
   readonly textGeneratorsOnly?: boolean;
   readonly secondary?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
@@ -91,6 +93,8 @@ export interface SettingsSearchAvailability {
   readonly hasPeerLinkHost?: boolean;
   readonly hasFastWorktreeCheckoutEnvironment?: boolean;
   readonly hasAgentFeedbackEnvironment?: boolean;
+  readonly hasProductTelemetrySettingsEnvironment?: boolean;
+  readonly hasRelayTracingConfig?: boolean;
   /** An environment without a provider allow-list, which hides text generators. */
   readonly hasTextGeneratorsEnvironment?: boolean;
   readonly hasPrimaryEnvironment?: boolean;
@@ -756,6 +760,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     targetId: "privacy",
     searchTerms: [msg("privacy telemetry analytics usage events")],
+    productTelemetrySettingsOnly: true,
   },
   {
     id: "relay-connection-diagnostics",
@@ -763,6 +768,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     targetId: "privacy",
     searchTerms: [msg("privacy telemetry relay traces connection diagnostics")],
+    relayTracingOnly: true,
   },
   {
     id: "in-app-notifications",
@@ -1701,6 +1707,9 @@ export function filterAvailableSettingsSearchItems(
       (!item.fastWorktreeCheckoutOnly ||
         availability.hasFastWorktreeCheckoutEnvironment === true) &&
       (!item.agentFeedbackOnly || availability.hasAgentFeedbackEnvironment === true) &&
+      (!item.productTelemetrySettingsOnly ||
+        availability.hasProductTelemetrySettingsEnvironment === true) &&
+      (!item.relayTracingOnly || availability.hasRelayTracingConfig === true) &&
       (!item.textGeneratorsOnly || availability.hasTextGeneratorsEnvironment === true) &&
       (!item.secretProvidersOnly || availability.hasSecretProvidersEnvironment === true),
   );

@@ -1,5 +1,5 @@
 /**
- * Translatable copies of the English labels in `@t3tools/contracts` helpers. Same ids, same
+ * Translatable copies of English labels in wire data and contract helpers. Same ids, same
  * English; apps call these instead of the contracts helpers so the text follows the UI language.
  */
 import {
@@ -15,8 +15,30 @@ import {
   worktreeSetupStageLabel as contractsWorktreeSetupStageLabel,
 } from "@t3tools/contracts";
 import type { IdleCompactionMode } from "@t3tools/contracts/settings";
-import { mFallback, msg } from "gt-i18n";
+import { decodeMsg, mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
+
+const THREAD_CONTEXT_REASON_MESSAGES = new Map(
+  [
+    msg("Blocked by organization policy."),
+    msg("Project stdio MCP server with secret placeholders requires owner trust confirmation."),
+    msg("Project MCP server with secret placeholders requires owner trust confirmation."),
+    msg("Project stdio MCP server requires owner trust confirmation."),
+    msg("Project MCP server in t3.json requires owner trust confirmation."),
+    msg("Overridden by project t3.json."),
+    msg("Disabled in Harness settings."),
+    msg("Tool filters require routing through T3 Gateway."),
+    msg("Provider does not support native passthrough for this transport; routed via T3 Gateway."),
+    msg(
+      "This provider does not enforce read-only mode natively; Plan mode is advisory for provider built-in tools (T3 Gateway MCP tools remain read-only gated).",
+    ),
+  ].map((message) => [decodeMsg(message), message]),
+);
+
+export function threadContextReasonLabel(reason: string, resolve: MFunctionType): string {
+  const message = THREAD_CONTEXT_REASON_MESSAGES.get(reason);
+  return message === undefined ? reason : resolve(message);
+}
 
 // Contracts decides each stage's English label; this table only makes that text translatable.
 const WORKTREE_SETUP_STAGE_LABELS: Readonly<Record<string, string>> = {

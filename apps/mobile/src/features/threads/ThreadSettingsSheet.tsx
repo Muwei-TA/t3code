@@ -1,3 +1,4 @@
+import { threadContextReasonLabel } from "@t3tools/client-runtime/contract-labels";
 import {
   getPromptControlledTraits,
   getTraitSelectChange,
@@ -1012,12 +1013,19 @@ function ThreadSettingsOptionsItem(props: {
         `${gt("Mode")}: ${manifest.interactionMode} (${manifest.planModeReadOnlyEnforcement})`,
         `${gt("Harness MCP")}: ${manifest.harnessGatewayActive ? gt("Active") : gt("Inactive")}`,
         `${gt("MCP servers")}: ${manifest.mcpServers.length} (${manifest.mcpServers.reduce((acc, s) => acc + s.toolCount, 0)} ${gt("tools")})`,
-        ...manifest.mcpServers.map(
-          (server) =>
-            `• ${server.id} (${server.scope}/${server.channel}): ${server.state}, ${server.toolCount} tools`,
-        ),
+        ...manifest.mcpServers.map((server) => {
+          const summary = `• ${server.id} (${server.scope}/${server.channel}): ${server.state}, ${server.toolCount} tools`;
+          return server.reason
+            ? `${summary}\n  ${threadContextReasonLabel(server.reason, m)}`
+            : summary;
+        }),
         ...(manifest.degradedItems.length > 0
-          ? ["", ...manifest.degradedItems.map((item) => `⚠ ${item.id}: ${item.reason}`)]
+          ? [
+              "",
+              ...manifest.degradedItems.map(
+                (item) => `⚠ ${item.id}: ${threadContextReasonLabel(item.reason, m)}`,
+              ),
+            ]
           : []),
       ];
       Dialog.alert(gt("Harness status"), lines.join("\n"));

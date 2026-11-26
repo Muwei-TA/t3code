@@ -1,7 +1,8 @@
+import { threadContextReasonLabel } from "@t3tools/client-runtime/contract-labels";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, ThreadContextManifest, ThreadId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { T, useGT, Var } from "gt-react";
+import { T, useGT, useMessages, Var } from "gt-react";
 import { LayersIcon, RefreshCwIcon, Settings2Icon } from "lucide-react";
 import { useState } from "react";
 
@@ -35,6 +36,7 @@ export function ThreadContextInspectorButton({
   readonly size?: "sm" | "xs";
 }) {
   const gt = useGT();
+  const m = useMessages();
   const navigate = useNavigate();
   const fetchManifest = useAtomCommand(harnessEnvironment.threadContextManifest, {
     reportFailure: false,
@@ -159,7 +161,13 @@ export function ThreadContextInspectorButton({
                               <span className="font-mono font-medium text-foreground">
                                 {item.id}
                               </span>
-                              <Badge variant="outline">{item.scope}</Badge>
+                              <Badge variant="outline">
+                                {item.scope === "project"
+                                  ? gt("Project")
+                                  : item.scope === "user"
+                                    ? gt("User")
+                                    : gt("Built-in")}
+                              </Badge>
                               <Badge variant="secondary">
                                 {item.channel === "gateway"
                                   ? gt("T3 Gateway")
@@ -181,7 +189,9 @@ export function ThreadContextInspectorButton({
                             </span>
                           </div>
                           {item.reason ? (
-                            <p className="mt-1 text-muted-foreground">{item.reason}</p>
+                            <p className="mt-1 text-muted-foreground">
+                              {threadContextReasonLabel(item.reason, m)}
+                            </p>
                           ) : null}
                         </div>
                       ))}
@@ -197,7 +207,8 @@ export function ThreadContextInspectorButton({
                     <ul className="list-disc space-y-1 ps-4 text-xs text-muted-foreground">
                       {manifest.degradedItems.map((item) => (
                         <li key={`${item.kind}:${item.id}:${item.reason}`}>
-                          <Var>{item.id}</Var>: <Var>{item.reason}</Var>
+                          <Var>{item.id}</Var>:{" "}
+                          <Var>{threadContextReasonLabel(item.reason, m)}</Var>
                         </li>
                       ))}
                     </ul>
