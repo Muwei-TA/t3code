@@ -907,6 +907,29 @@ describe("HarnessSyncService", () => {
         expect(blobCalls).toHaveLength(0);
         expect(oversized.skippedFiles).toContain("skills/bulk/b/overflow.md");
         expect(yield* fs.exists(path.join(localSkill, "b", "overflow.md"))).toBe(false);
+
+        // When upstream reverts overflow.md back to base while local keeps a 512-file set including overflow.md,
+        // adding another upstream file must still trip the 513-file preflight with zero blob reads.
+        yield* fs.rename(
+          path.join(localSkill, "b", "f-510.md"),
+          path.join(localSkill, "b", "overflow.md"),
+        );
+        yield* fs.remove(path.join(skillDir, "b", "overflow.md"));
+        yield* fs.writeFileString(path.join(skillDir, "b", "another.md"), "extra\n");
+        yield* push;
+        spawnSpy.mockClear();
+        execFileSpy.mockClear();
+        const revertedOverflow = yield* sync.pull();
+        const revertedBlobCalls = [...spawnSpy.mock.calls, ...execFileSpy.mock.calls].filter(
+          (call) => {
+            const args = Array.isArray(call[1]) ? call[1] : [];
+            return args.includes("cat-file") && args.includes("blob");
+          },
+        );
+        expect(revertedBlobCalls).toHaveLength(0);
+        expect(revertedOverflow.skippedFiles).toContain("skills/bulk/b/another.md");
+        expect(yield* fs.exists(path.join(localSkill, "b", "another.md"))).toBe(false);
+        expect(yield* fs.exists(path.join(localSkill, "b", "overflow.md"))).toBe(true);
       }).pipe(Effect.provide(makeTestLayer(root, paths)));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
