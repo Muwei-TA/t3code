@@ -654,50 +654,22 @@ describe("ssh tunnel scripts", () => {
     }).pipe(Effect.provide(layerProcess));
   });
 
-  it.live("retains bounded SSH diagnostics and reads the Lightning launch log", () =>
+  it.effect("retains a bounded diagnostic tail when the tunnel exits before readiness", () =>
     Effect.gen(function* () {
-      const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
-      const fs = yield* FileSystem.FileSystem;
-      const home = yield* fs.makeTempDirectoryScoped({ prefix: "lightning-ssh-log-" });
-      const stateKey = yield* remoteStateKey(target);
-      for (const [homeDir, diagnostic] of [
-        [".lightning-code", "Lightning launch failed"],
-        [".t3", "Upstream launch failed"],
-      ] as const) {
-        const stateDir = NodePath.join(home, homeDir, "ssh-launch", stateKey);
-        yield* fs.makeDirectory(stateDir, { recursive: true });
-        yield* fs.writeFileString(NodePath.join(stateDir, "server.log"), diagnostic);
-      }
-      const remoteLogTails: Array<unknown> = [];
-      const logger = Logger.make(({ message }) => {
-        if (!Array.isArray(message) || message[0] !== "ssh.tunnel.ready.failed") return;
-        const details: unknown = message[1];
-        if (details && typeof details === "object" && "remoteLogTail" in details) {
-          remoteLogTails.push(details.remoteLogTail);
-        }
-      });
       const diagnostic = "Connection refused: café";
       const output = new TextEncoder().encode(
         "old diagnostics\n" + "x".repeat(32_768) + "\n" + diagnostic,
       );
-      const shell = yield* ChildProcessSpawner.ChildProcessSpawner;
       const spawner = ChildProcessSpawner.make((command) =>
-        command._tag === "StandardCommand" && command.args.slice(-2).join(" ") === "sh -s"
-          ? shell.spawn(
-              ChildProcess.make("sh", ["-s"], {
-                ...command.options,
-                env: { ...command.options.env, HOME: home },
-              }),
-            )
-          : Effect.succeed(
-              commandArgs(command).includes("-N")
-                ? {
-                    ...makeSuccessfulProcess(""),
-                    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
-                    stderr: Stream.make(output.subarray(0, output.length - 1), output.subarray(-1)),
-                  }
-                : makeSuccessfulProcess('{"remotePort":3773}\n'),
-            ),
+        Effect.succeed(
+          commandArgs(command).includes("-N")
+            ? {
+                ...makeSuccessfulProcess(""),
+                exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+                stderr: Stream.make(output.subarray(0, output.length - 1), output.subarray(-1)),
+              }
+            : makeSuccessfulProcess('{"remotePort":3773}\n'),
+        ),
       );
       const layer = Layer.mergeAll(
         NodeServices.layer,
@@ -705,13 +677,19 @@ describe("ssh tunnel scripts", () => {
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Layer.succeed(HttpClient.HttpClient, hangingHttpClient),
         Layer.succeed(NetService.NetService, testNetService),
-        Logger.layer([logger]),
         SshAuth.SshPasswordPrompt.disabledLayer,
         SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
       );
       yield* Effect.gen(function* () {
         const manager = yield* SshTunnel.SshEnvironmentManager;
-        const result = yield* Effect.result(manager.ensureEnvironment(target));
+        const result = yield* Effect.result(
+          manager.ensureEnvironment({
+            alias: "devbox",
+            hostname: "devbox",
+            username: null,
+            port: null,
+          }),
+        );
         assert.isTrue(Result.isFailure(result));
         if (Result.isFailure(result)) {
           assert.instanceOf(result.failure, SshCommandError);
@@ -722,9 +700,71 @@ describe("ssh tunnel scripts", () => {
             assert.equal(result.failure.message, result.failure.stderr.trim());
           }
         }
-        assert.deepEqual(remoteLogTails, ["Lightning launch failed"]);
       }).pipe(Effect.provide(layer), Effect.scoped);
-    }).pipe(Effect.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer))),
+    }),
+  );
+
+  it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "logs the Lightning server output when SSH readiness fails",
+    () =>
+      Effect.gen(function* () {
+        const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "lightning-ssh-log-" });
+        const stateKey = yield* remoteStateKey(target);
+        for (const [homeDir, diagnostic] of [
+          [".lightning-code", "Lightning launch failed"],
+          [".t3", "Upstream launch failed"],
+        ] as const) {
+          const stateDir = NodePath.join(home, homeDir, "ssh-launch", stateKey);
+          yield* fs.makeDirectory(stateDir, { recursive: true });
+          yield* fs.writeFileString(NodePath.join(stateDir, "server.log"), diagnostic);
+        }
+        const remoteLogTails: Array<unknown> = [];
+        const logger = Logger.make(({ message }) => {
+          if (!Array.isArray(message) || message[0] !== "ssh.tunnel.ready.failed") return;
+          const details: unknown = message[1];
+          if (details && typeof details === "object" && "remoteLogTail" in details) {
+            remoteLogTails.push(details.remoteLogTail);
+          }
+        });
+        const shell = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const spawner = ChildProcessSpawner.make((command) => {
+          const args = commandArgs(command);
+          if (command._tag === "StandardCommand" && args.slice(-2).join(" ") === "sh -s") {
+            return shell.spawn(
+              ChildProcess.make("sh", ["-s"], {
+                ...command.options,
+                env: { ...command.options.env, HOME: home },
+              }),
+            );
+          }
+          return Effect.succeed(
+            args.includes("-N")
+              ? {
+                  ...makeSuccessfulProcess(""),
+                  exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+                }
+              : makeSuccessfulProcess('{"remotePort":3773}\n'),
+          );
+        });
+        const layer = Layer.mergeAll(
+          NodeServices.layer,
+          NodeCrypto.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Layer.succeed(HttpClient.HttpClient, hangingHttpClient),
+          Layer.succeed(NetService.NetService, testNetService),
+          Logger.layer([logger]),
+          SshAuth.SshPasswordPrompt.disabledLayer,
+          SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
+        );
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          const result = yield* Effect.result(manager.ensureEnvironment(target));
+          assert.isTrue(Result.isFailure(result));
+          assert.deepEqual(remoteLogTails, ["Lightning launch failed"]);
+        }).pipe(Effect.provide(layer), Effect.scoped);
+      }).pipe(Effect.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("reports the real exit when reading tunnel diagnostics fails", () =>
