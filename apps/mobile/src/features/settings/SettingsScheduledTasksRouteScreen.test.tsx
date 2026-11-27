@@ -1,6 +1,7 @@
 import { RegistryContext } from "@effect/atom-react";
 import {
   EnvironmentId,
+  HarnessModeId,
   ProjectId,
   ProviderInstanceId,
   ScheduledTaskId,
@@ -128,8 +129,19 @@ vi.mock("../../state/server", () => ({
     upsertScheduledTask: { permissionAtom: () => Atom.make(true) },
   },
 }));
+vi.mock("../../state/harness", () => ({ harnessEnvironment: { libraryQuery: () => "library" } }));
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: () => ({ data: { tasks: mocks.tasks, threads: [] } }),
+  useEnvironmentQuery: (query: unknown) => ({
+    data:
+      query === "library"
+        ? {
+            modes: [
+              { id: "triage", name: "Triage", effectiveEnabled: true },
+              { id: "retired", name: "Retired", effectiveEnabled: false },
+            ],
+          }
+        : { tasks: mocks.tasks, threads: [] },
+  }),
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => mocks.upsert }));
 vi.mock("../../state/queries", () => ({
@@ -167,7 +179,8 @@ beforeEach(() => {
       model: "model",
     },
     runtimeMode: "full-access",
-    interactionMode: "default",
+    interactionMode: "plan",
+    modeId: HarnessModeId.make("prior-mode"),
     createdBy: "user",
     creationSource: "mobile",
     createdAt: "2026-10-22T00:00:00.000Z",
@@ -205,6 +218,23 @@ function button(label: string) {
   return element;
 }
 describe("scheduled task batched edits", () => {
+  it("clears the previous mode and its plan interaction mode when Default is selected", async () => {
+    act(() => button("Select Default").click());
+    await act(async () => button("Save changes").click());
+    expect(mocks.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({ modeId: null, interactionMode: "default" }),
+      }),
+    );
+  });
+  it("saves a custom enabled Harness mode from the selected environment", async () => {
+    expect(container.textContent).not.toContain("Select Retired");
+    act(() => button("Select Triage").click());
+    await act(async () => button("Save changes").click());
+    expect(mocks.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ input: expect.objectContaining({ modeId: "triage" }) }),
+    );
+  });
   it("submits the selected interval when saved before React commits", async () => {
     await act(async () => {
       button("Interval").click();

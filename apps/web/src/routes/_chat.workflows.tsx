@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 import { readWorkflowPane } from "../components/workflows/workflowPane.logic";
 import { WorkflowsPage, type WorkflowsSearch } from "../components/workflows/WorkflowsPage";
@@ -11,5 +11,10 @@ export const Route = createFileRoute("/_chat/workflows")({
     ...(raw.definitions === true || raw.definitions === "true" ? { definitions: true } : {}),
     ...(typeof raw.file === "string" && raw.file ? { file: raw.file.slice(0, 200) } : {}),
   }),
+  beforeLoad: ({ search }) => {
+    if (!search.env && !search.run && !search.pane && !search.file && !search.definitions) {
+      throw redirect({ to: "/automations", search: { tab: "workflows" }, replace: true });
+    }
+  },
   component: WorkflowsPage,
 });

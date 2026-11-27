@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-
-import { HarnessSettingsPanel } from "../components/settings/HarnessSettings";
+import { redirectLegacyHarness } from "../components/harness/harnessNavigation";
 
 export const Route = createFileRoute("/_chat/settings/harness")({
-  component: HarnessSettingsPanel,
+  beforeLoad: ({ location }) => redirectLegacyHarness(location),
 });

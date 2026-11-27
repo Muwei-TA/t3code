@@ -369,7 +369,10 @@ export function ThreadContextInspectorButton({
               size="sm"
               onClick={() => {
                 setOpen(false);
-                void navigate({ to: "/settings/harness" });
+                void navigate({
+                  to: "/harness",
+                  search: { tab: "context", machine: environmentId },
+                });
               }}
             >
               <Settings2Icon className="size-3.5" aria-hidden />

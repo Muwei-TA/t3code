@@ -28,7 +28,9 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/providers"
-  | "/settings/harness"
+  | "/settings/sync"
+  | "/harness"
+  | "/automations"
   | "/settings/threads"
   | "/settings/browser"
   | "/settings/devices"
@@ -55,6 +57,7 @@ export interface SettingsSearchItem {
   readonly id: string;
   readonly title: string;
   readonly to: SettingsPath;
+  readonly tab?: "skills" | "tools" | "context" | "guardrails" | "workflows";
   readonly targetId?: string;
   readonly searchTerms?: ReadonlyArray<string>;
   readonly scope?: SettingsSearchScope;
@@ -111,7 +114,9 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": msg("Keybindings"),
   "/settings/snap-shot": msg("SnapShots"),
   "/settings/providers": msg("Providers"),
-  "/settings/harness": msg("Harness & MCP"),
+  "/harness": msg("Harness"),
+  "/automations": msg("Automations"),
+  "/settings/sync": msg("Sync & Migration"),
   "/settings/threads": msg("Threads"),
   "/settings/browser": msg("Browser"),
   "/settings/devices": msg("Devices"),
@@ -162,7 +167,7 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     heading: msg("Agents"),
     paths: [
       "/settings/providers",
-      "/settings/harness",
+      "/settings/sync",
       "/settings/threads",
       "/settings/browser",
       "/settings/devices",
@@ -1527,18 +1532,19 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("new 1password vault op cli account")],
     secretProvidersOnly: true,
   },
-  {
-    id: "harness-mcp",
-    title: msg(
-      "Portable MCP servers, modes, skills, rules, commands, plugins, hooks, memory & sync",
-    ),
-    to: "/settings/harness",
-    searchTerms: [
-      msg(
-        "harness mcp gateway stdio http sse modes build plan review creator plugins claude-plugin sdk hooks pretooluse posttooluse memory notes git sync push pull diff approvals allow always revoke skills rules agents.md commands slash import export codex claude cursor antigravity",
-      ),
-    ],
-  },
+  { id: "harness-skills", title: msg("Skills"), to: "/harness", tab: "skills" },
+  { id: "harness-plugins", title: msg("Plugins"), to: "/harness", tab: "skills" },
+  { id: "harness-mcp", title: msg("MCP servers"), to: "/harness", tab: "tools" },
+  { id: "harness-rules", title: msg("Rules & AGENTS.md"), to: "/harness", tab: "context" },
+  { id: "harness-modes", title: msg("Modes"), to: "/harness", tab: "context" },
+  { id: "harness-commands", title: msg("Commands"), to: "/harness", tab: "context" },
+  { id: "harness-memory", title: msg("Memory"), to: "/harness", tab: "context" },
+  { id: "harness-hooks", title: msg("Hooks"), to: "/harness", tab: "guardrails" },
+  { id: "harness-approvals", title: msg("Approvals"), to: "/harness", tab: "guardrails" },
+  { id: "harness-sync", title: msg("Sync & Migration"), to: "/settings/sync" },
+  { id: "harness-transfer", title: msg("CLI Import / Export"), to: "/settings/sync" },
+  { id: "harness-automations", title: msg("Automations"), to: "/automations" },
+  { id: "harness-workflows", title: msg("Workflows"), to: "/automations", tab: "workflows" },
   {
     id: "archive",
     title: msg("Archived threads"),
@@ -1562,7 +1568,9 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/snap-shot": null,
   "/settings/keybindings": null,
   "/settings/providers": null,
-  "/settings/harness": null,
+  "/harness": null,
+  "/automations": null,
+  "/settings/sync": null,
   "/settings/threads": null,
   "/settings/browser": null,
   "/settings/devices": null,

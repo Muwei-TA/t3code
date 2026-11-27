@@ -17,6 +17,9 @@ import {
   type HarnessRuleEntry,
   HarnessRuleId,
   type HarnessRuleUpsertInput,
+  type HarnessInstallSkillPackageInput,
+  type HarnessReadSkillFileInput,
+  type HarnessReadSkillFileResult,
   type HarnessSkillEntry,
   HarnessSkillId,
   type HarnessSkillUpsertInput,
@@ -38,13 +41,31 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import * as ServerConfig from "../config.ts";
 import * as HarnessStore from "./HarnessStore.ts";
-import { assertContainedNoSymlinks, safeWriteFileAtomic } from "./safeFileOps.ts";
+import {
+  assertContainedNoSymlinks,
+  readContainedFile,
+  recoverOrphanedReplace,
+  safeWriteFileAtomic,
+} from "./safeFileOps.ts";
 import * as PluginHost from "./PluginHost.ts";
+
+import {
+  MAX_PACKAGE_BYTES,
+  acquireSkillsDirRead,
+  listPackageFiles,
+  loadPackage,
+  readPackageFile,
+  packageDigest,
+  replacePackage,
+  withSkillsDirRead,
+  withSkillWrites,
+} from "./skillPackage.ts";
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 const MAX_READ_BYTES = 262_144;
-const MAX_COMPANION_FILES = 32;
+const MAX_COMPANION_FILES = 64;
 
+const isHarnessError = Schema.is(HarnessError);
 const decodeSkillId = Schema.decodeUnknownOption(HarnessSkillId);
 const decodeRuleId = Schema.decodeUnknownOption(HarnessRuleId);
 const decodeCommandId = Schema.decodeUnknownOption(HarnessCommandId);
@@ -102,7 +123,7 @@ const BUILTIN_MODES: ReadonlyArray<BuiltinModeSpec> = [
     baseInteractionMode: "default",
     readonly: false,
     proposePlan: false,
-    body: "You are in Creator mode. Help the user author concise, portable T3 Harness extensions under ~/.t3/harness/ (SKILL.md skills, always/glob/manual rules, slash commands, declarative modes, and workflows). Prefer minimal, deterministic instructions, validate identifiers and YAML frontmatter, and avoid leaking secrets.",
+    body: "You are in Creator mode. Help the user author concise, portable T3 Harness extensions in the T3 library reported by harness_inspect (SKILL.md skills, always/glob/manual rules, slash commands, declarative modes, and workflows). Prefer minimal, deterministic instructions, validate identifiers and YAML frontmatter, and avoid leaking secrets.",
   },
 ];
 
@@ -239,7 +260,7 @@ export function formatMarkdownWithFrontmatter(
   return content.endsWith("\n") ? content : `${content}\n`;
 }
 
-export function formatSkillMarkdown(input: {
+function formatSkillMarkdown(input: {
   readonly name: string;
   readonly description?: string | undefined;
   readonly shortDescription?: string | undefined;
@@ -335,6 +356,16 @@ export class HarnessLibraryStore extends Context.Service<
       readonly body: string;
       readonly workspaceRoot?: string | undefined;
     }) => Effect.Effect<HarnessLibrarySnapshot, HarnessError>;
+    readonly readSkillFile: (
+      input: HarnessReadSkillFileInput,
+    ) => Effect.Effect<HarnessReadSkillFileResult, HarnessError>;
+    readonly installSkillPackage: (
+      input: HarnessInstallSkillPackageInput,
+    ) => Effect.Effect<HarnessLibrarySnapshot, HarnessError>;
+    readonly importSkillPackage: (
+      input: HarnessInstallSkillPackageInput,
+      review: (existingDigest: string | null) => boolean | HarnessError,
+    ) => Effect.Effect<boolean, HarnessError>;
     readonly upsertUserSkill: (
       input: HarnessSkillUpsertInput,
     ) => Effect.Effect<HarnessLibrarySnapshot, HarnessError>;
@@ -457,30 +488,59 @@ const make = Effect.gen(function* () {
     return `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;
   };
 
-  const directoryFingerprint = async (directory: string, skills = false) => {
-    const entries = await NodeFSP.readdir(directory).catch(() => []);
-    return [
-      await fileFingerprint(directory),
-      ...(await Promise.all(
-        entries.toSorted().map(async (name) => {
-          const item = path.join(directory, name);
-          if (skills) {
-            return [
-              name,
-              await fileFingerprint(item),
-              await fileFingerprint(path.join(item, "SKILL.md")),
-            ];
-          }
-          return name.endsWith(".md") ? [name, await fileFingerprint(item)] : [name];
-        }),
-      )),
-    ];
+  const directoryFingerprint = async (directory: string, containmentRoot?: string) => {
+    const release = containmentRoot ? await acquireSkillsDirRead(containmentRoot, directory) : null;
+    try {
+      if (containmentRoot) {
+        if (
+          !(await assertContainedNoSymlinks(containmentRoot, directory).then(
+            () => true,
+            () => false,
+          ))
+        )
+          return [];
+        await recoverOrphanedReplace(containmentRoot, directory).catch(() => {});
+      }
+      const entries = await NodeFSP.readdir(directory).catch(() => []);
+      return [
+        await fileFingerprint(directory),
+        ...(await Promise.all(
+          entries.toSorted().map(async (name) => {
+            const item = path.join(directory, name);
+            if (containmentRoot) {
+              if (
+                name.startsWith(".") ||
+                !(await assertContainedNoSymlinks(
+                  containmentRoot,
+                  path.join(item, "SKILL.md"),
+                ).then(
+                  () => true,
+                  () => false,
+                ))
+              )
+                return [name];
+              return [
+                name,
+                await fileFingerprint(item),
+                await fileFingerprint(path.join(item, "SKILL.md")),
+                await listPackageFiles(item, MAX_COMPANION_FILES + 1, containmentRoot).catch(
+                  () => null,
+                ),
+              ];
+            }
+            return name.endsWith(".md") ? [name, await fileFingerprint(item)] : [name];
+          }),
+        )),
+      ];
+    } finally {
+      release?.();
+    }
   };
 
   const libraryFingerprint = async (workspaceRoot: string | null) => {
     const files = [
       fileFingerprint(path.join(harnessDir, "AGENTS.md")),
-      directoryFingerprint(path.join(harnessDir, "skills"), true),
+      directoryFingerprint(path.join(harnessDir, "skills"), harnessDir),
       ...["rules", "commands", "modes"].map((dir) =>
         directoryFingerprint(path.join(harnessDir, dir)),
       ),
@@ -488,44 +548,21 @@ const make = Effect.gen(function* () {
     if (workspaceRoot !== null) {
       files.push(
         fileFingerprint(path.join(workspaceRoot, "AGENTS.md")),
-        directoryFingerprint(path.join(workspaceRoot, ".agents", "skills"), true),
+        directoryFingerprint(path.join(workspaceRoot, ".agents", "skills"), workspaceRoot),
       );
     }
     return await Promise.all(files);
   };
 
-  const isWithinRoot = (rootRealPath: string, candidateRealPath: string): boolean => {
-    const rel = path.relative(rootRealPath, candidateRealPath);
-    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-  };
-
-  const resolveContainedPath = Effect.fn("HarnessLibraryStore.resolveContainedPath")(function* (
-    rootDir: string,
-    targetPath: string,
-  ) {
-    const rootReal = yield* fs
-      .realPath(rootDir)
-      .pipe(Effect.orElseSucceed(() => path.resolve(rootDir)));
-    const targetReal = yield* fs
-      .realPath(targetPath)
-      .pipe(Effect.orElseSucceed(() => path.resolve(targetPath)));
-    return isWithinRoot(rootReal, targetReal) ? targetReal : null;
-  });
-
   const readBoundedContainedFile = Effect.fn("HarnessLibraryStore.readBoundedContainedFile")(
     function* (rootDir: string, filePath: string) {
-      const contained = yield* resolveContainedPath(rootDir, filePath);
-      if (contained === null)
-        return Option.none<{ readonly text: string; readonly realPath: string }>();
-      const info = yield* fs.stat(contained).pipe(Effect.option);
-      if (Option.isNone(info) || info.value.type !== "File") {
-        return Option.none<{ readonly text: string; readonly realPath: string }>();
-      }
-      if (Number(info.value.size) > MAX_READ_BYTES) {
-        return Option.none<{ readonly text: string; readonly realPath: string }>();
-      }
-      const text = yield* fs.readFileString(contained).pipe(Effect.option);
-      return Option.map(text, (content) => ({ text: content, realPath: contained }));
+      return yield* Effect.tryPromise({
+        try: () => readContainedFile(rootDir, filePath, MAX_READ_BYTES),
+        catch: packageError,
+      }).pipe(
+        Effect.map((file) => ({ text: file.bytes.toString("utf8"), realPath: file.path })),
+        Effect.option,
+      );
     },
   );
 
@@ -616,73 +653,113 @@ const make = Effect.gen(function* () {
     readonly skillsDir: string;
     readonly invalidEntries: Array<HarnessInvalidEntry>;
   }) {
-    const entries = yield* fs.readDirectory(input.skillsDir).pipe(Effect.orElseSucceed(() => []));
-    const out: Array<
-      Omit<HarnessSkillEntry, "effectiveEnabled" | "overriddenByProject"> & {
-        readonly frontmatterEnabled: boolean;
-      }
-    > = [];
-    for (const rawDirName of entries) {
-      const skillDir = path.join(input.skillsDir, rawDirName);
-      const stat = yield* fs.stat(skillDir).pipe(Effect.option);
-      if (Option.isNone(stat) || stat.value.type !== "Directory") continue;
-      const decodedId = decodeSkillId(rawDirName);
-      if (Option.isNone(decodedId)) {
-        input.invalidEntries.push({
-          source: skillDir,
-          id: rawDirName,
-          message: `Skill directory "${rawDirName}" is not a valid skill identifier and was skipped.`,
-        });
-        continue;
-      }
-      const skillFilePath = path.join(skillDir, "SKILL.md");
-      const loaded = yield* readBoundedContainedFile(input.containmentRoot, skillFilePath);
-      if (Option.isNone(loaded)) continue;
-      const parsed = parseMarkdownFrontmatter(loaded.value.text);
-      if (parsed.malformed) {
-        input.invalidEntries.push({
-          source: loaded.value.realPath,
-          id: decodedId.value,
-          message: `Skill "${decodedId.value}" has malformed YAML frontmatter and was skipped.`,
-        });
-        continue;
-      }
-      const fm = parsed.frontmatter ?? {};
-      const rawName = typeof fm.name === "string" ? fm.name.trim() : "";
-      const name = TrimmedNonEmptyString.make(rawName.length > 0 ? rawName : decodedId.value);
-      const description =
-        typeof fm.description === "string" && fm.description.trim().length > 0
-          ? fm.description.trim()
-          : undefined;
-      const shortDescription =
-        typeof fm["short-description"] === "string" && fm["short-description"].trim().length > 0
-          ? fm["short-description"].trim()
-          : undefined;
-      const userInvocable = parseBool(fm["user-invocable"]) ?? true;
-      const userInvocationOnly = parseBool(fm["disable-model-invocation"]) ?? false;
-      const frontmatterEnabled = parseBool(fm.enabled) ?? true;
-      out.push({
-        id: decodedId.value,
-        name,
-        scope: input.scope,
-        ...(description !== undefined ? { description } : {}),
-        ...(shortDescription !== undefined ? { shortDescription } : {}),
-        userInvocable,
-        userInvocationOnly,
-        enabled: frontmatterEnabled,
-        frontmatterEnabled,
-        sourcePath: loaded.value.realPath,
-        contentDigest: sha256Hex(loaded.value.text),
-        bytes: utf8Bytes(loaded.value.text),
-        body: parsed.body,
-        origin: {
-          kind: input.scope,
-          source: input.scope === "project" ? ".agents/skills" : "harness",
-          sourcePath: loaded.value.realPath,
-        },
-      });
-    }
-    return out;
+    return yield* withSkillsDirRead(
+      input.containmentRoot,
+      input.skillsDir,
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          recoverOrphanedReplace(input.containmentRoot, input.skillsDir).catch(() => {}),
+        );
+        const entries = yield* fs
+          .readDirectory(input.skillsDir)
+          .pipe(Effect.orElseSucceed(() => []));
+        const out: Array<
+          Omit<HarnessSkillEntry, "effectiveEnabled" | "overriddenByProject"> & {
+            readonly frontmatterEnabled: boolean;
+          }
+        > = [];
+        for (const rawDirName of entries) {
+          if (rawDirName.startsWith(".")) continue;
+          const skillDir = path.join(input.skillsDir, rawDirName);
+          const stat = yield* fs.stat(skillDir).pipe(Effect.option);
+          if (Option.isNone(stat) || stat.value.type !== "Directory") continue;
+          const decodedId = decodeSkillId(rawDirName);
+          if (Option.isNone(decodedId)) {
+            input.invalidEntries.push({
+              source: skillDir,
+              id: rawDirName,
+              message: `Skill directory "${rawDirName}" is not a valid skill identifier and was skipped.`,
+            });
+            continue;
+          }
+          const skillFilePath = path.join(skillDir, "SKILL.md");
+          const safe = yield* Effect.promise(() =>
+            assertContainedNoSymlinks(input.containmentRoot, skillFilePath).then(
+              () => true,
+              () => false,
+            ),
+          );
+          if (!safe) {
+            input.invalidEntries.push({
+              source: skillFilePath,
+              id: decodedId.value,
+              message: "Unsafe skill manifest path.",
+            });
+            continue;
+          }
+          const loaded = yield* readBoundedContainedFile(input.containmentRoot, skillFilePath);
+          if (Option.isNone(loaded)) continue;
+          const parsed = parseMarkdownFrontmatter(loaded.value.text);
+          if (parsed.malformed) {
+            input.invalidEntries.push({
+              source: loaded.value.realPath,
+              id: decodedId.value,
+              message: `Skill "${decodedId.value}" has malformed YAML frontmatter and was skipped.`,
+            });
+            continue;
+          }
+          const fm = parsed.frontmatter ?? {};
+          const rawName = typeof fm.name === "string" ? fm.name.trim() : "";
+          const name = TrimmedNonEmptyString.make(rawName.length > 0 ? rawName : decodedId.value);
+          const description =
+            typeof fm.description === "string" && fm.description.trim().length > 0
+              ? fm.description.trim()
+              : undefined;
+          const shortDescription =
+            typeof fm["short-description"] === "string" && fm["short-description"].trim().length > 0
+              ? fm["short-description"].trim()
+              : undefined;
+          const userInvocable = parseBool(fm["user-invocable"]) ?? true;
+          const userInvocationOnly = parseBool(fm["disable-model-invocation"]) ?? false;
+          const frontmatterEnabled = parseBool(fm.enabled) ?? true;
+          const listing = yield* Effect.promise(async () => {
+            try {
+              await assertContainedNoSymlinks(input.containmentRoot, skillDir);
+              return await listPackageFiles(
+                skillDir,
+                MAX_COMPANION_FILES + 1,
+                input.containmentRoot,
+              );
+            } catch {
+              return { files: [], truncated: true };
+            }
+          });
+          out.push({
+            files: listing.files,
+            companionTruncated: listing.truncated,
+            id: decodedId.value,
+            name,
+            scope: input.scope,
+            ...(description !== undefined ? { description } : {}),
+            ...(shortDescription !== undefined ? { shortDescription } : {}),
+            userInvocable,
+            userInvocationOnly,
+            enabled: frontmatterEnabled,
+            frontmatterEnabled,
+            sourcePath: loaded.value.realPath,
+            contentDigest: sha256Hex(loaded.value.text),
+            bytes: utf8Bytes(loaded.value.text),
+            body: parsed.body,
+            origin: {
+              kind: input.scope,
+              source: input.scope === "project" ? ".agents/skills" : "harness",
+              sourcePath: loaded.value.realPath,
+            },
+          });
+        }
+        return out;
+      }),
+    );
   });
 
   const loadRulesFromDir = Effect.fn("HarnessLibraryStore.loadRulesFromDir")(function* (input: {
@@ -1086,6 +1163,118 @@ const make = Effect.gen(function* () {
     return yield* getSnapshot(workspaceRoot);
   });
 
+  const packageLocation = Effect.fn("HarnessLibraryStore.packageLocation")(function* (
+    input: HarnessReadSkillFileInput | HarnessInstallSkillPackageInput,
+  ) {
+    yield* assertPolicyAllows();
+    if (Option.isNone(decodeSkillId(input.id)))
+      return yield* new HarnessError({ code: "invalid_config", detail: "Invalid skill id." });
+    if (input.scope === "user")
+      return { root: harnessDir, dir: path.join(harnessDir, "skills", input.id) };
+    if (!input.workspaceRoot || !path.isAbsolute(input.workspaceRoot))
+      return yield* new HarnessError({
+        code: "invalid_config",
+        detail: "Project scope requires an absolute workspace root.",
+      });
+    return {
+      root: input.workspaceRoot,
+      dir: path.join(input.workspaceRoot, ".agents", "skills", input.id),
+    };
+  });
+
+  const packageError = (error: unknown) =>
+    new HarnessError({
+      code: "invalid_config",
+      detail: error instanceof Error ? error.message : "Invalid skill package.",
+    });
+  const readSkillFile: HarnessLibraryStore["Service"]["readSkillFile"] = Effect.fn(
+    "HarnessLibraryStore.readSkillFile",
+  )(function* (input) {
+    const location = yield* packageLocation(input);
+    const snapshot = yield* getSnapshot(input.workspaceRoot);
+    const skill = snapshot.skills.find(
+      (entry) => entry.id === input.id && entry.scope === input.scope,
+    );
+    if (!skill)
+      return yield* new HarnessError({ code: "not_found", detail: "Skill was not found." });
+    const dir = path.dirname(skill.sourcePath);
+    const root = location.root;
+    return yield* Effect.tryPromise({
+      try: async () => {
+        const file = await readPackageFile(dir, input.relativePath, root);
+        const meta = {
+          path: file.path,
+          sizeBytes: NonNegativeInt.make(file.bytes.length),
+          executable: file.executable,
+        };
+        if (!file.bytes.includes(0)) {
+          try {
+            return {
+              ...meta,
+              binary: false,
+              content: new TextDecoder("utf8", { fatal: true }).decode(file.bytes),
+            };
+          } catch {}
+        }
+        return { ...meta, binary: true };
+      },
+      catch: packageError,
+    });
+  });
+
+  const writeSkillPackage = Effect.fn("HarnessLibraryStore.writeSkillPackage")(function* (
+    input: HarnessInstallSkillPackageInput,
+    review?: (existingDigest: string | null) => boolean | HarnessError,
+  ) {
+    const { root, dir } = yield* packageLocation(input);
+    return yield* withLibraryWrite(
+      withSkillWrites(
+        root,
+        [dir],
+        Effect.tryPromise({
+          try: async () => {
+            if ((input.sourceDir !== undefined) === (input.files !== undefined))
+              throw new Error("Specify exactly one of sourceDir and files.");
+            if (input.sourceDir && !path.isAbsolute(input.sourceDir))
+              throw new Error("sourceDir must be absolute.");
+            const files = input.files ?? (await loadPackage(input.sourceDir!));
+            let expected = input.expectedTargetDigest;
+            if (review) {
+              const exists = await NodeFSP.lstat(dir).catch((error) => {
+                if (error instanceof Error && "code" in error && error.code === "ENOENT")
+                  return null;
+                throw error;
+              });
+              expected = exists ? packageDigest(await loadPackage(dir, root)) : undefined;
+              const decision = review(expected ?? null);
+              if (typeof decision !== "boolean") throw decision;
+              if (!decision) return false;
+            }
+            await replacePackage(root, dir, files, expected, (raw) => {
+              const parsed = parseMarkdownFrontmatter(raw);
+              if (
+                parsed.malformed ||
+                !parsed.frontmatter ||
+                typeof parsed.frontmatter.name !== "string" ||
+                !parsed.frontmatter.name.trim()
+              )
+                throw new Error("SKILL.md requires valid YAML frontmatter and a non-empty name.");
+            });
+            return true;
+          },
+          catch: (error) => (isHarnessError(error) ? error : packageError(error)),
+        }),
+      ),
+    );
+  });
+
+  const installSkillPackage: HarnessLibraryStore["Service"]["installSkillPackage"] = Effect.fn(
+    "HarnessLibraryStore.installSkillPackage",
+  )(function* (input) {
+    yield* writeSkillPackage(input);
+    return yield* getSnapshot(input.workspaceRoot);
+  });
+
   const upsertUserSkill: HarnessLibraryStore["Service"]["upsertUserSkill"] = Effect.fn(
     "HarnessLibraryStore.upsertUserSkill",
   )(function* (input) {
@@ -1100,14 +1289,21 @@ const make = Effect.gen(function* () {
       enabled: input.enabled,
       body: input.body,
     });
-    yield* withLibraryWrite(writeFileAtomic(skillPath, content));
-    if (input.enabled !== undefined) {
-      yield* store.setLibraryItemDisabled({
-        kind: "skill",
-        id: input.id,
-        disabled: !input.enabled,
-      });
-    }
+    yield* withLibraryWrite(
+      withSkillWrites(
+        harnessDir,
+        [path.dirname(skillPath)],
+        Effect.gen(function* () {
+          yield* writeFileAtomic(skillPath, content);
+          if (input.enabled !== undefined)
+            yield* store.setLibraryItemDisabled({
+              kind: "skill",
+              id: input.id,
+              disabled: !input.enabled,
+            });
+        }),
+      ),
+    );
     return yield* getSnapshot(input.workspaceRoot);
   });
 
@@ -1117,9 +1313,18 @@ const make = Effect.gen(function* () {
     yield* assertPolicyAllows();
     const skillDir = path.join(harnessDir, "skills", id);
     yield* withLibraryWrite(
-      removeLibraryEntry(skillDir, `Portable skill "${id}"`, { recursive: true }),
+      withSkillWrites(
+        harnessDir,
+        [skillDir],
+        removeLibraryEntry(skillDir, `Portable skill "${id}"`, { recursive: true }).pipe(
+          Effect.andThen(
+            store
+              .setLibraryItemDisabled({ kind: "skill", id, disabled: false })
+              .pipe(Effect.ignore),
+          ),
+        ),
+      ),
     );
-    yield* store.setLibraryItemDisabled({ kind: "skill", id, disabled: false }).pipe(Effect.ignore);
     return yield* getSnapshot(workspaceRoot);
   });
 
@@ -1230,34 +1435,6 @@ const make = Effect.gen(function* () {
     return yield* getSnapshot(workspaceRoot);
   });
 
-  const listCompanionFiles = Effect.fn("HarnessLibraryStore.listCompanionFiles")(function* (
-    skillDir: string,
-  ) {
-    const out: Array<string> = [];
-    const queue: Array<string> = [skillDir];
-    let visitedDirectories = 0;
-    while (queue.length > 0 && out.length < MAX_COMPANION_FILES && visitedDirectories < 256) {
-      visitedDirectories += 1;
-      const current = queue.shift()!;
-      const entries = yield* fs.readDirectory(current).pipe(Effect.orElseSucceed(() => []));
-      for (const name of entries) {
-        if (name.startsWith(".")) continue;
-        const full = path.join(current, name);
-        const rel = path.relative(skillDir, full).replaceAll("\\", "/");
-        if (rel === "SKILL.md") continue;
-        const info = yield* Effect.promise(() => NodeFSP.lstat(full).catch(() => null));
-        if (info === null) continue;
-        if (info.isDirectory() && visitedDirectories + queue.length < 256) {
-          queue.push(full);
-        } else if (info.isFile()) {
-          out.push(rel);
-          if (out.length >= MAX_COMPANION_FILES) break;
-        }
-      }
-    }
-    return out.sort((a, b) => a.localeCompare(b));
-  });
-
   const getSkillDetail: HarnessLibraryStore["Service"]["getSkillDetail"] = Effect.fn(
     "HarnessLibraryStore.getSkillDetail",
   )(function* ({ nameOrId, workspaceRoot }) {
@@ -1272,7 +1449,8 @@ const make = Effect.gen(function* () {
     );
     const chosen = candidates.find((skill) => skill.scope === "project") ?? candidates[0];
     if (!chosen) return Option.none();
-    const companionFiles = yield* listCompanionFiles(path.dirname(chosen.sourcePath));
+    const companionFiles =
+      chosen.files?.map((file) => file.relativePath).filter((rel) => rel !== "SKILL.md") ?? [];
     return Option.some({ skill: chosen, companionFiles });
   });
 
@@ -1350,23 +1528,16 @@ const make = Effect.gen(function* () {
     skillDir: string,
     relPath: string,
   ) {
-    const contained = yield* resolveContainedPath(skillDir, path.join(skillDir, relPath));
-    if (contained === null) return undefined;
-    const info = yield* fs.stat(contained).pipe(Effect.option);
-    if (
-      Option.isNone(info) ||
-      info.value.type !== "File" ||
-      Number(info.value.size) > MAX_READ_BYTES
-    ) {
-      return undefined;
-    }
-    const bytes = yield* fs.readFile(contained).pipe(Effect.option);
-    if (Option.isNone(bytes) || bytes.value.byteLength > MAX_READ_BYTES) return undefined;
-    return {
-      bytes: bytes.value,
-      digest: NodeCrypto.createHash("sha256").update(bytes.value).digest("hex"),
-      executable: info.value.mode & 0o111,
-    };
+    return yield* Effect.promise(async () => {
+      const file = await readPackageFile(skillDir, relPath).catch(() => null);
+      return file
+        ? {
+            bytes: file.bytes,
+            digest: NodeCrypto.createHash("sha256").update(file.bytes).digest("hex"),
+            executable: file.executeBits,
+          }
+        : undefined;
+    });
   });
 
   const materializeSkillMount = Effect.fn("HarnessLibraryStore.materializeSkillMount")(function* (
@@ -1375,17 +1546,28 @@ const make = Effect.gen(function* () {
   ) {
     if (skills.length === 0) return undefined;
     const sorted = [...skills].sort((a, b) => a.id.localeCompare(b.id));
-    const planned = yield* Effect.forEach(sorted, (skill) =>
+    const plan = yield* Effect.forEach(sorted, (skill) =>
       Effect.gen(function* () {
         const sourceDir = path.dirname(skill.sourcePath);
         const companions: Array<{ relPath: string; digest: string; executable: number }> = [];
-        for (const relPath of yield* listCompanionFiles(sourceDir)) {
+        const listing = yield* Effect.promise(() => listPackageFiles(sourceDir).catch(() => null));
+        if (
+          !listing ||
+          listing.truncated ||
+          listing.files.reduce((n, f) => n + f.sizeBytes, 0) > MAX_PACKAGE_BYTES
+        )
+          return null;
+        for (const { relativePath: relPath } of listing.files) {
+          if (relPath === "SKILL.md") continue;
           const file = yield* readMountCompanion(sourceDir, relPath);
-          if (file) companions.push({ relPath, digest: file.digest, executable: file.executable });
+          if (!file) return null;
+          companions.push({ relPath, digest: file.digest, executable: file.executable });
         }
         return { skill, sourceDir, companions };
       }),
     );
+    const planned = plan.filter((item) => item !== null);
+    if (plan.length !== planned.length) return undefined;
     const fingerprint = yield* encodeSnapshotFingerprint(
       planned.map(({ skill, companions }) => [
         skill.id,
@@ -1696,6 +1878,9 @@ const make = Effect.gen(function* () {
   return HarnessLibraryStore.of({
     getSnapshot,
     saveUserAgentsMd,
+    readSkillFile,
+    installSkillPackage,
+    importSkillPackage: writeSkillPackage,
     upsertUserSkill,
     removeUserSkill,
     setSkillEnabled,

@@ -134,6 +134,7 @@ import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as McpSignIn from "./mcpApps/McpSignIn.ts";
 import * as HarnessStore from "./harness/HarnessStore.ts";
+import { getDeliveryMatrix } from "./harness/deliveryMatrix.ts";
 import * as HarnessLibraryStore from "./harness/HarnessLibraryStore.ts";
 import * as HarnessImporter from "./harness/HarnessImporter.ts";
 import * as HarnessLibraryImporter from "./harness/HarnessLibraryImporter.ts";
@@ -1736,6 +1737,7 @@ export const layerWsRpc = (
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+      const knownWorkspaces = yield* Effect.serviceOption(KnownWorkspaces.KnownWorkspaces);
       const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
       const acpRegistryCatalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
       const acpRegistryRuntimeCoordinator =
@@ -4056,6 +4058,35 @@ export const layerWsRpc = (
             onNone: () => harnessUnavailable("HarnessLibraryStore"),
             onSome: (lib) => lib.saveUserAgentsMd(input),
           }),
+        [WS_METHODS.harnessGetDeliveryMatrix]: () => getDeliveryMatrix(providerInstances),
+        [WS_METHODS.harnessReadSkillFile]: (input) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryStore"),
+            onSome: (lib) => lib.readSkillFile(input),
+          }),
+        [WS_METHODS.harnessInstallSkillPackage]: (input) =>
+          Option.match(harnessLibraryStoreOption, {
+            onNone: () => harnessUnavailable("HarnessLibraryStore"),
+            onSome: Effect.fn("Harness.installSkillPackage")(function* (lib) {
+              if (input.scope === "project") {
+                if (!input.workspaceRoot || Option.isNone(knownWorkspaces))
+                  return yield* new HarnessError({
+                    code: "invalid_config",
+                    detail: "Project workspace is required.",
+                  });
+                yield* knownWorkspaces.value.assertContains(input.workspaceRoot).pipe(
+                  Effect.mapError(
+                    () =>
+                      new HarnessError({
+                        code: "policy_denied",
+                        detail: "Unknown project workspace.",
+                      }),
+                  ),
+                );
+              }
+              return yield* lib.installSkillPackage(input);
+            }),
+          }),
         [WS_METHODS.harnessSkillUpsert]: (input) =>
           Option.match(harnessLibraryStoreOption, {
             onNone: () => harnessUnavailable("HarnessLibraryStore"),
@@ -4218,6 +4249,8 @@ export const layerWsRpc = (
                       sourcePath: input.sourcePath,
                       id: input.id,
                     });
+                    if (risk.requiresSecretAccess)
+                      yield* authorizeEffect(AuthProvidersManageScope, Effect.void);
                     const install = host.install({
                       ...input,
                       expectedManifestDigest: risk.manifestDigest,
@@ -4242,6 +4275,8 @@ export const layerWsRpc = (
                     kind: "installedId",
                     id: input.id,
                   });
+                  if (risk.requiresSecretAccess)
+                    yield* authorizeEffect(AuthProvidersManageScope, Effect.void);
                   if (risk.requiresTerminalOperate) {
                     return yield* authorizeEffect(AuthTerminalOperateScope, host.trust(input));
                   }
@@ -4261,6 +4296,8 @@ export const layerWsRpc = (
                       kind: "installedId",
                       id: input.id,
                     });
+                    if (risk.requiresSecretAccess)
+                      yield* authorizeEffect(AuthProvidersManageScope, Effect.void);
                     if (risk.requiresTerminalOperate) {
                       return yield* authorizeEffect(
                         AuthTerminalOperateScope,
@@ -4287,6 +4324,8 @@ export const layerWsRpc = (
                   const risk = yield* host.inspectExecutableRisk(
                     input?.id ? { kind: "installedId", id: input.id } : { kind: "allInstalled" },
                   );
+                  if (risk.requiresSecretAccess)
+                    yield* authorizeEffect(AuthProvidersManageScope, Effect.void);
                   if (risk.requiresTerminalOperate) {
                     return yield* authorizeEffect(AuthTerminalOperateScope, host.reload(input));
                   }

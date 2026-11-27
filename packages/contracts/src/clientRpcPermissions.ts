@@ -3,6 +3,8 @@ import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./gi
 import { HarnessHookUpsertInput, HarnessMcpUpsertInput } from "./harness.ts";
 import {
   AuthAccessWriteScope,
+  AuthFilesystemReadScope,
+  AuthFilesystemWriteScope,
   AuthDiagnosticsReadScope,
   AuthEnvironmentMaintainScope,
   AuthOrchestrationOperateScope,
@@ -119,6 +121,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.harnessMcpOAuthDisconnect]: AuthProvidersManageScope,
   [WS_METHODS.harnessMcpApplyImports]: AuthSettingsWriteScope,
   [WS_METHODS.harnessAgentsMdSave]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessReadSkillFile]: AuthFilesystemReadScope,
+  [WS_METHODS.harnessInstallSkillPackage]: AuthSettingsWriteScope,
+  [WS_METHODS.harnessGetDeliveryMatrix]: AuthOrchestrationReadScope,
   [WS_METHODS.harnessSkillUpsert]: AuthSettingsWriteScope,
   [WS_METHODS.harnessSkillRemove]: AuthSettingsWriteScope,
   [WS_METHODS.harnessSkillSetEnabled]: AuthSettingsWriteScope,
@@ -179,6 +184,16 @@ export function clientRpcRequiredScopes(
   method: string,
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
+  if (
+    method === WS_METHODS.harnessInstallSkillPackage &&
+    typeof input === "object" &&
+    input !== null
+  ) {
+    const scopes: AuthEnvironmentScope[] = [AuthSettingsWriteScope];
+    if ("sourceDir" in input) scopes.push(AuthFilesystemReadScope);
+    if ("scope" in input && input.scope === "project") scopes.push(AuthFilesystemWriteScope);
+    return scopes;
+  }
   if (method === WS_METHODS.gitPreparePullRequestThread && input !== undefined) {
     const payload = decodePrepareThread(input);
     if (payload.mode === "worktree" && payload.threadId !== undefined)

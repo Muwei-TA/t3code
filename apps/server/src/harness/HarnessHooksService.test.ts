@@ -44,6 +44,44 @@ function makeTestLayer(baseDir: string, paths: ServerConfig.ServerDerivedPaths) 
 }
 
 describe("HarnessHooksService", () => {
+  it.effect("only approves the reviewed hook configuration", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const paths = yield* ServerConfig.deriveServerPaths(root, undefined);
+      yield* Effect.gen(function* () {
+        const hooks = yield* HarnessHooksService.HarnessHooksService;
+        const id = HarnessHookId.make("proposal");
+        const propose = (arg: string) =>
+          hooks.upsertUserHook(
+            {
+              id,
+              event: "PostToolUse",
+              target: { type: "command", command: "example", args: [arg] },
+            },
+            true,
+          );
+        const previous = (yield* propose("one")).hooks[0]!.configDigest!;
+        yield* hooks.removeUserHook({ id });
+        const current = (yield* propose("two")).hooks[0]!.configDigest!;
+        expect(current).not.toBe(previous);
+        for (const input of [
+          { id, enabled: true },
+          { id, enabled: true, expectedDigest: previous },
+        ]) {
+          expect(
+            (yield* hooks.setUserHookEnabled(input, Effect.void).pipe(Effect.flip)).message,
+          ).toContain("Review");
+        }
+        expect(
+          (yield* hooks.setUserHookEnabled(
+            { id, enabled: true, expectedDigest: current },
+            Effect.void,
+          )).hooks[0]?.enabled,
+        ).toBe(true);
+      }).pipe(Effect.provide(makeTestLayer(root, paths)));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect("refuses to load a symlinked hooks.json", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

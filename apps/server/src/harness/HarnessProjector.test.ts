@@ -185,6 +185,14 @@ describe("HarnessProjector", () => {
           name: TrimmedNonEmptyString.make("portable-one"),
           scope: "user",
           description: "Portable skill",
+          files: [
+            {
+              relativePath: "scripts/check",
+              executable: true,
+              kind: "script",
+              sizeBytes: NonNegativeInt.make(50),
+            },
+          ],
           enabled: true,
           effectiveEnabled: true,
           overriddenByProject: false,
@@ -210,6 +218,7 @@ describe("HarnessProjector", () => {
           path: "/home/user/.claude/skills/x/SKILL.md",
           contentDigest: "digest-same-123",
         },
+        { name: "portable-one", path: "/cli/other/SKILL.md", contentDigest: "digest-portable-1" },
       ],
       supportsMcpTools: true,
     });
@@ -220,7 +229,7 @@ describe("HarnessProjector", () => {
       "native-mount",
     );
     expect(claudeProjected.nativeMountSkills.map((s) => s.id)).toEqual(["portable-one"]);
-    expect(claudeProjected.needsGatewayTools).toBe(false);
+    expect(claudeProjected.needsGatewayTools).toBe(true);
 
     const codexProjected = projectHarnessContext({
       library: lib,

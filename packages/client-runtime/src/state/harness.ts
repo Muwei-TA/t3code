@@ -1,12 +1,44 @@
-import { WS_METHODS } from "@t3tools/contracts";
-import type { Atom } from "effect/reactivity";
+import { type EnvironmentId, WS_METHODS } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import { type Atom, AtomRegistry } from "effect/reactivity";
 
+import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
+import {
+  type AtomCommand,
+  createEnvironmentRpcCommand,
+  createEnvironmentQueryAtomFamily,
+  createEnvironmentRpcQueryAtomFamily,
+} from "./runtime.ts";
 
 export function createHarnessEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
+  const readSkillFile = createEnvironmentRpcCommand(runtime, {
+    label: "environment-command:harness.readSkillFile",
+    tag: WS_METHODS.harnessReadSkillFile,
+  });
+  const getDeliveryMatrix = createEnvironmentRpcCommand(runtime, {
+    label: "environment-command:harness.getDeliveryMatrix",
+    tag: WS_METHODS.harnessGetDeliveryMatrix,
+  });
+  function readQuery<Input, A, Error>(
+    command: AtomCommand<{ environmentId: EnvironmentId; input: Input }, A, Error>,
+    staleTimeMs: number,
+  ) {
+    return createEnvironmentQueryAtomFamily(runtime, {
+      label: command.label + ":query",
+      staleTimeMs,
+      idleTtlMs: 15_000,
+      execute: Effect.fn("Harness.read")(function* (input: Input) {
+        const supervisor = yield* EnvironmentSupervisor;
+        return yield* command.run(yield* AtomRegistry.AtomRegistry, {
+          environmentId: supervisor.target.environmentId,
+          input,
+        });
+      }),
+    });
+  }
   return {
     listMcpResources: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:harness:mcp:resources",
@@ -89,6 +121,14 @@ export function createHarnessEnvironmentAtoms<R, E>(
     saveAgentsMd: createEnvironmentRpcCommand(runtime, {
       label: "environment-command:harness:agents-md:save",
       tag: WS_METHODS.harnessAgentsMdSave,
+    }),
+    readSkillFile,
+    skillFileQuery: readQuery(readSkillFile, 0),
+    getDeliveryMatrix,
+    deliveryMatrixQuery: readQuery(getDeliveryMatrix, 5_000),
+    installSkillPackage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness.installSkillPackage",
+      tag: WS_METHODS.harnessInstallSkillPackage,
     }),
     upsertSkill: createEnvironmentRpcCommand(runtime, {
       label: "environment-command:harness:skill:upsert",

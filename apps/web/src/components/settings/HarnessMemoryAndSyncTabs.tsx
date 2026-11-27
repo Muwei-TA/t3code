@@ -81,6 +81,7 @@ export function HarnessMemoryTab({ environmentId }: { readonly environmentId: En
   const removeMemory = useAtomCommand(harnessEnvironment.removeMemory, { reportFailure: false });
 
   const [busy, setBusy] = useState(false);
+  const [search, setSearch] = useState("");
   const [editorEntry, setEditorEntry] = useState<HarnessMemoryEntry | "new" | null>(null);
 
   const refresh = async () => {
@@ -92,7 +93,7 @@ export function HarnessMemoryTab({ environmentId }: { readonly environmentId: En
 
   return (
     <div className="space-y-4">
-      <SettingsSection {...setting("harness-mcp")} title={gt("Portable Memory")}>
+      <SettingsSection {...setting("harness-memory")} title={gt("Portable Memory")}>
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
           <p className="text-xs text-muted-foreground">
             <T>
@@ -105,17 +106,31 @@ export function HarnessMemoryTab({ environmentId }: { readonly environmentId: En
               <RefreshCwIcon className="size-3.5" />
               <T>Refresh</T>
             </Button>
-            <Button
-              size="sm"
-              disabled={!canWriteSettings || busy}
-              onClick={() => setEditorEntry("new")}
-            >
-              <PlusIcon className="size-3.5" />
-              <T>Add Note</T>
-            </Button>
+            <details>
+              <summary className="cursor-pointer text-xs text-muted-foreground">
+                <T>Manual configuration</T>
+              </summary>
+              <Button
+                size="sm"
+                disabled={!canWriteSettings || busy}
+                onClick={() => setEditorEntry("new")}
+              >
+                <PlusIcon className="size-3.5" />
+                <T>Add Note</T>
+              </Button>
+            </details>
           </div>
         </div>
 
+        <div className="px-4 pb-3">
+          <Input
+            type="search"
+            value={search}
+            aria-label={gt("Search memory")}
+            placeholder={gt("Search memory")}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </div>
         {!snapshot ? (
           <p className="px-4 pb-4 text-sm text-muted-foreground">
             <T>Loading portable memory...</T>
@@ -129,67 +144,103 @@ export function HarnessMemoryTab({ environmentId }: { readonly environmentId: En
           </p>
         ) : (
           <div className="divide-y divide-border/60">
-            {snapshot.entries.map((entry) => (
-              <div key={entry.id} className="space-y-2 px-4 py-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium">{entry.title}</span>
-                    <Badge variant="outline">{entry.id}</Badge>
-                    {entry.pinned ? (
-                      <Badge variant="info">
-                        <PinIcon className="mr-1 size-3" />
-                        <T>Pinned</T>
-                      </Badge>
-                    ) : null}
-                    {entry.tags.map((tag) => (
-                      <Badge key={tag} variant="secondary">
-                        {tag}
-                      </Badge>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={!canWriteSettings || busy}
-                      onClick={() => setEditorEntry(entry)}
-                    >
-                      <PencilIcon className="size-3.5" />
-                      <T>Edit</T>
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      disabled={!canWriteSettings || busy}
-                      onClick={async () => {
-                        setBusy(true);
-                        const res = await removeMemory({
-                          environmentId,
-                          input: { id: entry.id },
-                        });
-                        setBusy(false);
-                        if (res._tag === "Success") {
-                          setOverrideSnapshot(res.value);
-                          toastManager.add({ type: "success", title: gt("Memory note removed") });
-                        } else if (!isAtomCommandInterrupted(res)) {
-                          toastManager.add({
-                            type: "error",
-                            title: gt("Failed to remove memory note"),
-                            description: formatError(
-                              squashAtomCommandFailure(res),
-                              gt("Try again."),
-                            ),
+            {snapshot.entries
+              .filter((entry) =>
+                [entry.title, entry.body, ...entry.tags]
+                  .join(" ")
+                  .toLowerCase()
+                  .includes(search.trim().toLowerCase()),
+              )
+              .map((entry) => (
+                <div key={entry.id} className="space-y-2 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium">{entry.title}</span>
+                      <Badge variant="outline">{entry.id}</Badge>
+                      {entry.pinned ? (
+                        <Badge variant="info">
+                          <PinIcon className="mr-1 size-3" />
+                          <T>Pinned</T>
+                        </Badge>
+                      ) : null}
+                      {entry.tags.map((tag) => (
+                        <Badge key={tag} variant="secondary">
+                          {tag}
+                        </Badge>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={!canWriteSettings || busy}
+                        aria-pressed={entry.pinned}
+                        onClick={async () => {
+                          setBusy(true);
+                          const result = await upsertMemory({
+                            environmentId,
+                            input: {
+                              id: entry.id,
+                              title: entry.title,
+                              tags: entry.tags,
+                              body: entry.body,
+                              pinned: !entry.pinned,
+                            },
                           });
-                        }
-                      }}
-                    >
-                      <Trash2Icon className="size-3.5 text-destructive" />
-                    </Button>
+                          setBusy(false);
+                          if (result._tag === "Success") setOverrideSnapshot(result.value);
+                          else if (!isAtomCommandInterrupted(result))
+                            toastManager.add({
+                              type: "error",
+                              title: gt("Could not save memory note"),
+                            });
+                        }}
+                      >
+                        {entry.pinned ? gt("Unpin") : gt("Pin")}
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={!canWriteSettings || busy}
+                        onClick={() => setEditorEntry(entry)}
+                      >
+                        <PencilIcon className="size-3.5" />
+                        <T>Edit</T>
+                      </Button>
+                      <Button
+                        size="xs"
+                        aria-label={gt("Delete {id}", { id: entry.title })}
+                        variant="ghost"
+                        disabled={!canWriteSettings || busy}
+                        onClick={async () => {
+                          setBusy(true);
+                          const res = await removeMemory({
+                            environmentId,
+                            input: { id: entry.id },
+                          });
+                          setBusy(false);
+                          if (res._tag === "Success") {
+                            setOverrideSnapshot(res.value);
+                            toastManager.add({ type: "success", title: gt("Memory note removed") });
+                          } else if (!isAtomCommandInterrupted(res)) {
+                            toastManager.add({
+                              type: "error",
+                              title: gt("Failed to remove memory note"),
+                              description: formatError(
+                                squashAtomCommandFailure(res),
+                                gt("Try again."),
+                              ),
+                            });
+                          }
+                        }}
+                      >
+                        <Trash2Icon className="size-3.5 text-destructive" />
+                      </Button>
+                    </div>
                   </div>
+                  <p className="line-clamp-3 text-xs text-muted-foreground">{entry.body}</p>
                 </div>
-                <p className="line-clamp-3 text-xs text-muted-foreground">{entry.body}</p>
-              </div>
-            ))}
+              ))}
           </div>
         )}
       </SettingsSection>
@@ -420,7 +471,7 @@ export function HarnessSyncTab({ environmentId }: { readonly environmentId: Envi
   return (
     <div className="space-y-4">
       <HarnessEnvironmentSync key={environmentId} environmentId={environmentId} />
-      <SettingsSection {...setting("harness-mcp")} title={gt("Harness Git Sync")}>
+      <SettingsSection {...setting("harness-sync")} title={gt("Harness Git Sync")}>
         <div className="space-y-4 px-4 py-3">
           <p className="text-xs text-muted-foreground">
             <T>

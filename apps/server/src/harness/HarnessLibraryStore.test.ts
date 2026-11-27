@@ -19,6 +19,8 @@ import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
+import { readContainedFile } from "./safeFileOps.ts";
+import { packageDigest } from "./skillPackage.ts";
 import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 
@@ -57,6 +59,109 @@ const makeTestLayer = (
 };
 
 describe("HarnessLibraryStore", () => {
+  it.effect(
+    "replaces complete packages in either scope and keeps the previous version on validation failure",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+        const baseDir = path.join(root, "t3"),
+          workspaceRoot = path.join(root, "repo");
+        yield* fs.makeDirectory(workspaceRoot);
+        const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+        yield* Effect.gen(function* () {
+          const lib = yield* HarnessLibraryStore.HarnessLibraryStore;
+          const location = {
+            id: HarnessSkillId.make("package"),
+            scope: "project" as const,
+            workspaceRoot,
+          };
+          const manifest = {
+            relativePath: "SKILL.md",
+            content: "---\nname: Package\ndescription: Example\n---\nBody",
+          };
+          const files = [
+            manifest,
+            { relativePath: "assets/image.dat", encoding: "base64" as const, content: "AP8=" },
+            { relativePath: "scripts/check", content: "echo ready", executable: true },
+          ];
+          const initial = yield* lib.installSkillPackage({ ...location, files });
+          expect(initial.skills[0]?.files).toContainEqual({
+            relativePath: "scripts/check",
+            kind: "script",
+            executable: true,
+            sizeBytes: 10,
+          });
+          expect(
+            yield* lib.readSkillFile({ ...location, relativePath: "assets/image.dat" }),
+          ).toMatchObject({ binary: true, sizeBytes: 2 });
+          const dir = path.join(workspaceRoot, ".agents", "skills", "package");
+          yield* Effect.promise(async () => {
+            const target = path.join(dir, "scripts", "check");
+            await expect(readContainedFile(dir, target, 9)).rejects.toThrow("oversized");
+            expect((await readContainedFile(dir, target, 10)).bytes.toString()).toBe("echo ready");
+          });
+          const copy = yield* lib.installSkillPackage({
+            ...location,
+            scope: "user",
+            sourceDir: dir,
+          });
+          expect(copy.skills.filter((s) => s.id === "package")).toHaveLength(2);
+          for (const bad of [
+            [manifest, { relativePath: "../escape", content: "bad" }],
+            [{ relativePath: "SKILL.md", content: "missing frontmatter" }],
+            [manifest, manifest],
+          ]) {
+            expect(
+              (yield* lib.installSkillPackage({ ...location, files: bad }).pipe(Effect.flip)).code,
+            ).toBe("invalid_config");
+          }
+          expect(
+            (yield* lib.readSkillFile({ ...location, relativePath: "scripts/check" })).content,
+          ).toBe("echo ready");
+          yield* fs.symlink(path.join(dir, "SKILL.md"), path.join(dir, "linked"));
+          expect(
+            (yield* lib.readSkillFile({ ...location, relativePath: "linked" }).pipe(Effect.flip))
+              .code,
+          ).toBe("invalid_config");
+          expect(
+            (yield* lib
+              .readSkillFile({ ...location, relativePath: "../SKILL.md" })
+              .pipe(Effect.flip)).code,
+          ).toBe("invalid_config");
+          yield* fs.remove(path.join(dir, "linked"));
+          const duplicate = yield* lib
+            .installSkillPackage({ ...location, files })
+            .pipe(Effect.flip);
+          expect(duplicate.detail).toContain("already installed");
+          const stale = yield* lib
+            .installSkillPackage({
+              ...location,
+              files,
+              expectedTargetDigest: packageDigest([manifest]),
+            })
+            .pipe(Effect.flip);
+          expect(stale.detail).toContain("changed since preview");
+          const replaced = yield* lib.installSkillPackage({
+            expectedTargetDigest: packageDigest(files),
+            ...location,
+            files: [
+              manifest,
+              ...Array.from({ length: 68 }, (_, i) => ({
+                relativePath: "refs/" + i,
+                content: "ok",
+              })),
+            ],
+          });
+          expect(replaced.skills.find((s) => s.scope === "project")?.companionTruncated).toBe(true);
+          expect(yield* fs.exists(path.join(dir, "scripts/check"))).toBe(false);
+          expect((yield* lib.readSkillFile({ ...location, relativePath: "refs/67" })).content).toBe(
+            "ok",
+          );
+        }).pipe(Effect.provide(makeTestLayer(baseDir, paths)));
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect("locks organization rules against local edits and project overrides", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

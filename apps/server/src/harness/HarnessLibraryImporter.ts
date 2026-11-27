@@ -11,6 +11,7 @@ import {
   type HarnessMcpImportSource,
   HarnessRuleId,
   HarnessSkillId,
+  type HarnessPackageFile,
   isReservedHarnessCommandId,
   NonNegativeInt,
   TrimmedNonEmptyString,
@@ -28,12 +29,16 @@ import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import {
   formatCommandMarkdown,
   formatRuleMarkdown,
-  formatSkillMarkdown,
   parseMarkdownFrontmatter,
   sha256Hex,
 } from "./HarnessLibraryStore.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 
+import { safeReadFileUtf8 } from "./safeFileOps.ts";
+import { loadPackage, packageDigest } from "./skillPackage.ts";
+
+const packageError = () =>
+  new HarnessError({ code: "invalid_config", detail: "Unreadable package." });
 const decodeSkillId = Schema.decodeUnknownOption(HarnessSkillId);
 const decodeRuleId = Schema.decodeUnknownOption(HarnessRuleId);
 const decodeCommandId = Schema.decodeUnknownOption(HarnessCommandId);
@@ -59,10 +64,8 @@ interface RawLibraryImportItem {
     | { readonly kind: "agents_md"; readonly body: string }
     | {
         readonly kind: "skill";
+        readonly files: readonly HarnessPackageFile[];
         readonly id: HarnessSkillId;
-        readonly name: string;
-        readonly description?: string | undefined;
-        readonly body: string;
       }
     | {
         readonly kind: "rule";
@@ -135,7 +138,7 @@ export class HarnessLibraryImporter extends Context.Service<
   {
     readonly scan: (
       workspaceRoot?: string | undefined,
-    ) => Effect.Effect<ReadonlyArray<HarnessLibraryImportSourcePreview>>;
+    ) => Effect.Effect<ReadonlyArray<HarnessLibraryImportSourcePreview>, HarnessError>;
     readonly apply: (input: HarnessLibraryApplyImportsInput) => Effect.Effect<
       {
         readonly importedKeys: ReadonlyArray<string>;
@@ -169,10 +172,9 @@ const make = Effect.gen(function* () {
       .digest("hex")
       .slice(0, 24);
 
-  const readFileOpt = (filePath: string) =>
-    fs.readFileString(filePath).pipe(
-      Effect.asSome,
-      Effect.orElseSucceed(() => Option.none<string>()),
+  const readFileOpt = (filePath: string, root = homeDir) =>
+    Effect.tryPromise({ try: () => safeReadFileUtf8(root, filePath), catch: packageError }).pipe(
+      Effect.option,
     );
 
   const scanSkillsDir = Effect.fn("HarnessLibraryImporter.scanSkillsDir")(function* (
@@ -184,15 +186,27 @@ const make = Effect.gen(function* () {
     const items: Array<RawLibraryImportItem> = [];
     for (const dirName of entries) {
       const skillFile = path.join(skillsDir, dirName, "SKILL.md");
-      const raw = yield* readFileOpt(skillFile);
-      if (Option.isNone(raw)) continue;
       const sanitized = sanitizeId(dirName);
       const idOpt = decodeSkillId(sanitized);
       if (Option.isNone(idOpt)) {
         warnings.push(`Skipped skill "${dirName}": invalid identifier.`);
         continue;
       }
-      const parsed = parseMarkdownFrontmatter(raw.value);
+      const files = yield* Effect.tryPromise({
+        try: async () => {
+          return await loadPackage(path.dirname(skillFile), homeDir);
+        },
+        catch: packageError,
+      }).pipe(Effect.option);
+      if (Option.isNone(files)) {
+        warnings.push(`Skipped skill "${dirName}": unreadable package.`);
+        continue;
+      }
+      const manifest = files.value.find((file) => file.relativePath === "SKILL.md");
+      if (!manifest) continue;
+      const parsed = parseMarkdownFrontmatter(
+        Buffer.from(manifest.content, "base64").toString("utf8"),
+      );
       const fm = parsed.frontmatter ?? {};
       const name =
         typeof fm.name === "string" && fm.name.trim().length > 0 ? fm.name.trim() : idOpt.value;
@@ -200,11 +214,16 @@ const make = Effect.gen(function* () {
         typeof fm.description === "string" && fm.description.trim().length > 0
           ? fm.description.trim()
           : undefined;
-      const normalizedContent = formatSkillMarkdown({
-        name,
-        description,
-        body: parsed.body,
-      });
+      if (
+        parsed.malformed ||
+        !parsed.frontmatter ||
+        typeof fm.name !== "string" ||
+        !fm.name.trim()
+      ) {
+        warnings.push(`Skipped skill "${dirName}": invalid manifest or unreadable package.`);
+        continue;
+      }
+      const normalizedContent = packageDigest(files.value);
       items.push({
         source,
         kind: "skill",
@@ -216,10 +235,8 @@ const make = Effect.gen(function* () {
         summary: description ?? `Skill ${name}`,
         applyPayload: {
           kind: "skill",
+          files: files.value,
           id: idOpt.value,
-          name,
-          ...(description !== undefined ? { description } : {}),
-          body: parsed.body,
         },
       });
     }
@@ -285,13 +302,14 @@ const make = Effect.gen(function* () {
   const scanCursorRulesDir = Effect.fn("HarnessLibraryImporter.scanCursorRulesDir")(function* (
     rulesDir: string,
     warnings: Array<string>,
+    root = homeDir,
   ) {
     const entries = yield* fs.readDirectory(rulesDir).pipe(Effect.orElseSucceed(() => []));
     const items: Array<RawLibraryImportItem> = [];
     for (const fileName of entries) {
       if (!fileName.endsWith(".mdc") && !fileName.endsWith(".md")) continue;
       const filePath = path.join(rulesDir, fileName);
-      const raw = yield* readFileOpt(filePath);
+      const raw = yield* readFileOpt(filePath, root);
       if (Option.isNone(raw)) continue;
       const base = fileName.replace(/\.(?:mdc|md)$/u, "");
       const rawId = sanitizeId(base);
@@ -411,6 +429,7 @@ const make = Effect.gen(function* () {
         const wsRules = yield* scanCursorRulesDir(
           path.join(workspaceRoot.trim(), ".cursor", "rules"),
           warnings,
+          workspaceRoot.trim(),
         );
         for (const item of wsRules) {
           seenRuleIds.add(item.id);
@@ -441,27 +460,24 @@ const make = Effect.gen(function* () {
     return out;
   });
 
-  const existingContentFor = (
+  const existingContentFor = Effect.fn("HarnessLibraryImporter.existingContentFor")(function* (
     snapshot: import("@t3tools/contracts").HarnessLibrarySnapshot,
     kind: HarnessLibraryImportKind,
     id: string,
-  ): string | null => {
+  ) {
     if (kind === "agents_md") {
       return snapshot.userAgentsMd.exists ? snapshot.userAgentsMd.body : null;
     }
     if (kind === "skill") {
       const found = snapshot.skills.find((s) => s.scope === "user" && s.id === id);
-      return found
-        ? formatSkillMarkdown({
-            name: found.name,
-            description: found.description,
-            shortDescription: found.shortDescription,
-            userInvocable: found.userInvocable,
-            userInvocationOnly: found.userInvocationOnly,
-            enabled: found.enabled,
-            body: found.body,
-          })
-        : null;
+      if (!found) return null;
+      const files = yield* Effect.tryPromise({
+        try: async () => {
+          return await loadPackage(path.dirname(found.sourcePath), snapshot.harnessDir);
+        },
+        catch: packageError,
+      });
+      return packageDigest(files);
     }
     if (kind === "rule") {
       const found = snapshot.rules.find((r) => r.scope === "user" && r.id === id);
@@ -484,7 +500,7 @@ const make = Effect.gen(function* () {
           body: found.body,
         })
       : null;
-  };
+  });
 
   const scan: HarnessLibraryImporter["Service"]["scan"] = Effect.fn("HarnessLibraryImporter.scan")(
     function* (workspaceRoot) {
@@ -492,37 +508,50 @@ const make = Effect.gen(function* () {
         scanRawSources(workspaceRoot),
         library.getSnapshot(workspaceRoot),
       ]);
-      return rawSources.map((src): HarnessLibraryImportSourcePreview => {
-        const candidates: Array<HarnessLibraryImportCandidate> = src.items.map((item) => {
-          const existing = existingContentFor(snapshot, item.kind, item.id);
-          let conflict: HarnessMcpImportConflict = "none";
-          if (existing !== null) {
-            conflict =
-              existing.trim() === item.normalizedContent.trim()
-                ? "exists_identical"
-                : "exists_different";
-          }
+      return yield* Effect.forEach(rawSources, (src) =>
+        Effect.gen(function* () {
+          const candidates: Array<HarnessLibraryImportCandidate> = yield* Effect.forEach(
+            src.items,
+            (item) =>
+              Effect.gen(function* () {
+                const existing = yield* existingContentFor(snapshot, item.kind, item.id);
+                let conflict: HarnessMcpImportConflict = "none";
+                if (existing !== null) {
+                  conflict =
+                    existing.trim() === item.normalizedContent.trim()
+                      ? "exists_identical"
+                      : "exists_different";
+                }
+                return {
+                  kind: item.kind,
+                  id: TrimmedNonEmptyString.make(item.id),
+                  name: TrimmedNonEmptyString.make(item.name),
+                  ...(item.description !== undefined ? { description: item.description } : {}),
+                  sourcePath: item.sourcePath,
+                  previewDigest: previewDigestFor(item),
+                  existingDigest:
+                    existing !== null ? existingDigestFor(item.kind, item.id, existing) : null,
+                  conflict,
+                  bytes: NonNegativeInt.make(
+                    item.applyPayload.kind === "skill"
+                      ? item.applyPayload.files.reduce(
+                          (sum, f) => sum + Buffer.byteLength(f.content, f.encoding ?? "utf8"),
+                          0,
+                        )
+                      : Buffer.byteLength(item.normalizedContent, "utf8"),
+                  ),
+                  summary: item.summary,
+                };
+              }),
+          );
           return {
-            kind: item.kind,
-            id: TrimmedNonEmptyString.make(item.id),
-            name: TrimmedNonEmptyString.make(item.name),
-            ...(item.description !== undefined ? { description: item.description } : {}),
-            sourcePath: item.sourcePath,
-            previewDigest: previewDigestFor(item),
-            existingDigest:
-              existing !== null ? existingDigestFor(item.kind, item.id, existing) : null,
-            conflict,
-            bytes: NonNegativeInt.make(Buffer.byteLength(item.normalizedContent, "utf8")),
-            summary: item.summary,
-          };
-        });
-        return {
-          source: src.source,
-          found: src.found,
-          candidates,
-          warnings: src.warnings,
-        };
-      });
+            source: src.source,
+            found: src.found,
+            candidates,
+            warnings: src.warnings,
+          } satisfies HarnessLibraryImportSourcePreview;
+        }),
+      );
     },
   );
 
@@ -564,33 +593,44 @@ const make = Effect.gen(function* () {
           detail: `Import item "${displayKey}" changed since preview. Rescan and review before importing.`,
         });
       }
-      const existing = existingContentFor(currentSnapshot, candidate.kind, candidate.id);
-      if (existing !== null && input.overwriteExisting !== true) {
+      const payload = candidate.applyPayload;
+      const wsOpt = input.workspaceRoot !== undefined ? { workspaceRoot: input.workspaceRoot } : {};
+      const review = (existing: string | null) => {
+        if (existing !== null && input.overwriteExisting !== true) return false;
+        if (req.expectedExistingDigest !== undefined) {
+          const digest =
+            existing === null ? null : existingDigestFor(candidate.kind, candidate.id, existing);
+          if (digest !== req.expectedExistingDigest)
+            return new HarnessError({
+              code: "invalid_config",
+              detail: `Existing target for "${displayKey}" changed since preview. Rescan and review before importing.`,
+            });
+        }
+        if (payload.kind === "skill" && existing !== null && !req.expectedExistingDigest)
+          return new HarnessError({
+            code: "invalid_config",
+            detail: "Review the existing skill package before replacing it.",
+          });
+        return true;
+      };
+      if (payload.kind === "skill") {
+        const imported = yield* library.importSkillPackage(
+          { id: payload.id, scope: "user", files: payload.files, ...wsOpt },
+          review,
+        );
+        (imported ? importedKeys : skippedKeys).push(displayKey);
+        continue;
+      }
+      const decision = review(
+        yield* existingContentFor(currentSnapshot, candidate.kind, candidate.id),
+      );
+      if (typeof decision !== "boolean") return yield* decision;
+      if (!decision) {
         skippedKeys.push(displayKey);
         continue;
       }
-      if (req.expectedExistingDigest !== undefined) {
-        const actualExisting =
-          existing !== null ? existingDigestFor(candidate.kind, candidate.id, existing) : null;
-        if (actualExisting !== req.expectedExistingDigest) {
-          return yield* new HarnessError({
-            code: "invalid_config",
-            detail: `Existing target for "${displayKey}" changed since preview. Rescan and review before importing.`,
-          });
-        }
-      }
-      const payload = candidate.applyPayload;
-      const wsOpt = input.workspaceRoot !== undefined ? { workspaceRoot: input.workspaceRoot } : {};
       if (payload.kind === "agents_md") {
         yield* library.saveUserAgentsMd({ body: payload.body, ...wsOpt });
-      } else if (payload.kind === "skill") {
-        yield* library.upsertUserSkill({
-          id: payload.id,
-          name: TrimmedNonEmptyString.make(payload.name),
-          ...(payload.description !== undefined ? { description: payload.description } : {}),
-          body: payload.body,
-          ...wsOpt,
-        });
       } else if (payload.kind === "rule") {
         yield* library.upsertUserRule({
           id: payload.id,

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  AuthFilesystemReadScope,
+  AuthFilesystemWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthProvidersManageScope,
@@ -9,6 +11,26 @@ import {
 } from "./auth.ts";
 import { clientRpcRequiredScopes } from "./clientRpcPermissions.ts";
 import { WS_METHODS } from "./rpc.ts";
+
+it("guards skill content, server directory imports, and project package writes", () => {
+  expect(clientRpcRequiredScopes(WS_METHODS.harnessReadSkillFile, {})).toEqual([
+    AuthFilesystemReadScope,
+  ]);
+  expect(clientRpcRequiredScopes(WS_METHODS.harnessGetDeliveryMatrix, {})).toEqual([
+    AuthOrchestrationReadScope,
+  ]);
+  expect(
+    clientRpcRequiredScopes(WS_METHODS.harnessInstallSkillPackage, { scope: "user", files: [] }),
+  ).toEqual([AuthSettingsWriteScope]);
+  expect(
+    new Set(
+      clientRpcRequiredScopes(WS_METHODS.harnessInstallSkillPackage, {
+        scope: "project",
+        sourceDir: "/source",
+      }),
+    ),
+  ).toEqual(new Set([AuthSettingsWriteScope, AuthFilesystemReadScope, AuthFilesystemWriteScope]));
+});
 
 it("requires provider management for all managed MCP OAuth operations", () => {
   for (const method of [

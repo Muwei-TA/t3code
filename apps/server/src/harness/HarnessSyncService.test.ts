@@ -8,6 +8,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   HarnessMcpServerId,
   HarnessRuleId,
+  HarnessSkillId,
   TrimmedNonEmptyString,
   type ManagedPolicyDocument,
 } from "@t3tools/contracts";
@@ -23,6 +24,8 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
+import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
+import { packageDigest } from "./skillPackage.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 import * as HarnessSyncService from "./HarnessSyncService.ts";
 
@@ -235,6 +238,7 @@ describe("HarnessSyncService", () => {
         );
         const rule = "rules/checks.md";
         const extra = "rules/local-only.md";
+        const script = "skills/tool/scripts/check.sh";
         const sourceDir = path.join(source, "harness");
         const targetDir = path.join(target, "harness");
         yield* fs.makeDirectory(path.join(sourceDir, "rules"), { recursive: true });
@@ -242,6 +246,11 @@ describe("HarnessSyncService", () => {
         yield* fs.writeFileString(path.join(sourceDir, rule), "intro\nnew\nend\n");
         yield* fs.writeFileString(path.join(targetDir, rule), "intro\nold\nend\n");
         yield* fs.writeFileString(path.join(targetDir, extra), "Keep me.\n");
+        yield* fs.makeDirectory(path.dirname(path.join(sourceDir, script)), { recursive: true });
+        yield* fs.makeDirectory(path.dirname(path.join(targetDir, script)), { recursive: true });
+        for (const dir of [sourceDir, targetDir])
+          yield* fs.writeFileString(path.join(dir, script), "echo ok");
+        yield* fs.chmod(path.join(sourceDir, script), 0o755);
         const id = HarnessMcpServerId.make("mcp-guide");
         const localId = HarnessMcpServerId.make("local-mcp");
         const config = {
@@ -263,7 +272,7 @@ describe("HarnessSyncService", () => {
         }).pipe(Effect.provide(srcLayer));
         expect(exportResult.canExport).toBe(true);
         const bundle = exportResult.bundle!;
-        expect(bundle.files.map(({ path }) => path)).toEqual([rule]);
+        expect(bundle.files.map(({ path }) => path)).toEqual([rule, script]);
         expect(bundle.portableMcpServers?.servers[0]?.config.origin).toBeUndefined();
 
         yield* Effect.gen(function* () {
@@ -282,6 +291,7 @@ describe("HarnessSyncService", () => {
           expect(preview.files).toEqual([
             { path: rule, status: "modified", additions: 1, deletions: 1 },
             { path: extra, status: "deleted", additions: 0, deletions: 1 },
+            { path: script, status: "modified", additions: 0, deletions: 0 },
           ]);
           expect(preview.mcpServerDiffs).toEqual([{ id, status: "added", disabledOnImport: true }]);
           expect(preview.missingSecretRefs).toEqual(["${secret:DEMO}"]);
@@ -300,7 +310,8 @@ describe("HarnessSyncService", () => {
             expectedPreviewDigest: next.previewDigest!,
             includeMcpServers: true,
           });
-          expect(applied.appliedPaths).toEqual([rule]);
+          expect(applied.appliedPaths).toEqual([rule, script]);
+          expect((yield* fs.stat(path.join(targetDir, script))).mode & 0o111).toBe(0o111);
           expect(applied.importedDisabledMcpIds).toEqual([id]);
           const after = (yield* store.loadUserConfig).config.mcpServers;
           expect(after[id]).toMatchObject({ enabled: false, transport: config.transport });
@@ -363,6 +374,65 @@ describe("HarnessSyncService", () => {
           ).toHaveLength(1);
         }).pipe(Effect.provide(srcLayer));
       }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("serializes a package install and a cross-environment apply for the same skill", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+      const source = path.join(root, "source");
+      const sourcePaths = yield* ServerConfig.deriveServerPaths(source, undefined);
+      const target = path.join(root, "target");
+      const targetPaths = yield* ServerConfig.deriveServerPaths(target, undefined);
+      const dir = path.join(sourcePaths.harnessDir, "skills", "tool");
+      yield* fs.makeDirectory(dir, { recursive: true });
+      const manifest = { relativePath: "SKILL.md", content: "---\nname: Tool\n---\nBody" };
+      yield* fs.writeFileString(path.join(dir, "SKILL.md"), manifest.content);
+      yield* fs.writeFileString(path.join(dir, "notes"), "from sync");
+      const { bundle } = yield* Effect.gen(function* () {
+        return yield* (yield* HarnessSyncService.HarnessSyncService).exportBundle({});
+      }).pipe(Effect.provide(makeTestLayer(source, sourcePaths)));
+      const syncLayer = makeTestLayer(target, targetPaths);
+      yield* Effect.gen(function* () {
+        const lib = yield* HarnessLibraryStore.HarnessLibraryStore;
+        const sync = yield* HarnessSyncService.HarnessSyncService;
+        const location = { scope: "user" as const, id: HarnessSkillId.make("tool") };
+        yield* lib.installSkillPackage({ ...location, files: [manifest] });
+        const preview = yield* sync.previewReceive({ bundle: bundle! });
+        const [install, receive] = yield* Effect.all(
+          [
+            Effect.result(
+              lib.installSkillPackage({
+                ...location,
+                expectedTargetDigest: packageDigest([manifest]),
+                files: [manifest, { relativePath: "notes", content: "from install" }],
+              }),
+            ),
+            Effect.result(
+              sync.applyReceive({ bundle: bundle!, expectedPreviewDigest: preview.previewDigest! }),
+            ),
+          ],
+          { concurrency: "unbounded" },
+        );
+        expect(Result.isSuccess(install)).toBe(Result.isFailure(receive));
+        const rejected = Result.isFailure(install)
+          ? install.failure
+          : Result.isFailure(receive)
+            ? receive.failure
+            : undefined;
+        expect(rejected).toMatchObject({
+          code: "invalid_config",
+          detail: expect.stringContaining("changed since preview"),
+        });
+        expect((yield* lib.readSkillFile({ ...location, relativePath: "notes" })).content).toBe(
+          Result.isSuccess(install) ? "from install" : "from sync",
+        );
+        expect(yield* fs.readDirectory(path.join(targetPaths.harnessDir, "skills"))).toEqual([
+          "tool",
+        ]);
+      }).pipe(Effect.provide(HarnessLibraryStore.layer.pipe(Layer.provideMerge(syncLayer))));
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("keeps organization-locked rules out of bundles and Git pull", () =>
@@ -616,6 +686,13 @@ describe("HarnessSyncService", () => {
           const attackerClone = path.join(tempRoot, "attacker");
           yield* Effect.promise(async () => {
             await execGit(tempRoot, ["clone", bareRemote, attackerClone]);
+            const script = NodePath.join(attackerClone, "skills", "tool", "scripts", "check.sh");
+            await NodeFSP.mkdir(NodePath.dirname(script), { recursive: true });
+            await NodeFSP.writeFile(script, "echo ok", { mode: 0o755 });
+            const incomplete = path.join(attackerClone, "skills", "incomplete");
+            await NodeFSP.mkdir(incomplete);
+            await NodeFSP.writeFile(path.join(incomplete, "SKILL.md"), "updated manifest");
+            await NodeFSP.writeFile(path.join(incomplete, "helper"), Buffer.from([0xff]));
             await NodeFSP.mkdir(NodePath.join(attackerClone, "rules"), { recursive: true });
             await NodeFSP.writeFile(
               NodePath.join(attackerClone, "rules", "safe-rule.md"),
@@ -634,6 +711,11 @@ describe("HarnessSyncService", () => {
             );
             await execGit(attackerClone, ["add", "-A"]);
             await execGit(attackerClone, [
+              "update-index",
+              "--chmod=+x",
+              "skills/tool/scripts/check.sh",
+            ]);
+            await execGit(attackerClone, [
               "-c",
               "user.name=Remote",
               "-c",
@@ -646,8 +728,18 @@ describe("HarnessSyncService", () => {
           });
 
           const pulled = yield* sync.pull();
+          expect(pulled.skippedFiles).toEqual(
+            expect.arrayContaining(["skills/incomplete/SKILL.md", "skills/incomplete/helper"]),
+          );
+          expect(yield* fs.exists(path.join(store.harnessDir, "skills/incomplete/SKILL.md"))).toBe(
+            false,
+          );
           expect(pulled.pulled).toBe(true);
           expect(pulled.updatedFiles).toContain("rules/safe-rule.md");
+          expect(
+            (yield* fs.stat(path.join(store.harnessDir, "skills/tool/scripts/check.sh"))).mode &
+              0o111,
+          ).toBe(0o111);
           expect(pulled.skippedFiles).toContain("hooks.json");
           expect(pulled.skippedFiles).toContain("plugins-state.json");
 
@@ -702,6 +794,144 @@ describe("HarnessSyncService", () => {
           expect((yield* sync.pull()).conflicts).toBeUndefined();
         }).pipe(Effect.provide(makeTestLayer(baseDir, paths)));
       }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("pulls both file/directory transitions without losing local package members", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const paths = yield* ServerConfig.deriveServerPaths(root, undefined);
+      const remote = path.join(root, "remote.git");
+      const clone = path.join(root, "clone");
+      yield* Effect.promise(() => execGit(root, ["init", "--bare", "-b", "main", remote]));
+      yield* Effect.promise(() => execGit(root, ["clone", remote, clone]));
+      const skill = "skills/example";
+      const member = path.join(clone, skill, "notes");
+      yield* fs.makeDirectory(path.dirname(member), { recursive: true });
+      const push = Effect.promise(async () => {
+        await execGit(clone, ["add", "-A"]);
+        await commit(clone, "Update package");
+        await execGit(clone, ["push", "origin", "main"]);
+      });
+      yield* fs.writeFileString(member, "single");
+      yield* push;
+      yield* Effect.gen(function* () {
+        const sync = yield* HarnessSyncService.HarnessSyncService;
+        yield* sync.configureRemote({ remoteUrl: TrimmedNonEmptyString.make(remote) });
+        yield* sync.pull();
+        const local = path.join(paths.harnessDir, skill);
+        yield* fs.writeFileString(path.join(local, "keep"), "local");
+        for (const directory of [true, false]) {
+          yield* fs.remove(member, { recursive: true });
+          if (directory) yield* fs.makeDirectory(member);
+          const name = directory ? "notes/nested" : "notes";
+          yield* fs.writeFileString(path.join(clone, skill, name), name);
+          yield* push;
+          const result = yield* sync.pull();
+          expect(result.skippedFiles).toBeUndefined();
+          expect(result.conflicts).toBeUndefined();
+          expect(result.updatedFiles.toSorted()).toEqual([
+            skill + "/notes",
+            skill + "/notes/nested",
+          ]);
+          expect(yield* fs.readFileString(path.join(local, name))).toBe(name);
+          expect(yield* fs.readFileString(path.join(local, "keep"))).toBe("local");
+        }
+        yield* fs.writeFile(path.join(local, "keep"), Uint8Array.of(0xff));
+        yield* fs.writeFileString(member, "next");
+        yield* push;
+        const blocked = yield* sync.pull();
+        expect(blocked.skippedFiles).toContain(skill + "/notes");
+        expect(yield* fs.readFileString(path.join(local, "notes"))).toBe("notes");
+        yield* fs.writeFileString(path.join(local, "keep"), "local");
+        expect((yield* sync.pull()).updatedFiles).toEqual([skill + "/notes"]);
+        expect(yield* fs.readFileString(path.join(local, "notes"))).toBe("next");
+      }).pipe(Effect.provide(makeTestLayer(root, paths)));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("allows moving 511 companion files when the final skill package has 512 files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const paths = yield* ServerConfig.deriveServerPaths(root, undefined);
+      const remote = path.join(root, "remote.git");
+      const clone = path.join(root, "clone");
+      yield* Effect.promise(() => execGit(root, ["init", "--bare", "-b", "main", remote]));
+      yield* Effect.promise(() => execGit(root, ["clone", remote, clone]));
+      const skillDir = path.join(clone, "skills", "bulk");
+      yield* fs.makeDirectory(path.join(skillDir, "a"), { recursive: true });
+      yield* fs.writeFileString(path.join(skillDir, "SKILL.md"), "---\nname: Bulk\n---\nBody\n");
+      for (let i = 0; i < 511; i += 1) {
+        yield* fs.writeFileString(path.join(skillDir, "a", `f-${i}.md`), `v${i}\n`);
+      }
+      const push = Effect.promise(async () => {
+        await execGit(clone, ["add", "-A"]);
+        await commit(clone, "Bulk package");
+        await execGit(clone, ["push", "origin", "main"]);
+      });
+      yield* push;
+      yield* Effect.gen(function* () {
+        const sync = yield* HarnessSyncService.HarnessSyncService;
+        yield* sync.configureRemote({ remoteUrl: TrimmedNonEmptyString.make(remote) });
+        const initial = yield* sync.pull();
+        expect(initial.skippedFiles).toBeUndefined();
+        yield* fs.remove(path.join(skillDir, "a"), { recursive: true });
+        yield* fs.makeDirectory(path.join(skillDir, "b"), { recursive: true });
+        for (let i = 0; i < 511; i += 1) {
+          yield* fs.writeFileString(path.join(skillDir, "b", `f-${i}.md`), `v${i}\n`);
+        }
+        yield* push;
+        const moved = yield* sync.pull();
+        expect(moved.skippedFiles).toBeUndefined();
+        expect(moved.conflicts).toBeUndefined();
+        expect(moved.updatedFiles.length).toBe(1022);
+        const localSkill = path.join(paths.harnessDir, "skills", "bulk");
+        expect(yield* fs.exists(path.join(localSkill, "b", "f-510.md"))).toBe(true);
+        expect(yield* fs.exists(path.join(localSkill, "a"))).toBe(false);
+
+        // Adding a 513th empty file must skip the entire package before reading blobs.
+        yield* fs.writeFileString(path.join(skillDir, "b", "overflow.md"), "");
+        yield* push;
+        const spawnSpy = vi.spyOn(NodeChildProcess, "spawn");
+        const execFileSpy = vi.spyOn(NodeChildProcess, "execFile");
+        spawnSpy.mockClear();
+        execFileSpy.mockClear();
+        const oversized = yield* sync.pull();
+        const blobCalls = [...spawnSpy.mock.calls, ...execFileSpy.mock.calls].filter((call) => {
+          const args = Array.isArray(call[1]) ? call[1] : [];
+          return args.includes("cat-file") && args.includes("blob");
+        });
+        expect(blobCalls).toHaveLength(0);
+        expect(oversized.skippedFiles).toContain("skills/bulk/b/overflow.md");
+        expect(yield* fs.exists(path.join(localSkill, "b", "overflow.md"))).toBe(false);
+
+        // When upstream reverts overflow.md back to base while local keeps a 512-file set including overflow.md,
+        // adding another upstream file must still trip the 513-file preflight with zero blob reads.
+        yield* fs.rename(
+          path.join(localSkill, "b", "f-510.md"),
+          path.join(localSkill, "b", "overflow.md"),
+        );
+        yield* fs.remove(path.join(skillDir, "b", "overflow.md"));
+        yield* fs.writeFileString(path.join(skillDir, "b", "another.md"), "extra\n");
+        yield* push;
+        spawnSpy.mockClear();
+        execFileSpy.mockClear();
+        const revertedOverflow = yield* sync.pull();
+        const revertedBlobCalls = [...spawnSpy.mock.calls, ...execFileSpy.mock.calls].filter(
+          (call) => {
+            const args = Array.isArray(call[1]) ? call[1] : [];
+            return args.includes("cat-file") && args.includes("blob");
+          },
+        );
+        expect(revertedBlobCalls).toHaveLength(0);
+        expect(revertedOverflow.skippedFiles).toContain("skills/bulk/b/another.md");
+        expect(yield* fs.exists(path.join(localSkill, "b", "another.md"))).toBe(false);
+        expect(yield* fs.exists(path.join(localSkill, "b", "overflow.md"))).toBe(true);
+      }).pipe(Effect.provide(makeTestLayer(root, paths)));
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("uses the pushed resolution as the base for the next pull", () =>
@@ -784,6 +1014,7 @@ describe("HarnessSyncService", () => {
               path.join(memory, "note.md"),
               "private note ghp_1234567890abcdefghij1234567890\n",
             );
+            await NodeFSP.writeFile(path.join(memory, "invalid.md"), Buffer.from([0xff]));
             await NodeFSP.symlink("note.md", path.join(memory, "linked.md"));
             await execGit(checkout, ["add", "-A"]);
             await commit(checkout, "First version");
@@ -804,6 +1035,7 @@ describe("HarnessSyncService", () => {
           expect(preview.secretFindings).toEqual(
             expect.arrayContaining([
               { path: "memory/note.md", line: 1, rule: "github-token", preview: "***" },
+              expect.objectContaining({ path: "memory/invalid.md", rule: "unscannable-binary" }),
               expect.objectContaining({ path: "memory/linked.md", rule: "unscannable-symlink" }),
             ]),
           );

@@ -335,6 +335,6 @@ export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
         ? (task.workspaceStrategy.startFromOrigin ?? false)
         : true,
     runtimeMode: task.runtimeMode,
-    modeId: task.modeId ?? "",
+    modeId: task.modeId ?? (task.interactionMode === "plan" ? "plan" : ""),
   };
 }

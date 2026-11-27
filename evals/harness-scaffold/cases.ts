@@ -2,7 +2,11 @@ export interface HarnessScaffoldCase {
   readonly id: string;
   readonly source: string;
   readonly prompt: string;
-  readonly expectToolPrefix: "harness_skill_" | "harness_rule_read" | "none";
+  readonly expectToolPrefix:
+    | "harness_skill_"
+    | "harness_rule_read"
+    | "harness_install_skill"
+    | "none";
   readonly expectedArgsPattern?: RegExp;
 }
 
@@ -21,6 +25,13 @@ export const HARNESS_SCAFFOLD_CASES: ReadonlyArray<HarnessScaffoldCase> = [
       "Read my on-demand portable rule `security-headers` and verify our HTTP response middleware matches it.",
     expectToolPrefix: "harness_rule_read",
     expectedArgsPattern: /security-headers/i,
+  },
+  {
+    id: "install-skill-package",
+    source: "Stage A portable skill authoring",
+    prompt: "Install the skill package in /workspace/release-notes into my T3 user skill library.",
+    expectToolPrefix: "harness_install_skill",
+    expectedArgsPattern: /release-notes/u,
   },
   {
     id: "ordinary-coding-control",

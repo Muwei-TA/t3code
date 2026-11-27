@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { confirmTwoStepRemoteAction } from "./confirmTwoStepRemoteAction";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import {
@@ -198,7 +199,50 @@ function EnvironmentHarnessSection({
   const [callbackUrl, setCallbackUrl] = useState("");
   const [finishingOAuth, setFinishingOAuth] = useState(false);
   const [oauthError, setOAuthError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<MobileHarnessTab>("mcp");
+  const [activeTab, setActiveTab] = useState<MobileHarnessTab>("skills");
+  const groups = [
+    {
+      title: gt("Skills & Plugins"),
+      tabs: [
+        ["skills", gt("Skills")],
+        ["plugins", gt("Plugins")],
+      ],
+    },
+    { title: gt("Tools (MCP)"), tabs: [["mcp", gt("MCP")]] },
+    {
+      title: gt("Context & Roles"),
+      tabs: [
+        ["rules", gt("Rules & AGENTS.md")],
+        ["modes", gt("Modes")],
+        ["commands", gt("Commands")],
+        ["memory", gt("Memory")],
+      ],
+    },
+    {
+      title: gt("Guardrails"),
+      tabs: [
+        ["hooks", gt("Hooks")],
+        ["permissions", gt("Approvals")],
+      ],
+    },
+    {
+      title: gt("Sync & Migration"),
+      tabs: [
+        ["sync", gt("Git Sync")],
+        ["transfer", gt("Import / Export")],
+      ],
+    },
+  ] as const;
+  const group = groups.find((entry) => entry.tabs.some(([tab]) => tab === activeTab)) ?? groups[0];
+  const canReadDelivery = useAtomValue(
+    harnessEnvironment.getDeliveryMatrix.permissionAtom(environmentId),
+  );
+  const delivery = useEnvironmentQuery(
+    canReadDelivery && (activeTab === "skills" || activeTab === "plugins")
+      ? harnessEnvironment.deliveryMatrixQuery({ environmentId, input: {} })
+      : null,
+  );
+
   const [addOpen, setAddOpen] = useState(false);
   const [newId, setNewId] = useState("");
   const [newTransportType, setNewTransportType] = useState<"http" | "sse" | "stdio">("http");
@@ -273,7 +317,11 @@ function EnvironmentHarnessSection({
     setOAuthError(gt("Sign-in is incomplete. Approve access or paste the callback address."));
   };
 
-  const servers = listQuery.data?.servers ?? [];
+  const servers = [...(listQuery.data?.servers ?? [])].sort(
+    (a, b) =>
+      Number(Boolean(b.config.pendingApproval || b.needsTrustConfirmation)) -
+      Number(Boolean(a.config.pendingApproval || a.needsTrustConfirmation)),
+  );
   const invalidEntries = listQuery.data?.invalidEntries ?? [];
 
   const commitToggleEnabled = async (server: HarnessMcpServerView, nextEnabled: boolean) => {
@@ -808,30 +856,45 @@ function EnvironmentHarnessSection({
               showsHorizontalScrollIndicator={false}
               contentContainerClassName="flex-row gap-2"
             >
-              {(
-                [
-                  ["mcp", gt("MCP")],
-                  ["modes", gt("Modes")],
-                  ["skills", gt("Skills")],
-                  ["rules", gt("Rules")],
-                  ["commands", gt("Commands")],
-                  ["plugins", gt("Plugins")],
-                  ["hooks", gt("Hooks")],
-                  ["memory", gt("Memory")],
-                  ["sync", gt("Git Sync")],
-                  ["permissions", gt("Permissions")],
-                  ["transfer", gt("Import / Export")],
-                ] as const
-              ).map(([tabKey, tabLabel]) => (
+              {groups.map((item) => (
                 <Button
-                  key={tabKey}
-                  label={tabLabel}
-                  tone={activeTab === tabKey ? "primary" : "secondary"}
-                  onPress={() => setActiveTab(tabKey)}
+                  key={item.title}
+                  label={item.title}
+                  tone={item === group ? "primary" : "secondary"}
+                  onPress={() => setActiveTab(item.tabs[0][0])}
                 />
               ))}
             </ScrollView>
-
+            {group.tabs.length > 1 ? (
+              <View className="flex-row flex-wrap gap-2">
+                {group.tabs.map(([tab, title]) => (
+                  <Button
+                    key={tab}
+                    label={title}
+                    tone={activeTab === tab ? "primary" : "secondary"}
+                    onPress={() => setActiveTab(tab)}
+                  />
+                ))}
+              </View>
+            ) : null}
+            {delivery.data ? (
+              <View className="flex-row flex-wrap gap-2">
+                {delivery.data.map((row) => (
+                  <Text
+                    key={row.providerInstanceId}
+                    accessibilityHint={row.notes}
+                    className="rounded-md bg-card-alt p-2 text-xs text-foreground"
+                  >
+                    {row.displayName} ·{" "}
+                    {row.skillDelivery === "native"
+                      ? gt("Native")
+                      : row.skillDelivery === "conditional-native"
+                        ? gt("Conditional native")
+                        : gt("Gateway")}
+                  </Text>
+                ))}
+              </View>
+            ) : null}
             {activeTab === "plugins" || activeTab === "hooks" ? (
               <SettingsHarnessPluginsHooksPanel
                 activeTab={activeTab}
@@ -923,9 +986,15 @@ function EnvironmentHarnessSection({
                                 {server.id}
                               </Text>
                               <Text className="text-xs text-foreground-muted">
-                                {server.config.transport.type.toUpperCase()} · {server.scope} ·{" "}
-                                {server.state} · {gt("{count} tools", { count: server.toolCount })}
+                                {server.config.transport.type.toUpperCase()} ·{" "}
+                                {server.pluginId ?? server.scope} · {server.state} ·{" "}
+                                {gt("{count} tools", { count: server.toolCount })}
                               </Text>
+                              {server.config.pendingApproval || server.needsTrustConfirmation ? (
+                                <Text className="font-t3-semibold text-foreground">
+                                  <T>Pending approval</T>
+                                </Text>
+                              ) : null}
                               {server.state === "auth_required" ||
                               server.oauthStatus === "required" ||
                               server.oauthStatus === "expired" ? (
@@ -938,7 +1007,21 @@ function EnvironmentHarnessSection({
                                 </Text>
                               ) : null}
                             </View>
-                            {server.scope === "user" ? (
+                            {server.pluginId ? (
+                              <Button
+                                label={gt("Plugin: {id}", { id: server.pluginId })}
+                                onPress={() => setActiveTab("plugins")}
+                              />
+                            ) : null}
+                            {server.config.pendingApproval &&
+                            !server.pluginId &&
+                            server.scope === "user" ? (
+                              <Button
+                                label={gt("Approve & Enable")}
+                                disabled={!canTrustServer || busyId === server.id}
+                                onPress={() => void commitToggleEnabled(server, true)}
+                              />
+                            ) : !server.pluginId && server.scope === "user" ? (
                               <Switch
                                 value={server.config.enabled}
                                 disabled={
@@ -1020,9 +1103,9 @@ function EnvironmentHarnessSection({
                                 onPress={() => void handleOpenLogs(server)}
                               />
                             ) : null}
-                            {server.scope === "user" ? (
+                            {!server.pluginId && server.scope === "user" ? (
                               <Button
-                                label={gt("Remove")}
+                                label={server.config.pendingApproval ? gt("Reject") : gt("Remove")}
                                 tone="secondary"
                                 disabled={!canWriteSettings || busyId === server.id}
                                 onPress={() => handleRemove(server)}

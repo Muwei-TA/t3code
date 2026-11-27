@@ -72,7 +72,7 @@ export const T3_CODE_HARNESS_PROPOSE_PLAN_NOTE =
 
 /** Fixed scaffold emitted only when portable skills or on-demand rules ride on `/mcp/harness`; guarded by AgentContextBudget. */
 export const T3_CODE_HARNESS_SCAFFOLD_INSTRUCTIONS = `<t3_harness>
-Portable personal harness tools are available on the \`t3-harness\` MCP server: use \`harness_skill_search\` and \`harness_skill_load\` to discover or read portable skills, and \`harness_rule_read\` to read on-demand or overflow rules on request.
+Use harness_skill_search and harness_skill_load for portable skills, harness_rule_read for on-demand rules. To change skills, rules, commands, modes, workflows, MCP servers, hooks or plugins, start with harness_inspect. Save to the T3 library with harness_install_skill, harness_manage_*, harness_propose_* or harness_install_plugin.
 </t3_harness>`;
 
 const T3_CODE_ACP_PLAN_MODE_INSTRUCTIONS = `${T3_CODE_HARNESS_PLAN_MODE_INSTRUCTIONS} Treat this mode as active until T3 Code supplies a different interaction-mode instruction.`;

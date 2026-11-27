@@ -22,6 +22,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -155,6 +156,62 @@ const makeGatewayTestLayer = (
 };
 
 describe("McpGateway", () => {
+  it.effect("drains an in-flight plugin connection when its registration closes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped();
+      const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+      const starting = yield* Deferred.make<void>();
+      const ready = yield* Deferred.make<void>();
+      let closes = 0;
+      const connect: typeof connectUpstream = () =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(starting, undefined);
+          yield* Deferred.await(ready);
+          return {
+            listTools: () => Effect.succeed([]),
+            callTool: () => Effect.succeed({ content: [] }),
+            isClosed: () => closes > 0,
+            close: () =>
+              Effect.sync(() => {
+                closes++;
+              }),
+          };
+        });
+      yield* Effect.gen(function* () {
+        const gateway = yield* McpGateway.McpGateway;
+        const store = yield* HarnessStore.HarnessStore;
+        const scope = yield* Scope.make();
+        const id = HarnessMcpServerId.make("plugin-demo-local");
+        yield* store
+          .registerPluginServers(
+            "demo",
+            {
+              [id]: {
+                enabled: true,
+                transport: { type: "stdio", command: "example" },
+                injectionMode: "gateway",
+                approvalPolicy: "auto-read",
+              },
+            },
+            Effect.succeed(true),
+          )
+          .pipe(Effect.provideService(Scope.Scope, scope));
+        expect((yield* gateway.getSnapshot()).servers[0]?.pluginId).toBe("demo");
+        const start = yield* gateway.restartServer({ serverId: id }).pipe(Effect.forkChild);
+        yield* Deferred.await(starting);
+        const removal = yield* Scope.close(scope, Exit.void).pipe(Effect.forkChild);
+        yield* Deferred.succeed(ready, undefined);
+        yield* Fiber.await(start);
+        yield* Fiber.join(removal);
+        expect(closes).toBe(1);
+        expect((yield* gateway.getSnapshot()).servers).toEqual([]);
+        expect((yield* gateway.restartServer({ serverId: id }).pipe(Effect.flip)).code).toBe(
+          "not_found",
+        );
+      }).pipe(Effect.provide(makeGatewayTestLayer(baseDir, paths, { connect })));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect.each([false, true])(
     "lists plugin packing only when policy allows it (%s)",
     (denyPlugins) =>

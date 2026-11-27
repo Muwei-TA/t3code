@@ -951,6 +951,7 @@ export const AcpProviderCapabilitiesV2 = {
     skillMount: "none",
     systemContextMutableMidSession: false,
     maxSystemContextBytes: null,
+    readsProjectAgentsMd: false,
     nativeToolHooks: false,
     nativeAllowAlways: true,
     planReadOnlyEnforcement: "advisory",

@@ -14,6 +14,20 @@ describe("harness-scaffold eval grader", () => {
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(400);
   });
 
+  it("requires inspection before installing into the T3 library", () => {
+    const target = HARNESS_SCAFFOLD_CASES.find((c) => c.id === "install-skill-package")!;
+    const install = {
+      name: "harness_install_skill",
+      argumentsJson: '{"sourceDir":"/workspace/release-notes"}',
+    };
+    expect(gradeHarnessScaffoldTurn(target, [install]).passed).toBe(false);
+    expect(
+      gradeHarnessScaffoldTurn(target, [{ name: "harness_inspect", argumentsJson: "{}" }, install])
+        .passed,
+    ).toBe(true);
+    expect(T3_CODE_HARNESS_SCAFFOLD_INSTRUCTIONS).toContain("harness_install_skill");
+  });
+
   it("grades portable skill discovery, on-demand rule reads, and ordinary control cases accurately", () => {
     const skillCase = HARNESS_SCAFFOLD_CASES.find((c) => c.id === "discover-portable-skill")!;
     const ruleCase = HARNESS_SCAFFOLD_CASES.find((c) => c.id === "read-overflow-rule")!;

@@ -21,12 +21,16 @@ export function gradeHarnessScaffoldTurn(
   evalCase: HarnessScaffoldCase,
   toolCalls: ReadonlyArray<RecordedToolCall>,
 ): HarnessScaffoldGradeResult {
-  const harnessCalls = toolCalls.filter(
-    (call) =>
-      call.name === "harness_skill_search" ||
-      call.name === "harness_skill_load" ||
-      call.name === "harness_rule_read",
-  );
+  const harnessCalls = toolCalls.filter((call) => call.name.startsWith("harness_"));
+  if (
+    evalCase.expectToolPrefix === "harness_install_skill" &&
+    harnessCalls[0]?.name !== "harness_inspect"
+  ) {
+    return {
+      passed: false,
+      reason: "Inspect the available T3 library before installing a package.",
+    };
+  }
 
   if (evalCase.expectToolPrefix === "none") {
     if (harnessCalls.length === 0) {

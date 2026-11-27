@@ -24,7 +24,6 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { toastManager } from "../ui/toast";
 import { SettingsSection } from "./settingsLayout";
 import { settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
-import { useSearchableSetting } from "./settingsSearch";
 
 export function HarnessEnvironmentSync({
   environmentId,
@@ -32,7 +31,6 @@ export function HarnessEnvironmentSync({
   readonly environmentId: EnvironmentId;
 }) {
   const gt = useGT();
-  const setting = useSearchableSetting();
   const { environments } = useEnvironments();
   const writableIds = useEnvironmentsWithScope(environments, AuthSettingsWriteScope);
   const canExport = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
@@ -175,7 +173,7 @@ export function HarnessEnvironmentSync({
     (preview?.mcpServerDiffs.length ?? 0) > 0;
   return (
     <SettingsSection
-      {...setting("harness-mcp")}
+      id="harness-environment-sync"
       title={gt("Push to another connected environment")}
     >
       <div className="space-y-3 px-4 py-3 text-sm">

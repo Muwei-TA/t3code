@@ -69,6 +69,7 @@ import { withImplicitFastModeSelection } from "../../lib/providerOptions";
 import { useProjects, useEnvironmentServerConfig } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { usePaginatedBranches } from "../../state/queries";
+import { harnessEnvironment } from "../../state/harness";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { resolveNewTaskBranchLabel } from "../threads/new-task-context-presentation";
@@ -748,6 +749,14 @@ function TaskForm({
           project.id === draft.task?.projectId),
     )
     .sort((left, right) => Number(right.pinnedAt != null) - Number(left.pinnedAt != null));
+  const workspaceRoot = projects.find((project) => project.id === draft.projectId)?.workspaceRoot;
+  const library = useEnvironmentQuery(
+    harnessEnvironment.libraryQuery({
+      environmentId,
+      input: workspaceRoot ? { workspaceRoot } : {},
+    }),
+  );
+  const availableModes = (library.data?.modes ?? []).filter((mode) => mode.effectiveEnabled);
   const automaticBaseRef = draft.workspace === "worktree" && !draft.baseRef.trim();
   const automaticBaseRefCwd = automaticBaseRef
     ? (projects.find((project) => project.id === draft.projectId)?.workspaceRoot ?? null)
@@ -901,8 +910,13 @@ function TaskForm({
       runtimeMode:
         clampManagedRuntimeMode(config?.managedPolicy, draft.runtimeMode) ?? draft.runtimeMode,
       interactionMode:
-        draft.modeId === "plan" ? "plan" : (draft.task?.interactionMode ?? "default"),
-      ...(draft.modeId ? { modeId: HarnessModeId.make(draft.modeId) } : {}),
+        availableModes.find((mode) => mode.id === draft.modeId)?.baseInteractionMode ??
+        (draft.modeId === "plan"
+          ? "plan"
+          : draft.modeId && draft.modeId === draft.task?.modeId
+            ? draft.task.interactionMode
+            : "default"),
+      modeId: draft.modeId ? HarnessModeId.make(draft.modeId) : null,
       creationSource: draft.task?.creationSource ?? "mobile",
     };
     submissionPending.current = true;
@@ -1090,15 +1104,8 @@ function TaskForm({
           <SelectRow
             label={gt("Mode")}
             value={
-              draft.modeId === "build"
-                ? gt("Build")
-                : draft.modeId === "plan"
-                  ? gt("Plan")
-                  : draft.modeId === "review"
-                    ? gt("Review")
-                    : draft.modeId === "creator"
-                      ? gt("Creator")
-                      : draft.modeId || gt("Default")
+              availableModes.find((mode) => mode.id === draft.modeId)?.name ??
+              (draft.modeId || gt("Default"))
             }
             actions={[
               {
@@ -1106,26 +1113,11 @@ function TaskForm({
                 title: gt("Default"),
                 state: draft.modeId === "" ? "on" : undefined,
               },
-              {
-                id: "build",
-                title: gt("Build"),
-                state: draft.modeId === "build" ? "on" : undefined,
-              },
-              {
-                id: "plan",
-                title: gt("Plan"),
-                state: draft.modeId === "plan" ? "on" : undefined,
-              },
-              {
-                id: "review",
-                title: gt("Review"),
-                state: draft.modeId === "review" ? "on" : undefined,
-              },
-              {
-                id: "creator",
-                title: gt("Creator"),
-                state: draft.modeId === "creator" ? "on" : undefined,
-              },
+              ...availableModes.map((mode) => ({
+                id: mode.id,
+                title: mode.name,
+                state: draft.modeId === mode.id ? ("on" as const) : undefined,
+              })),
             ]}
             onSelect={(id) => {
               setDraft((current) => ({ ...current, modeId: id === "__default__" ? "" : id }));

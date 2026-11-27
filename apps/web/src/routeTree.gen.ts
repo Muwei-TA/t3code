@@ -24,11 +24,13 @@ import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
 import { Route as ChatIssuesRouteImport } from './routes/_chat.issues'
+import { Route as ChatHarnessRouteImport } from './routes/_chat.harness'
 import { Route as ChatAutomationsRouteImport } from './routes/_chat.automations'
 import { Route as ThreadsEnvironmentIdThreadIdRouteImport } from './routes/threads.$environmentId.$threadId'
 import { Route as ChatSettingsWorktreesRouteImport } from './routes/_chat.settings.worktrees'
 import { Route as ChatSettingsVoiceRouteImport } from './routes/_chat.settings.voice'
 import { Route as ChatSettingsThreadsRouteImport } from './routes/_chat.settings.threads'
+import { Route as ChatSettingsSyncRouteImport } from './routes/_chat.settings.sync'
 import { Route as ChatSettingsStorageRouteImport } from './routes/_chat.settings.storage'
 import { Route as ChatSettingsSourceControlRouteImport } from './routes/_chat.settings.source-control'
 import { Route as ChatSettingsSnapShotRouteImport } from './routes/_chat.settings.snap-shot'
@@ -132,6 +134,11 @@ const ChatIssuesRoute = ChatIssuesRouteImport.update({
   path: '/issues',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatHarnessRoute = ChatHarnessRouteImport.update({
+  id: '/harness',
+  path: '/harness',
+  getParentRoute: () => ChatRoute,
+} as any)
 const ChatAutomationsRoute = ChatAutomationsRouteImport.update({
   id: '/automations',
   path: '/automations',
@@ -156,6 +163,11 @@ const ChatSettingsVoiceRoute = ChatSettingsVoiceRouteImport.update({
 const ChatSettingsThreadsRoute = ChatSettingsThreadsRouteImport.update({
   id: '/threads',
   path: '/threads',
+  getParentRoute: () => ChatSettingsRoute,
+} as any)
+const ChatSettingsSyncRoute = ChatSettingsSyncRouteImport.update({
+  id: '/sync',
+  path: '/sync',
   getParentRoute: () => ChatSettingsRoute,
 } as any)
 const ChatSettingsStorageRoute = ChatSettingsStorageRouteImport.update({
@@ -316,6 +328,7 @@ export interface FileRoutesByFullPath {
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
   '/automations': typeof ChatAutomationsRoute
+  '/harness': typeof ChatHarnessRoute
   '/issues': typeof ChatIssuesRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
@@ -350,6 +363,7 @@ export interface FileRoutesByFullPath {
   '/settings/snap-shot': typeof ChatSettingsSnapShotRoute
   '/settings/source-control': typeof ChatSettingsSourceControlRoute
   '/settings/storage': typeof ChatSettingsStorageRoute
+  '/settings/sync': typeof ChatSettingsSyncRoute
   '/settings/threads': typeof ChatSettingsThreadsRoute
   '/settings/voice': typeof ChatSettingsVoiceRoute
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
@@ -364,6 +378,7 @@ export interface FileRoutesByTo {
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
   '/automations': typeof ChatAutomationsRoute
+  '/harness': typeof ChatHarnessRoute
   '/issues': typeof ChatIssuesRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
@@ -399,6 +414,7 @@ export interface FileRoutesByTo {
   '/settings/snap-shot': typeof ChatSettingsSnapShotRoute
   '/settings/source-control': typeof ChatSettingsSourceControlRoute
   '/settings/storage': typeof ChatSettingsStorageRoute
+  '/settings/sync': typeof ChatSettingsSyncRoute
   '/settings/threads': typeof ChatSettingsThreadsRoute
   '/settings/voice': typeof ChatSettingsVoiceRoute
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
@@ -415,6 +431,7 @@ export interface FileRoutesById {
   '/pair': typeof PairRoute
   '/welcome': typeof WelcomeRoute
   '/_chat/automations': typeof ChatAutomationsRoute
+  '/_chat/harness': typeof ChatHarnessRoute
   '/_chat/issues': typeof ChatIssuesRoute
   '/_chat/new': typeof ChatNewRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
@@ -450,6 +467,7 @@ export interface FileRoutesById {
   '/_chat/settings/snap-shot': typeof ChatSettingsSnapShotRoute
   '/_chat/settings/source-control': typeof ChatSettingsSourceControlRoute
   '/_chat/settings/storage': typeof ChatSettingsStorageRoute
+  '/_chat/settings/sync': typeof ChatSettingsSyncRoute
   '/_chat/settings/threads': typeof ChatSettingsThreadsRoute
   '/_chat/settings/voice': typeof ChatSettingsVoiceRoute
   '/_chat/settings/worktrees': typeof ChatSettingsWorktreesRoute
@@ -467,6 +485,7 @@ export interface FileRouteTypes {
     | '/pair'
     | '/welcome'
     | '/automations'
+    | '/harness'
     | '/issues'
     | '/new'
     | '/pull-requests'
@@ -501,6 +520,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/sync'
     | '/settings/threads'
     | '/settings/voice'
     | '/settings/worktrees'
@@ -515,6 +535,7 @@ export interface FileRouteTypes {
     | '/pair'
     | '/welcome'
     | '/automations'
+    | '/harness'
     | '/issues'
     | '/new'
     | '/pull-requests'
@@ -550,6 +571,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/sync'
     | '/settings/threads'
     | '/settings/voice'
     | '/settings/worktrees'
@@ -565,6 +587,7 @@ export interface FileRouteTypes {
     | '/pair'
     | '/welcome'
     | '/_chat/automations'
+    | '/_chat/harness'
     | '/_chat/issues'
     | '/_chat/new'
     | '/_chat/pull-requests'
@@ -600,6 +623,7 @@ export interface FileRouteTypes {
     | '/_chat/settings/snap-shot'
     | '/_chat/settings/source-control'
     | '/_chat/settings/storage'
+    | '/_chat/settings/sync'
     | '/_chat/settings/threads'
     | '/_chat/settings/voice'
     | '/_chat/settings/worktrees'
@@ -726,6 +750,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatIssuesRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/harness': {
+      id: '/_chat/harness'
+      path: '/harness'
+      fullPath: '/harness'
+      preLoaderRoute: typeof ChatHarnessRouteImport
+      parentRoute: typeof ChatRoute
+    }
     '/_chat/automations': {
       id: '/_chat/automations'
       path: '/automations'
@@ -759,6 +790,13 @@ declare module '@tanstack/react-router' {
       path: '/threads'
       fullPath: '/settings/threads'
       preLoaderRoute: typeof ChatSettingsThreadsRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/sync': {
+      id: '/_chat/settings/sync'
+      path: '/sync'
+      fullPath: '/settings/sync'
+      preLoaderRoute: typeof ChatSettingsSyncRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
     '/_chat/settings/storage': {
@@ -986,6 +1024,7 @@ interface ChatSettingsRouteChildren {
   ChatSettingsSnapShotRoute: typeof ChatSettingsSnapShotRoute
   ChatSettingsSourceControlRoute: typeof ChatSettingsSourceControlRoute
   ChatSettingsStorageRoute: typeof ChatSettingsStorageRoute
+  ChatSettingsSyncRoute: typeof ChatSettingsSyncRoute
   ChatSettingsThreadsRoute: typeof ChatSettingsThreadsRoute
   ChatSettingsVoiceRoute: typeof ChatSettingsVoiceRoute
   ChatSettingsWorktreesRoute: typeof ChatSettingsWorktreesRoute
@@ -1017,6 +1056,7 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsSnapShotRoute: ChatSettingsSnapShotRoute,
   ChatSettingsSourceControlRoute: ChatSettingsSourceControlRoute,
   ChatSettingsStorageRoute: ChatSettingsStorageRoute,
+  ChatSettingsSyncRoute: ChatSettingsSyncRoute,
   ChatSettingsThreadsRoute: ChatSettingsThreadsRoute,
   ChatSettingsVoiceRoute: ChatSettingsVoiceRoute,
   ChatSettingsWorktreesRoute: ChatSettingsWorktreesRoute,
@@ -1028,6 +1068,7 @@ const ChatSettingsRouteWithChildren = ChatSettingsRoute._addFileChildren(
 
 interface ChatRouteChildren {
   ChatAutomationsRoute: typeof ChatAutomationsRoute
+  ChatHarnessRoute: typeof ChatHarnessRoute
   ChatIssuesRoute: typeof ChatIssuesRoute
   ChatNewRoute: typeof ChatNewRoute
   ChatPullRequestsRoute: typeof ChatPullRequestsRoute
@@ -1042,6 +1083,7 @@ interface ChatRouteChildren {
 
 const ChatRouteChildren: ChatRouteChildren = {
   ChatAutomationsRoute: ChatAutomationsRoute,
+  ChatHarnessRoute: ChatHarnessRoute,
   ChatIssuesRoute: ChatIssuesRoute,
   ChatNewRoute: ChatNewRoute,
   ChatPullRequestsRoute: ChatPullRequestsRoute,

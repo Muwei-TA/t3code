@@ -33,7 +33,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
-import * as Semaphore from "effect/Semaphore";
+import type * as Semaphore from "effect/Semaphore";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import {
@@ -57,6 +57,8 @@ import * as HarnessApprovalAuditStore from "./HarnessApprovalAuditStore.ts";
 
 const HARNESS_TOOL_SEARCH_NAME = "harness_tool_search";
 export const HARNESS_PROPOSE_PLAN_NAME = "propose_plan";
+import { managementTools } from "./harnessManagement.ts";
+
 export const HARNESS_SKILL_SEARCH_NAME = "harness_skill_search";
 export const HARNESS_SKILL_LOAD_NAME = "harness_skill_load";
 export const HARNESS_RULE_READ_NAME = "harness_rule_read";
@@ -233,6 +235,7 @@ export interface GatewaySessionInjection {
 }
 
 interface PooledUpstream {
+  readonly pluginId?: string;
   readonly serverId: HarnessMcpServerId;
   readonly scopeKey: string;
   readonly configDigest: string;
@@ -621,8 +624,7 @@ const HARNESS_WRITE_SKILL_DEF: GatewayExposedTool = {
   exposedName: HARNESS_WRITE_SKILL_NAME,
   serverId: null,
   upstreamName: HARNESS_WRITE_SKILL_NAME,
-  description:
-    "Create or update a portable SKILL.md under ~/.t3/harness/skills/<id>/SKILL.md (available in Creator Mode).",
+  description: "Create or update a portable SKILL.md in the T3 personal skill library.",
   inputSchema: {
     type: "object",
     properties: {
@@ -641,8 +643,7 @@ const HARNESS_CREATE_MODE_DEF: GatewayExposedTool = {
   exposedName: HARNESS_CREATE_MODE_NAME,
   serverId: null,
   upstreamName: HARNESS_CREATE_MODE_NAME,
-  description:
-    "Create or update a declarative portable mode under ~/.t3/harness/modes/<id>.md (available in Creator Mode).",
+  description: "Create a new declarative mode in the T3 personal mode library.",
   inputSchema: {
     type: "object",
     properties: {
@@ -685,7 +686,7 @@ const HARNESS_PLUGIN_PACK_DEF: GatewayExposedTool = {
   serverId: null,
   upstreamName: HARNESS_PLUGIN_PACK_NAME,
   description:
-    "Create or refresh t3-plugin.json for a plugin under ~/.t3/harness/plugins/<id> and compute its SHA-256 content digest for owner trust review (available in Creator Mode).",
+    "Create or refresh t3-plugin.json for a plugin in the T3 plugin library and compute its SHA-256 content digest for owner trust review.",
   inputSchema: {
     type: "object",
     properties: {
@@ -876,7 +877,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         stateByDigest: new Map(),
         toolsByUpstream: new Map(),
         logs: new RingLogBuffer(),
-        lock: Semaphore.makeUnsafe(1),
+        lock: store.serverLifecycleLock(serverId),
       };
       records.set(serverId, record);
     }
@@ -919,6 +920,16 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       }
     }
   });
+
+  yield* store.onPluginServerRemoved(
+    Effect.fn("McpGateway.closePluginServer")(function* (serverId, pluginId) {
+      for (const [key, upstream] of pool) {
+        if (upstream.serverId !== serverId || upstream.pluginId !== pluginId) continue;
+        yield* closePooled(key);
+        records.get(serverId)?.stateByDigest.delete(upstream.scopeKey);
+      }
+    }),
+  );
 
   /** Acquires the per-server lifecycle lock so invalidation and startup never race or leak children. */
   const closeAllForServer = Effect.fn("McpGateway.closeAllForServer")(function* (
@@ -1035,7 +1046,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     const scopeKey = runtimeScopeKey(server);
     const key = poolKeyFor(server);
     const existing = pool.get(key);
-    if (existing && !existing.connection.isClosed()) {
+    if (existing && existing.pluginId === server.pluginId && !existing.connection.isClosed()) {
       existing.lastUsedMs = yield* Clock.currentTimeMillis;
       return existing;
     }
@@ -1137,6 +1148,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       const now = yield* Clock.currentTimeMillis;
       const pooled: PooledUpstream = {
         serverId: server.id,
+        ...(server.pluginId ? { pluginId: server.pluginId } : {}),
         scopeKey,
         configDigest: server.configDigest,
         transportType: server.config.transport.type,
@@ -1270,6 +1282,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     return {
       id: server.id,
       scope: server.scope,
+      ...(server.pluginId ? { pluginId: server.pluginId } : {}),
       config: redactHarnessServerConfig(server.config),
       configDigest: server.configDigest,
       effectiveEnabled: server.effectiveEnabled,
@@ -1690,7 +1703,19 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         HARNESS_WORKFLOW_VALIDATE_DEF,
       );
     }
-    if (context.includeCreatorTools) {
+    if (context.includeLibraryTools || context.includeCreatorTools) {
+      listed.push(
+        ...managementTools.filter(
+          (tool) =>
+            tool.readOnly ||
+            ((tool.exposedName !== "harness_install_plugin" || store.managedPolicyAllowsPlugins) &&
+              checkHarnessRuntimeToolCeiling({
+                ...context,
+                toolName: tool.exposedName,
+                readOnly: false,
+              }) === null),
+        ),
+      );
       const canWriteCreator =
         checkHarnessRuntimeToolCeiling({
           toolName: HARNESS_WRITE_SKILL_NAME,
@@ -1705,7 +1730,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       if (!context.includeLibraryTools) {
         listed.push(HARNESS_WORKFLOW_VALIDATE_DEF);
       }
-      if (canWriteCreator && store.managedPolicyAllowsPlugins) {
+      if (canWriteCreator && context.includeCreatorTools && store.managedPolicyAllowsPlugins) {
         listed.push(HARNESS_PLUGIN_PACK_DEF);
       }
     }
