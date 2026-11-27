@@ -260,12 +260,17 @@ do {
   defer { UIPasteboard.general.items = savedItems }
   let editor = ComposerTextView()
   editor.hostedThreadLinkPrefix = "https://lightning.example/threads/"
-  var pastedLink: String?
-  editor.onPasteContext = { pastedLink = $0["text"] }
-  let link = "https://lightning.example/threads/demo/thread"
-  UIPasteboard.general.items = [[UTType.utf8PlainText.identifier: link]]
-  editor.paste(nil)
-  check(pastedLink == link, "A single plain-text link from the configured host must reach the context importer")
+  var pastedLinks: [String] = []
+  editor.onPasteContext = { if let text = $0["text"] { pastedLinks.append(text) } }
+  let links = [
+    "https://lightning.example/threads/demo/thread",
+    "lightningcode-preview://threads/demo/thread",
+  ]
+  for link in links {
+    UIPasteboard.general.items = [[UTType.utf8PlainText.identifier: link]]
+    editor.paste(nil)
+  }
+  check(pastedLinks == links, "Single plain-text thread links must reach the context importer")
 }
 
 // Two-frame animated GIF: a mixed paste keeps the GIF's original bytes and the still image's PNG, in order.

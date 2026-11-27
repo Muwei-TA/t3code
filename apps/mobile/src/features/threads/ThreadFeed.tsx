@@ -87,8 +87,8 @@ import {
 } from "@t3tools/contracts";
 import type { ToolCallVisibility } from "@t3tools/contracts/settings";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
-import { hasThreadLinks, hostedThreadLink, parseThreadLinkHref } from "@t3tools/shared/threadLinks";
-import { hostedThreadLinkOrigin } from "../../lib/hostedThreadLinkOrigin";
+import { hasThreadLinks, parseThreadLinkHref, threadShareHref } from "@t3tools/shared/threadLinks";
+import { hostedThreadLinkOrigin, mobileThreadShareOptions } from "../../lib/hostedThreadLinkOrigin";
 import { PROMPT_LINK_MAX_PROMPT_LENGTH } from "@t3tools/shared/promptLinks";
 import {
   parseComposerContextHref,
@@ -3612,7 +3612,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       if (thread) {
         if (actionId === "open-thread") onMarkdownLinkPress(href);
         else if (actionId === "copy-thread-link") {
-          copyTextWithHaptic(hostedThreadLink(thread, hostedThreadLinkOrigin));
+          copyTextWithHaptic(threadShareHref(thread, mobileThreadShareOptions));
         }
         return;
       }

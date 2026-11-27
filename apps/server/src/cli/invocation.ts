@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 
 import type { ServerInstallation } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { CLI_NPM_PACKAGE_NAME } from "@t3tools/shared/cliRelease";
 import { resolveCommandPath } from "@t3tools/shared/shell";
 
 import packageJson from "../../package.json" with { type: "json" };
@@ -44,28 +45,56 @@ export function detectCliRunner(entryPath: string): CliRunner | null {
 }
 
 const InstallManifest = Schema.Struct({
-  name: Schema.String,
+  name: Schema.Literals([CLI_NPM_PACKAGE_NAME, "t3"]),
   version: Schema.String,
-  bin: Schema.optionalKey(Schema.Struct({ lightning: Schema.String })),
+  bin: Schema.Struct({ lightning: Schema.String }),
 });
 const decodeInstallManifest = Schema.decodeUnknownEffect(Schema.fromJsonString(InstallManifest));
+const NPM_GLOBAL_ENTRY =
+  /^(?<modulesParent>.*\/)node_modules\/(?<name>(?:@[^/]+\/)?[^/]+)\/(?:dist\/bin\.mjs|bin\/t3\.mjs)$/;
+
+// npm's cmd-shim expands the Node shebang into this wrapper. An exact match rules out
+// a custom wrapper that happens to mention or chain to the installed package.
+const matchesNpmWindowsShim = (contents: string, relativeEntry: string) =>
+  contents.replaceAll("\r\n", "\n") ===
+  [
+    "@ECHO off",
+    "GOTO start",
+    ":find_dp0",
+    "SET dp0=%~dp0",
+    "EXIT /b",
+    ":start",
+    "SETLOCAL",
+    "CALL :find_dp0",
+    "",
+    'IF EXIST "%dp0%\\node.exe" (',
+    '  SET "_prog=%dp0%\\node.exe"',
+    ") ELSE (",
+    '  SET "_prog=node"',
+    "  SET PATHEXT=%PATHEXT:;.JS;=;%",
+    ")",
+    "",
+    `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\${relativeEntry.replaceAll("/", "\\")}" %*`,
+    "",
+  ].join("\n");
 
 /**
- * `T3CODE_NPM_LAUNCHER_PATH` is inherited by child shells, so accept it only for this package
- * version to avoid claiming another `t3` invocation is the npm install.
+ * `T3CODE_NPM_LAUNCHER_PATH` is inherited by child shells. Check the version and bin
+ * target, since the legacy package name also belongs to upstream T3 Code.
  */
 export const resolveEntryPath = Effect.gen(function* () {
   const npmLauncher = (yield* HostProcess.Environment).T3CODE_NPM_LAUNCHER_PATH?.trim();
   if (npmLauncher) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const packageRoot = path.dirname(path.dirname(npmLauncher));
     const manifest = yield* fs
-      .readFileString(path.join(path.dirname(npmLauncher), "../package.json"))
+      .readFileString(path.join(packageRoot, "package.json"))
       .pipe(Effect.flatMap(decodeInstallManifest), Effect.option);
     if (
       Option.isSome(manifest) &&
-      manifest.value.name === "t3" &&
-      manifest.value.version === packageJson.version
+      manifest.value.version === packageJson.version &&
+      path.resolve(packageRoot, manifest.value.bin.lightning) === path.resolve(npmLauncher)
     ) {
       return npmLauncher;
     }
@@ -127,8 +156,15 @@ export const resolveServerInstallation = Effect.gen(function* () {
       baseDir: linked || "/",
     } satisfies ServerInstallation;
   }
-  const match = /^(.*)\/lib\/node_modules\/t3\/(?:dist\/bin\.mjs|bin\/t3\.mjs)$/.exec(entry);
-  if (!match) {
+  const windows = platform === "win32";
+  const match = NPM_GLOBAL_ENTRY.exec(entry.replaceAll("\\", "/"))?.groups;
+  const modulesParent = match?.modulesParent;
+  const name = match?.name;
+  if (
+    modulesParent === undefined ||
+    (!windows && !modulesParent.endsWith("/lib/")) ||
+    (name !== CLI_NPM_PACKAGE_NAME && name !== "t3")
+  ) {
     if (runner === null) return null;
     const node = yield* HostProcess.ExecutablePath;
     return {
@@ -138,24 +174,36 @@ export const resolveServerInstallation = Effect.gen(function* () {
         : {}),
     } satisfies ServerInstallation;
   }
-  if (platform === "win32") return null;
-  const prefix = match[1] || "/";
+  const rawPrefix = windows ? modulesParent : modulesParent.slice(0, -"lib/".length);
   if (
-    prefix.includes("/node_modules/") ||
-    /\/(?:Cellar|Caskroom)\//i.test(prefix) ||
-    /\/mise\/installs\/(?!node\/)[^/]+\//.test(prefix)
+    /(?:^|\/)node_modules\//i.test(rawPrefix) ||
+    /\/(?:Cellar|Caskroom)\//i.test(rawPrefix) ||
+    /\/mise\/installs\/(?!node\/)[^/]+\//.test(rawPrefix)
   )
     return null;
 
-  const packageRoot = path.join(prefix, "lib/node_modules/t3");
+  const prefix = path.resolve(rawPrefix);
+  const packageRoot = path.dirname(path.dirname(entry));
   const manifest = yield* fs
     .readFileString(path.join(packageRoot, "package.json"))
     .pipe(Effect.flatMap(decodeInstallManifest));
-  if (manifest.name !== "t3" || !manifest.bin) return null;
-  const bin = yield* fs.realPath(path.join(packageRoot, manifest.bin.lightning));
-  const globalBin = yield* fs.realPath(path.join(prefix, "bin", LIGHTNING_BRAND.cliCommand));
-  if (globalBin !== bin || bin !== entry) return null;
-  return { kind: "npm-global", prefix } satisfies ServerInstallation;
+  if (manifest.name !== name) return null;
+  const bin = path.resolve(packageRoot, manifest.bin.lightning);
+  if ((yield* fs.realPath(bin)) !== entry) return null;
+  if (windows) {
+    const contents = yield* fs.readFileString(
+      path.join(prefix, `${LIGHTNING_BRAND.cliCommand}.cmd`),
+    );
+    if (!matchesNpmWindowsShim(contents, path.relative(prefix, bin))) return null;
+  } else {
+    const globalBin = yield* fs.realPath(path.join(prefix, "bin", LIGHTNING_BRAND.cliCommand));
+    if (globalBin !== entry) return null;
+  }
+  return {
+    kind: "npm-global",
+    prefix,
+    ...(manifest.name === "t3" ? { legacyPackage: true } : {}),
+  } satisfies ServerInstallation;
 }).pipe(Effect.orElseSucceed(() => null));
 
 const shellWord = (value: string) =>

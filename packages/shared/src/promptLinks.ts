@@ -195,9 +195,15 @@ export function buildNewThreadLink(input: {
   readonly repository?: PromptLinkRepository | null;
   readonly provider?: string | null;
   readonly model?: string | null;
-  readonly origin?: string;
+  readonly origin?: string | undefined;
+  readonly appScheme?: string | undefined;
 }): string {
-  const url = new URL("/new", input.origin ?? DEFAULT_HOSTED_APP_URL);
+  const hosted = input.origin?.trim();
+  const webUrl = hosted ? parseUrl("/new", hosted) : null;
+  const url =
+    webUrl?.protocol === "https:" || webUrl?.protocol === "http:"
+      ? webUrl
+      : new URL(`${input.appScheme ?? LIGHTNING_BRAND.urlScheme}://new`);
   url.searchParams.set("prompt", input.prompt);
   if (input.repository) {
     url.searchParams.set("repo", `${input.repository.owner}/${input.repository.name}`);

@@ -59,6 +59,40 @@ describe("versionSkew", () => {
       }),
     ).toBe("'/opt/local/bin/node' '/cache with spaces/_npx/cli/bin.mjs' update 0.0.45");
   });
+
+  const exactRelease =
+    "https://github.com/Muwei-TA/t3code/releases/download/v0.0.45-nightly.20261127.4/t3.tgz";
+  it.each([
+    ["npx", `npx --yes --package '${exactRelease}' -- lightning`],
+    ["pnpm-dlx", `pnpm --package='${exactRelease}' dlx lightning`],
+    ["bunx", `bunx --package '${exactRelease}' lightning`],
+  ] as const)("relaunches old %s installs from the exact Lightning release", (kind, command) => {
+    expect(manualServerUpdateCommand("0.0.45-nightly.20261127.4", { kind })).toBe(command);
+  });
+
+  it("relaunches a legacy global install without overwriting its executable", () => {
+    expect(
+      manualServerUpdateCommand("0.0.45-nightly.20261127.4", {
+        kind: "npm-global",
+        prefix: "/opt/node",
+        legacyPackage: true,
+      }),
+    ).toBe(`npx --yes --package '${exactRelease}' -- lightning`);
+  });
+
+  it("uses the Node command shims when copying commands for PowerShell", () => {
+    expect(manualServerUpdateCommand("0.0.45-nightly.20261127.4", { kind: "npx" }, "windows")).toBe(
+      `npx.cmd --yes --package '${exactRelease}' -- lightning`,
+    );
+    expect(
+      manualServerUpdateCommand(
+        "0.0.45-nightly.20261127.4",
+        { kind: "npm-global", prefix: "C:\\Maria's tools" },
+        "windows",
+      ),
+    ).toBe(`npm.cmd install --global --prefix 'C:\\Maria''s tools' '${exactRelease}'`);
+  });
+
   beforeEach(() => {
     branding.APP_VERSION = "0.0.34";
   });

@@ -69,7 +69,11 @@ export const ServerInstallation = Schema.Union([
     kind: Schema.Literals(["npx", "pnpm-dlx", "bunx"]),
     launch: Schema.optionalKey(Schema.Struct({ node: InstalledPath, entry: InstalledPath })),
   }),
-  Schema.Struct({ kind: Schema.Literal("npm-global"), prefix: TrimmedNonEmptyString }),
+  Schema.Struct({
+    kind: Schema.Literal("npm-global"),
+    prefix: TrimmedNonEmptyString,
+    legacyPackage: Schema.optionalKey(Schema.Literal(true)),
+  }),
   // A launcher (script, or a legacy symlink) into a downloaded runtime, as the install script and `t3 update` leave.
   Schema.Struct({
     kind: Schema.Literal("t3-launcher"),

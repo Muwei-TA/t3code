@@ -866,11 +866,21 @@ jobs:
           merge-multiple: true
           path: release-assets
 
+      - name: Check the npm launcher artifact ID
+        env:
+          ARTIFACT_ID: ${{ needs.build_bundle.outputs.npm_launcher_artifact_id }}
+        run: |
+          if [[ ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::build_bundle gave no valid npm-launcher artifact ID." >&2
+            exit 1
+          fi
+
       - name: Download the versioned npm launcher
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.build_bundle.outputs.npm_launcher_artifact_id }}
           path: release-assets
+          digest-mismatch: error
 
       # Installers verify archives against this file, so it is written from the
       # signed bytes that get uploaded, never from an earlier stage.
@@ -1156,7 +1166,7 @@ jobs:
         run: |
           built="$(tar -xzOf npm-packages/t3.tgz package/package.json | jq -r .version)"
           if [[ "$built" != "$RELEASE_VERSION" ]]; then
-            echo "::error::npm-launcher holds t3@$built, expected t3@$RELEASE_VERSION." >&2
+            echo "::error::npm-launcher holds version $built, expected $RELEASE_VERSION." >&2
             exit 1
           fi
 
@@ -1166,7 +1176,7 @@ jobs:
         run: |
           # The ./ keeps npm from reading the path as a GitHub owner/repo spec.
           if ! npm publish --access public --tag "$DIST_TAG" --provenance ./npm-packages/t3.tgz; then
-            echo "::error::npm publish failed. Make sure package t3 has a trusted publisher registered for .github/workflows/release.yml (see docs/operations/03_release.md)." >&2
+            echo "::error::npm publish failed. Check the launcher's trusted publisher for .github/workflows/release.yml (see docs/operations/03_release.md)." >&2
             exit 1
           fi
 

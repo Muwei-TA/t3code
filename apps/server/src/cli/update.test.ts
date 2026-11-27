@@ -587,92 +587,108 @@ const withoutTerminals = Effect.acquireRelease(
 );
 
 it.layer(NodeServices.layer)("lightning update with a background service", (it) => {
-  it.effect("names the version a service with a pending restart still runs", () =>
-    Effect.gen(function* () {
-      yield* withoutTerminals;
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
-      const baseDir = path.join(root, "Lightning home");
-      const version = packageJson.version;
-      const runtime = pinnedRuntimePaths(path, baseDir, version, "linux");
-      yield* fs.makeDirectory(runtime.versionDir, { recursive: true });
-      yield* fs.writeFileString(runtime.entryPath, "");
-      yield* fs.writeFileString(runtime.sentinelPath, `${version}\n`);
-      const launcher = path.join(root, "lightning");
-      yield* fs.symlink(runtime.entryPath, launcher);
-      const unitPath = path.join(baseDir, "lightning-code.service");
-      const logPath = path.join(baseDir, "boot-service.log");
-      // An earlier update pointed the service at this version without restarting it.
-      const service = Layer.mock(BootService.BootService, {
-        status: Effect.succeed<BootService.BootServiceStatus>({
-          supported: true,
-          installed: true,
-          current: false,
-          installedVersion: version,
-          installedBaseDir: baseDir,
-          problems: ["restart-pending"],
-          unitPath,
-          logPath,
-        }),
-        install: () => Effect.succeed({ program: [runtime.entryPath], baseDir, unitPath, logPath }),
-      });
-      vi.spyOn(BootService, "layer").mockReturnValue(service);
-      const runner = ProcessRunner.ProcessRunner.of({
-        run: (input) =>
-          input.args?.includes("__service-preflight") === true
-            ? unrelatedLsof.run(input).pipe(
-                Effect.map((result) => ({
-                  ...result,
-                  stdout: JSON.stringify({
-                    status: "ready",
-                    version,
-                    launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
-                  }),
-                })),
-              )
-            : unrelatedLsof.run(input),
-      });
+  it.effect.each(["linux", "win32"] as const)(
+    "names the exact launcher and the pending service version on %s",
+    (platform) =>
+      Effect.gen(function* () {
+        yield* withoutTerminals;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
+        const baseDir = path.join(root, "Lightning home");
+        const version = packageJson.version;
+        const runtime = pinnedRuntimePaths(path, baseDir, version, platform);
+        yield* fs.makeDirectory(runtime.versionDir, { recursive: true });
+        yield* fs.writeFileString(runtime.entryPath, "");
+        yield* fs.writeFileString(runtime.sentinelPath, `${version}\n`);
+        const windows = platform === "win32";
+        const launcher = path.join(root, "custom bin", windows ? "lightning.cmd" : "lightning");
+        yield* fs.makeDirectory(path.dirname(launcher));
+        if (windows) {
+          yield* fs.writeFileString(launcher, `@echo off\r\n"${runtime.entryPath}" %*`);
+          yield* fs.writeFileString(path.join(baseDir, "runtime/launchers"), `${launcher}\r\n`);
+        } else {
+          yield* fs.symlink(runtime.entryPath, launcher);
+        }
+        const unitPath = path.join(baseDir, "lightning-code.service");
+        const logPath = path.join(baseDir, "boot-service.log");
+        // An earlier update pointed the service at this version without restarting it.
+        const service = Layer.mock(BootService.BootService, {
+          status: Effect.succeed<BootService.BootServiceStatus>({
+            supported: true,
+            installed: true,
+            current: false,
+            installedVersion: version,
+            installedBaseDir: baseDir,
+            problems: ["restart-pending"],
+            unitPath,
+            logPath,
+          }),
+          install: () =>
+            Effect.succeed({ program: [runtime.entryPath], baseDir, unitPath, logPath }),
+        });
+        vi.spyOn(BootService, "layer").mockReturnValue(service);
+        const runner = ProcessRunner.ProcessRunner.of({
+          run: (input) =>
+            input.args?.includes("__service-preflight") === true
+              ? unrelatedLsof.run(input).pipe(
+                  Effect.map((result) => ({
+                    ...result,
+                    stdout: JSON.stringify({
+                      status: "ready",
+                      version,
+                      launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
+                    }),
+                  })),
+                )
+              : unrelatedLsof.run(input),
+        });
 
-      const output = yield* runUpdate({
-        baseDir,
-        includeBaseDirInHint: true,
-        logsDir: baseDir,
-        databasePath: path.join(baseDir, "statev2.sqlite"),
-        serverRuntimeStatePath: path.join(baseDir, "server-runtime.json"),
-        channel: undefined,
-        requestedVersion: version,
-        allowDowngrade: false,
-        assumeYes: false,
-      }).pipe(
-        Effect.andThen(TestConsole.logLines),
-        Effect.map((lines) => lines.join("\n")),
-        Effect.provide(
-          Layer.mergeAll(
-            service,
-            Layer.succeed(ProcessRunner.ProcessRunner, runner),
-            ManagedPolicy.layerTest(),
-            Layer.succeed(
-              HttpClient.HttpClient,
-              HttpClient.make(() => Effect.die("unexpected release lookup")),
+        const output = yield* runUpdate({
+          baseDir,
+          includeBaseDirInHint: true,
+          logsDir: baseDir,
+          databasePath: path.join(baseDir, "statev2.sqlite"),
+          serverRuntimeStatePath: path.join(baseDir, "server-runtime.json"),
+          channel: undefined,
+          requestedVersion: version,
+          allowDowngrade: false,
+          assumeYes: false,
+        }).pipe(
+          Effect.andThen(TestConsole.logLines),
+          Effect.map((lines) => lines.join("\n")),
+          Effect.provide(
+            Layer.mergeAll(
+              service,
+              Layer.succeed(ProcessRunner.ProcessRunner, runner),
+              ManagedPolicy.layerTest(),
+              Layer.succeed(
+                HttpClient.HttpClient,
+                HttpClient.make(() => Effect.die("unexpected release lookup")),
+              ),
+              Layer.fresh(TestConsole.layer),
             ),
-            Layer.fresh(TestConsole.layer),
           ),
-        ),
-        Effect.provideService(HostProcess.InvokedAs, launcher),
-        Effect.provideService(HostProcess.IsExecutable, true),
-      );
+          Effect.provideService(HostProcess.InvokedAs, windows ? runtime.entryPath : launcher),
+          Effect.provideService(HostProcess.IsExecutable, true),
+        );
 
-      assert.include(output, `Run lightning --base-dir '${baseDir}' to get started.`);
-      assert.include(
-        output,
-        `Background service still running the version before ${version}. Run \`lightning service restart --base-dir '${baseDir}'\` when you are ready to switch it to ${version}.`,
-      );
-      assert.include(output, `or run \`lightning service restart --base-dir '${baseDir}'\` later.`);
-    }).pipe(
-      Effect.provideService(HostProcess.Platform, "linux"),
-      Effect.provideService(HostProcess.Environment, { PATH: "" }),
-    ),
+        const expectedLauncher = windows ? `& "${launcher}"` : `'${launcher}'`;
+        const expectedArgs = windows ? `--base-dir "${baseDir}"` : `--base-dir '${baseDir}'`;
+        const stagedExecutable = windows ? `& "${runtime.entryPath}"` : `'${runtime.entryPath}'`;
+        assert.include(output, `Run ${expectedLauncher} ${expectedArgs} to get started.`);
+        assert.include(
+          output,
+          `Background service still running the version before ${version}. Run \`${expectedLauncher} service restart ${expectedArgs}\` when you are ready to switch it to ${version}.`,
+        );
+        assert.include(
+          output,
+          `or run \`${stagedExecutable} service restart ${expectedArgs}\` after the update.`,
+        );
+      }).pipe(
+        Effect.provideService(HostProcess.Platform, platform),
+        Effect.provideService(HostProcess.Environment, { PATH: "" }),
+      ),
   );
 });
 

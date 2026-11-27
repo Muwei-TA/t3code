@@ -104,6 +104,18 @@ export function supportsDesktopAppUpdate(
   return serverConfig?.environment.capabilities.desktopAppUpdate === true;
 }
 
+export function legacyServerUpdateRunner(installation?: ServerInstallation) {
+  if (installation?.kind === "npm-global") return installation.legacyPackage ? "npx" : null;
+  if (
+    installation === undefined ||
+    installation.kind === "t3-launcher" ||
+    installation.launch !== undefined
+  ) {
+    return null;
+  }
+  return installation.kind;
+}
+
 export function manualServerUpdateCommand(
   targetVersion: string,
   installation?: ServerInstallation,
@@ -118,13 +130,26 @@ export function manualServerUpdateCommand(
     // An inherited T3CODE_HOME would otherwise send the update to a home the launcher is not in.
     return `${windows ? "& " : ""}${quote(installation.launcher)} update --base-dir ${quote(installation.baseDir)} ${targetVersion}`;
   }
-  if (installation?.kind === "npm-global") {
+  if (installation?.kind === "npm-global" && !installation.legacyPackage) {
     const tarball = cliReleaseAssetUrl(targetVersion, "t3.tgz");
-    return `npm install --global --prefix ${quote(installation.prefix)} ${quote(tarball)}`;
+    return `${windows ? "npm.cmd" : "npm"} install --global --prefix ${quote(installation.prefix)} ${quote(tarball)}`;
   }
-  if (installation?.launch) {
+  if (installation && installation.kind !== "npm-global" && installation.launch) {
     const { node, entry } = installation.launch;
     return `${windows ? "& " : ""}${quote(node)} ${quote(entry)} update ${targetVersion}`;
+  }
+  const runner = legacyServerUpdateRunner(installation);
+  if (runner !== null) {
+    const tarball = quote(cliReleaseAssetUrl(targetVersion, "t3.tgz"));
+    const cli = LIGHTNING_BRAND.cliCommand;
+    switch (runner) {
+      case "npx":
+        return `${windows ? "npx.cmd" : "npx"} --yes --package ${tarball} -- ${cli}`;
+      case "pnpm-dlx":
+        return `pnpm --package=${tarball} dlx ${cli}`;
+      case "bunx":
+        return `bunx --package ${tarball} ${cli}`;
+    }
   }
   return `${LIGHTNING_BRAND.cliCommand} update ${targetVersion}`;
 }

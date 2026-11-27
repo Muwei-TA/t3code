@@ -101,10 +101,20 @@ describe("link round trips", () => {
       model: "opus",
     });
     const path = promptLinkAppPath(link);
-    expect(path).toBe(new URL(link).pathname + new URL(link).search);
+    expect(new URL(link).protocol).toBe("lightningcode:");
+    expect(path).toBe(`/new${new URL(link).search}`);
     const parsed = parseNewThreadLink(new URL(link).search);
     expect(parsed.ok && parsed.value.kind === "new" && parsed.value.prompt.text).toBe(
       "Swear count & rating?",
+    );
+  });
+
+  it("uses an explicit hosted app or the current app scheme when sharing", () => {
+    expect(buildNewThreadLink({ prompt: "Review", origin: "https://lightning.example" })).toBe(
+      "https://lightning.example/new?prompt=Review",
+    );
+    expect(buildNewThreadLink({ prompt: "Review", appScheme: "lightningcode-preview" })).toBe(
+      "lightningcode-preview://new?prompt=Review",
     );
   });
 

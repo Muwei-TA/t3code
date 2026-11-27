@@ -38,7 +38,7 @@ import { useServerConfigs } from "~/state/entities";
 import { useManagedPolicy } from "~/state/managedPolicy";
 import { environmentPresentations } from "~/state/presentation";
 import { ManagedControl } from "./ManagedPolicy";
-import { manualServerUpdateCommand } from "~/versionSkew";
+import { legacyServerUpdateRunner, manualServerUpdateCommand } from "~/versionSkew";
 import { crossesReleaseTrack } from "@t3tools/shared/cliRelease";
 import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import { Button } from "./ui/button";
@@ -324,18 +324,20 @@ export function ServerUpdateAction({
         type: "success",
         title: gt("Update command copied"),
         description:
-          installation?.kind === "npm-global"
-            ? gt("Run `{command}` on {serverLabel}, then restart from the same install location.", {
-                command,
-                serverLabel,
-              })
-            : gt(
-                "Run `{command}` on {serverLabel}, then follow the restart instructions it prints.",
-                {
-                  command,
-                  serverLabel,
-                },
-              ),
+          legacyServerUpdateRunner(installation) !== null
+            ? gt(
+                "Stop the old server on {serverLabel} and relaunch with `{command}`, keeping any original flags.",
+                { command, serverLabel },
+              )
+            : installation?.kind === "npm-global"
+              ? gt(
+                  "Run `{command}` on {serverLabel}, then restart from the same install location.",
+                  { command, serverLabel },
+                )
+              : gt(
+                  "Run `{command}` on {serverLabel}, then follow the restart instructions it prints.",
+                  { command, serverLabel },
+                ),
       });
     },
     onError: (error) => {

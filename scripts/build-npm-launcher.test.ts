@@ -13,7 +13,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeEvents from "node:events";
 import * as NodeHttp from "node:http";
 
-import { npmReleaseDatabaseMigration } from "@t3tools/shared/cliRelease";
+import { CLI_NPM_PACKAGE_NAME, npmReleaseDatabaseMigration } from "@t3tools/shared/cliRelease";
 
 import { buildNpmLauncher } from "./build-npm-launcher.ts";
 
@@ -151,7 +151,7 @@ it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
         const manifest = yield* decodeManifest(
           yield* fs.readFileString(path.join(output.packageDir, "package.json")),
         );
-        assert.equal(manifest.name, "t3");
+        assert.equal(manifest.name, CLI_NPM_PACKAGE_NAME);
         assert.equal(manifest.version, VERSION);
         assert.deepStrictEqual(manifest.bin, { lightning: "./bin/t3.mjs" });
         assert.isUndefined(manifest.dependencies);
@@ -377,7 +377,7 @@ fs.readFileSync = (file, ...rest) => {
   );
 
   it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
-    "upgrades a global Lightning CLI in place from a versioned release tarball",
+    "upgrades a global Lightning CLI from a versioned tarball alongside upstream t3",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -405,27 +405,66 @@ fs.readFileSync = (file, ...rest) => {
           npm_config_globalconfig: path.join(root, "global.npmrc"),
           npm_config_registry: release.baseUrl,
         };
-        for (const version of versions) {
-          const asset = `/v${version}/t3.tgz`;
-          const installed = yield* run(
+        const install = (targetPrefix: string, spec: string) =>
+          run(
             "npm",
-            [
-              "install",
-              "--global",
-              "--prefix",
-              prefix,
-              "--no-audit",
-              "--no-fund",
-              `${release.baseUrl}${asset}`,
-            ],
+            ["install", "--global", "--prefix", targetPrefix, "--no-audit", "--no-fund", spec],
             { cwd: root, env },
           );
+        const installOldT3 = (targetPrefix: string, bin: string, label: string) =>
+          Effect.gen(function* () {
+            const fixture = path.join(root, label);
+            const entry = path.join(fixture, "package", "cli");
+            yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
+            yield* fs.writeFileString(
+              path.join(fixture, "package/package.json"),
+              JSON.stringify({ name: "t3", version: VERSION, bin: { [bin]: "./cli" } }),
+            );
+            yield* fs.writeFileString(entry, `#!/bin/sh\necho '${label}'\n`, { mode: 0o755 });
+            const tarball = path.join(fixture, "t3.tgz");
+            const pack = yield* run("tar", ["-czf", tarball, "package"], { cwd: fixture, env });
+            assert.equal(pack.exitCode, 0, pack.stderr);
+            const result = yield* install(targetPrefix, tarball);
+            assert.equal(result.exitCode, 0, result.stderr);
+          });
+        const checkVersion = (executable: string, version: string) =>
+          Effect.gen(function* () {
+            const result = yield* run(executable, ["--version"], { cwd: root, env });
+            assert.equal(result.exitCode, 0, result.stderr);
+            assert.equal(result.stdout.trim(), version);
+          });
+
+        const upstream = path.join(prefix, "bin/t3");
+        yield* installOldT3(prefix, "t3", "upstream");
+        yield* checkVersion(upstream, "upstream");
+        const releaseTarball = (version: string) => `/v${version}/t3.tgz`;
+        for (const version of versions) {
+          const asset = releaseTarball(version);
+          const installed = yield* install(prefix, `${release.baseUrl}${asset}`);
           assert.equal(installed.exitCode, 0, installed.stderr);
           assert.include(release.requests, asset);
-          const result = yield* run(launcher, ["--version"], { cwd: root, env });
-          assert.equal(result.exitCode, 0, result.stderr);
-          assert.equal(result.stdout.trim(), version);
+          yield* checkVersion(launcher, version);
+          yield* checkVersion(upstream, "upstream");
         }
+
+        const legacyPrefix = path.join(root, "legacy prefix");
+        const legacy = path.join(legacyPrefix, "bin/lightning");
+        yield* installOldT3(legacyPrefix, "lightning", "legacy");
+        const cached = yield* run(
+          "npm",
+          [
+            "exec",
+            "--yes",
+            `--package=${release.baseUrl}${releaseTarball("1.2.4")}`,
+            "--",
+            "lightning",
+            "--version",
+          ],
+          { cwd: root, env: { ...env, PATH: `${path.dirname(legacy)}:${env.PATH}` } },
+        );
+        assert.equal(cached.exitCode, 0, cached.stderr);
+        assert.equal(cached.stdout.trim(), "1.2.4");
+        yield* checkVersion(legacy, "legacy");
       }),
   );
 

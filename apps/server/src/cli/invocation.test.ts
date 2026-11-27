@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { CLI_NPM_PACKAGE_NAME } from "@t3tools/shared/cliRelease";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -122,13 +123,18 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
 
       // A global npm launcher runs the downloaded executable; PATH's `t3` is that launcher.
       const prefix = path.join(home, "npm");
-      const npmLauncher = path.join(prefix, "lib/node_modules/t3/bin/t3.mjs");
+      const npmPackage = path.join(prefix, "lib/node_modules", CLI_NPM_PACKAGE_NAME);
+      const npmLauncher = path.join(npmPackage, "bin/t3.mjs");
       yield* fs.makeDirectory(path.dirname(npmLauncher), { recursive: true });
       yield* fs.makeDirectory(path.join(prefix, "bin"));
       yield* fs.writeFileString(npmLauncher, "", { mode: 0o755 });
       yield* fs.writeFileString(
-        path.join(prefix, "lib/node_modules/t3/package.json"),
-        `{"name":"t3","version":"${packageJson.version}"}`,
+        path.join(npmPackage, "package.json"),
+        JSON.stringify({
+          name: CLI_NPM_PACKAGE_NAME,
+          version: packageJson.version,
+          bin: { lightning: "./bin/t3.mjs" },
+        }),
       );
       yield* fs.symlink(npmLauncher, path.join(prefix, "bin/lightning"));
       expect(
@@ -244,7 +250,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectoryScoped();
       const prefix = path.join(root, "bunx-tools");
-      const packageRoot = path.join(prefix, "lib/node_modules/t3");
+      const packageRoot = path.join(prefix, "lib/node_modules", CLI_NPM_PACKAGE_NAME);
       const entry = path.join(packageRoot, "dist/bin.mjs");
       const globalBin = path.join(prefix, "bin/lightning");
       yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
@@ -252,7 +258,11 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       yield* fs.writeFileString(entry, "");
       yield* fs.writeFileString(
         path.join(packageRoot, "package.json"),
-        '{"name":"t3","version":"0.0.45","bin":{"lightning":"./dist/bin.mjs"}}',
+        JSON.stringify({
+          name: CLI_NPM_PACKAGE_NAME,
+          version: "0.0.45",
+          bin: { lightning: "./dist/bin.mjs" },
+        }),
       );
       const resolve = resolveServerInstallation.pipe(
         Effect.provideService(HostProcess.Arguments, ["node", entry]),
@@ -269,39 +279,113 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
     }),
   );
 
-  it.effect("proves the downloaded executable was started by a global npm launcher", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped();
-      const prefix = path.join(root, "bunx-tools");
-      const packageRoot = path.join(prefix, "lib/node_modules/t3");
-      const launcher = path.join(packageRoot, "bin/t3.mjs");
-      const executable = path.join(root, ".t3/runtime/versions/1.0.0/t3");
-      yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
-      yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
-      yield* fs.makeDirectory(path.join(prefix, "bin"));
-      yield* fs.writeFileString(launcher, "");
-      yield* fs.writeFileString(executable, "");
-      yield* fs.symlink(launcher, path.join(prefix, "bin/lightning"));
-      const resolve = resolveServerInstallation.pipe(
-        Effect.provideService(HostProcess.ExecutablePath, executable),
-        Effect.provideService(HostProcess.Arguments, [executable, executable]),
-        Effect.provideService(HostProcess.IsExecutable, true),
-        Effect.provideService(HostProcess.Platform, "linux"),
-        Effect.provideService(HostProcess.Environment, { T3CODE_NPM_LAUNCHER_PATH: launcher }),
-      );
-      for (const [version, expected] of [
-        ["0.0.1", null],
-        [packageJson.version, { kind: "npm-global", prefix }],
-      ] as const) {
+  it.effect.each(["t3", CLI_NPM_PACKAGE_NAME])(
+    "proves launcher ownership for the npm package %s",
+    (name) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped();
+        const prefix = path.join(root, "bunx-tools");
+        const packageRoot = path.join(prefix, "lib/node_modules", name);
+        const launcher = path.join(packageRoot, "bin/t3.mjs");
+        const executable = path.join(root, ".t3/runtime/versions/1.0.0/t3");
+        yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
+        yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+        yield* fs.makeDirectory(path.join(prefix, "bin"));
+        yield* fs.writeFileString(launcher, "");
+        yield* fs.writeFileString(executable, "");
+        yield* fs.symlink(launcher, path.join(prefix, "bin/lightning"));
+        const resolve = resolveServerInstallation.pipe(
+          Effect.provideService(HostProcess.ExecutablePath, executable),
+          Effect.provideService(HostProcess.Arguments, [executable, executable]),
+          Effect.provideService(HostProcess.IsExecutable, true),
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HostProcess.Environment, { T3CODE_NPM_LAUNCHER_PATH: launcher }),
+        );
+        for (const [version, bin, expected] of [
+          ["0.0.1", { lightning: "./bin/t3.mjs" }, null],
+          [packageJson.version, { t3: "./bin/t3.mjs" }, null],
+          [packageJson.version, { lightning: "./dist/bin.mjs" }, null],
+          [
+            packageJson.version,
+            { lightning: "./bin/t3.mjs" },
+            {
+              kind: "npm-global",
+              prefix,
+              ...(name === "t3" ? { legacyPackage: true } : {}),
+            },
+          ],
+        ] as const) {
+          yield* fs.writeFileString(
+            path.join(packageRoot, "package.json"),
+            JSON.stringify({ name, version, bin }),
+          );
+          expect(yield* resolve).toEqual(expected);
+        }
+      }),
+  );
+
+  it.effect.each(["t3", CLI_NPM_PACKAGE_NAME])(
+    "checks npm's generated Windows wrapper for %s",
+    (name) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const prefix = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+        const packageRoot = path.join(prefix, "node_modules", name);
+        const entry = path.join(packageRoot, "bin/t3.mjs");
+        const wrapper = path.join(prefix, "lightning.cmd");
+        yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
+        yield* fs.writeFileString(entry, "#!/usr/bin/env node\n");
         yield* fs.writeFileString(
           path.join(packageRoot, "package.json"),
-          `{"name":"t3","version":"${version}","bin":{"lightning":"./bin/t3.mjs"}}`,
+          JSON.stringify({
+            name,
+            version: packageJson.version,
+            bin: { lightning: "./bin/t3.mjs" },
+          }),
         );
-        expect(yield* resolve).toEqual(expected);
-      }
-    }),
+        const resolve = resolveServerInstallation.pipe(
+          Effect.provideService(HostProcess.Arguments, ["node", entry]),
+          Effect.provideService(HostProcess.IsExecutable, false),
+          Effect.provideService(HostProcess.Platform, "win32"),
+        );
+        expect(yield* resolve).toBeNull();
+        // Captured from npm's cmd-shim for a Node package with a lightning bin.
+        const relativeEntry = `\\node_modules\\${name.replaceAll("/", "\\")}\\bin\\t3.mjs`;
+        const shim = String.raw`@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\node.exe" (
+  SET "_prog=%dp0%\node.exe"
+) ELSE (
+  SET "_prog=node"
+  SET PATHEXT=%PATHEXT:;.JS;=;%
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%${relativeEntry}" %*
+`.replaceAll("\n", "\r\n");
+        yield* fs.writeFileString(wrapper, shim);
+        expect(yield* resolve).toEqual({
+          kind: "npm-global",
+          prefix,
+          ...(name === "t3" ? { legacyPackage: true } : {}),
+        });
+        yield* fs.writeFileString(wrapper, shim.replace("bin\\t3.mjs", "bin\\another.mjs"));
+        expect(yield* resolve).toBeNull();
+        yield* fs.writeFileString(
+          wrapper,
+          shim.replace("GOTO start", "ECHO running custom commands\r\nGOTO start"),
+        );
+        expect(yield* resolve).toBeNull();
+      }),
   );
 
   it.effect("names the launcher that started a downloaded runtime", () =>

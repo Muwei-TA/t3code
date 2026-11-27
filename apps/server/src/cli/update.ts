@@ -362,7 +362,8 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     input.includeBaseDirInHint === true
       ? ` --base-dir ${hostShellWord(platform, input.baseDir)}`
       : "";
-  const restartCommand = `${cliCommand} service restart${baseDirOption}`;
+  const invoke = (executable: string) =>
+    `${platform === "win32" ? "& " : ""}${hostShellWord(platform, executable)}`;
 
   const currentVersion = packageJson.version;
   const channel = input.channel ?? cliReleaseChannelOf(currentVersion);
@@ -484,8 +485,14 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
         }),
       ).pipe(Effect.catchTags({ QuitError: () => Effect.succeed(false) }));
     } else {
+      const stagedEntry = pinnedRuntimePaths(
+        path,
+        input.baseDir,
+        targetVersion,
+        platform,
+      ).entryPath;
       yield* Console.log(
-        `  Without an interactive prompt, the service keeps running its current version. Rerun with --yes to restart it now, or run \`${restartCommand}\` later.`,
+        `  Without an interactive prompt, the service keeps running its current version. Rerun with --yes to restart it now, or run \`${invoke(stagedEntry)} service restart${baseDirOption}\` after the update.`,
       );
     }
   }
@@ -595,13 +602,8 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   }
 
   progress.success(`Installed ${baseName} ${targetVersion}`);
-  const launcherName = platform === "win32" ? `${cliCommand}.cmd` : cliCommand;
-  if (Option.isSome(repointed) && path.basename(repointed.value) === launcherName) {
-    yield* Console.log(`  Run ${cliCommand}${baseDirOption} to get started.\n`);
-  } else {
-    const entry = hostShellWord(platform, runtime.entryPath);
-    yield* Console.log(`  Run ${platform === "win32" ? `& ${entry}` : entry}${baseDirOption}\n`);
-  }
+  const restartLauncher = invoke(Option.getOrElse(repointed, () => runtime.entryPath));
+  yield* Console.log(`  Run ${restartLauncher}${baseDirOption} to get started.\n`);
   if (servicePlan?.handedOff === true) {
     yield* Console.log(
       `  Background service switching to ${targetVersion} outside this session, since this session runs inside it and disconnects when it restarts. Result: ${servicePlan.logPath}`,
@@ -619,7 +621,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
           ? `the version before ${serviceVersion}`
           : serviceVersion;
     yield* Console.log(
-      `  Background service still running ${running}. Run \`${restartCommand}\` when you are ready to switch it to ${targetVersion}.`,
+      `  Background service still running ${running}. Run \`${restartLauncher} service restart${baseDirOption}\` when you are ready to switch it to ${targetVersion}.`,
     );
   } else if (status.installed && !servesThisHome) {
     yield* Console.log(

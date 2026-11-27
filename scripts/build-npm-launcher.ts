@@ -13,12 +13,11 @@ import { Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { CLI_NPM_PACKAGE_NAME } from "@t3tools/shared/cliRelease";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { windowsSystemTar } from "./lib/windows-tar.ts";
-
-export const NPM_LAUNCHER_PACKAGE_NAME = "t3";
 
 const encodePackageJson = Schema.encodeEffect(fromJsonStringPretty(Schema.Unknown));
 
@@ -34,7 +33,7 @@ export class NpmLauncherCommandFailedError extends Schema.TaggedError<NpmLaunche
 /** engines requires import.meta.dirname and fetch. `t3code` is read back by npmReleaseDatabaseMigration. */
 export function npmLauncherPackageManifest(version: string, databaseMigration: number) {
   return {
-    name: NPM_LAUNCHER_PACKAGE_NAME,
+    name: CLI_NPM_PACKAGE_NAME,
     version,
     description: `${LIGHTNING_BRAND.baseName} CLI. Downloads the self-contained executable for this platform from the GitHub Release.`,
     license: serverPackageJson.license,
@@ -91,8 +90,8 @@ export const buildNpmLauncher = Effect.fn("buildNpmLauncher")(function* (input: 
     yield* fs.copyFile(readme, path.join(stageDir, "README.md"));
   }
 
-  const packageDir = path.join(input.outputDir, NPM_LAUNCHER_PACKAGE_NAME);
-  const tarball = path.join(input.outputDir, `${NPM_LAUNCHER_PACKAGE_NAME}.tgz`);
+  const packageDir = path.join(input.outputDir, "t3");
+  const tarball = path.join(input.outputDir, "t3.tgz");
   yield* fs.remove(tarball, { force: true });
   const tar = (yield* HostProcess.Platform) === "win32" ? windowsSystemTar() : "tar";
   // npm tarballs root everything under `package/`.
@@ -121,7 +120,7 @@ const command = Command.make(
     outputDir: Flag.String("output-dir").pipe(Flag.withDefault("npm-packages")),
   },
   buildNpmLauncher,
-).pipe(Command.withDescription("Build the t3 npm launcher package."));
+).pipe(Command.withDescription(`Build the ${CLI_NPM_PACKAGE_NAME} npm launcher package.`));
 
 if (import.meta.main) {
   Command.run(command, { version: "0.0.0" }).pipe(

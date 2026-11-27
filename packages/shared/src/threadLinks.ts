@@ -2,12 +2,24 @@ import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contract
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { LIGHTNING_BRAND } from "./brand.ts";
 import { DEFAULT_HOSTED_APP_URL } from "./connectAuth.ts";
+import { MOBILE_APP_IDENTITIES } from "./mobileBrand.ts";
 
 export const THREAD_LINK_PROTOCOL = "t3-thread";
+export const THREAD_APP_LINK_SCHEMES = Object.values(MOBILE_APP_IDENTITIES).map(
+  ({ scheme }) => scheme,
+);
+type ThreadAppLinkScheme = (typeof THREAD_APP_LINK_SCHEMES)[number];
+export interface ThreadShareLinkOptions {
+  readonly hostedAppUrl?: string | undefined;
+  readonly appScheme?: ThreadAppLinkScheme | undefined;
+}
+
 const V1_PREFIX = `${THREAD_LINK_PROTOCOL}://v1/`;
 const V2_PREFIX = `${THREAD_LINK_PROTOCOL}://v2/`;
 const HOSTED_PREFIX = `${DEFAULT_HOSTED_APP_URL}/threads/`;
+const APP_THREAD_PREFIXES = THREAD_APP_LINK_SCHEMES.map((scheme) => `${scheme}://threads/`);
 const HOSTED_SEGMENT = "[A-Za-z0-9_%-]+";
 const THREAD_HREF = String.raw`t3-thread:\/\/v[12]\/`;
 // A label stops at any bracket, so a run of unclosed brackets is scanned once, not once per bracket.
@@ -15,20 +27,20 @@ const LABEL = String.raw`[^[\]\n]*`;
 // Earlier alternatives claim text so later ones cannot match inside it: an escaped character opens
 // nothing, code is literal, and a link to anywhere else keeps a thread URL in its label or href.
 function threadLinkPattern(hostedPrefix?: string) {
-  const origins = [HOSTED_PREFIX, ...(hostedPrefix ? [hostedPrefix] : [])];
-  const alternatives = origins.map((prefix) => prefix.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
-  const HOSTED_LINK = `(?:${alternatives.join("|")})${HOSTED_SEGMENT}/${HOSTED_SEGMENT}`;
+  const prefixes = [HOSTED_PREFIX, ...APP_THREAD_PREFIXES, ...(hostedPrefix ? [hostedPrefix] : [])];
+  const alternatives = prefixes.map((prefix) => prefix.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
+  const SHARED_LINK = `(?:${alternatives.join("|")})${HOSTED_SEGMENT}/${HOSTED_SEGMENT}`;
   return new RegExp(
     [
       String.raw`\\[!-/:-@[-\`{-~]`,
       String.raw`(?<fence>(\`{3,}|~{3,})[\s\S]*?(?:\2|$))`,
       String.raw`(?<span>(\`+)[^\n]*?\4)`,
       // A labeled link's destination may be angle-bracketed, as CommonMark allows: [label](<href>).
-      String.raw`\[(?<label>${LABEL})\]\((?:<(?<angleHref>${THREAD_HREF}[^\s<>]+|${HOSTED_LINK})>|(?<href>${THREAD_HREF}[^\s>)]+|${HOSTED_LINK}))\)`,
+      String.raw`\[(?<label>${LABEL})\]\((?:<(?<angleHref>${THREAD_HREF}[^\s<>]+|${SHARED_LINK})>|(?<href>${THREAD_HREF}[^\s>)]+|${SHARED_LINK}))\)`,
       String.raw`\[${LABEL}\]\((?:<[^<>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'))?\)`,
-      String.raw`<(?<autolink>${THREAD_HREF}[^\s<>]+|${HOSTED_LINK})>`,
-      // After a URL character the hosted link is part of a longer URL, such as a redirect target.
-      String.raw`(?<![A-Za-z0-9%/?#=&@+-])(?<bare>${HOSTED_LINK})(?![\w%/?#-])`,
+      String.raw`<(?<autolink>${THREAD_HREF}[^\s<>]+|${SHARED_LINK})>`,
+      // After a URL character the copied link may be part of a longer URL, such as a redirect target.
+      String.raw`(?<![A-Za-z0-9%/?#=&@+-])(?<bare>${SHARED_LINK})(?![\w%/?#-])`,
     ].join("|"),
     "g",
   );
@@ -70,8 +82,21 @@ const hostedSegment = (id: string) =>
 
 /** Opens the thread from anywhere: the hosted app offers the desktop app, the mobile app, or itself. */
 export function hostedThreadLink(ref: ScopedThreadRef, origin = DEFAULT_HOSTED_APP_URL): string {
-  const path = `/threads/${hostedSegment(ref.environmentId)}/${hostedSegment(ref.threadId)}`;
-  return new URL(path, origin).toString();
+  return new URL(`/threads/${escapedThreadPath(ref)}`, origin).toString();
+}
+
+function escapedThreadPath(ref: ScopedThreadRef): string {
+  return `${hostedSegment(ref.environmentId)}/${hostedSegment(ref.threadId)}`;
+}
+
+/** Shares through the configured web app or directly through a Lightning app. */
+export function threadShareHref(ref: ScopedThreadRef, options?: ThreadShareLinkOptions): string {
+  const origin = options?.hostedAppUrl?.trim();
+  if (origin === DEFAULT_HOSTED_APP_URL) return hostedThreadLink(ref, origin);
+  const hostedApp = configuredHost(origin);
+  if (hostedApp) return `${hostedApp.prefix}${escapedThreadPath(ref)}`;
+  const appScheme = options?.appScheme ?? LIGHTNING_BRAND.urlScheme;
+  return `${appScheme}://threads/${escapedThreadPath(ref)}`;
 }
 
 const HOSTED_PATH = new RegExp(`^(${HOSTED_SEGMENT})/(${HOSTED_SEGMENT})$`);
@@ -97,6 +122,8 @@ export function parseThreadLinkHref(href: string, hostedOrigin?: string): Thread
     return parseHostedThreadLink(href.slice(HOSTED_PREFIX.length));
   const prefix = configuredHost(hostedOrigin)?.prefix;
   if (prefix && href.startsWith(prefix)) return parseHostedThreadLink(href.slice(prefix.length));
+  const appPrefix = APP_THREAD_PREFIXES.find((candidate) => href.startsWith(candidate));
+  if (appPrefix) return parseHostedThreadLink(href.slice(appPrefix.length));
   if (href.startsWith(V1_PREFIX)) {
     const threadId = Option.getOrNull(decodeThreadId(href.slice(V1_PREFIX.length)));
     return threadId === null ? null : { environmentId: null, threadId };
@@ -169,13 +196,12 @@ export function formatThreadLink(ref: ThreadLink, label?: string): string {
   return cleaned ? `[${cleaned}](${destination})` : `<${href}>`;
 }
 
-/** What a person copies out of T3 Code: a Markdown link that opens the thread anywhere. */
-export function formatHostedThreadLink(
+export function formatThreadShareLink(
   ref: ScopedThreadRef,
   label: string,
-  origin?: string,
+  options?: ThreadShareLinkOptions,
 ): string {
-  const href = hostedThreadLink(ref, origin);
+  const href = threadShareHref(ref, options);
   const cleaned = linkLabel(label);
   return cleaned ? `[${cleaned}](${href})` : href;
 }
@@ -185,6 +211,7 @@ export function hasThreadLinks(markdown: string, hostedOrigin?: string): boolean
   return (
     markdown.includes(`${THREAD_LINK_PROTOCOL}://v`) ||
     markdown.includes(HOSTED_PREFIX) ||
+    APP_THREAD_PREFIXES.some((candidate) => markdown.includes(candidate)) ||
     (prefix !== undefined && markdown.includes(prefix))
   );
 }

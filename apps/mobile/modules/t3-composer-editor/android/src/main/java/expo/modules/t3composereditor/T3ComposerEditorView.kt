@@ -910,6 +910,9 @@ internal class SelectionAwareEditText(
 
   private fun hasThreadLink(text: String): Boolean =
     text.contains("t3-thread://v2/") ||
+      text.contains("lightningcode://threads/") ||
+      text.contains("lightningcode-dev://threads/") ||
+      text.contains("lightningcode-preview://threads/") ||
       text.contains("https://app.t3.codes/threads/") ||
       (hostedThreadLinkPrefix.isNotEmpty() && text.contains(hostedThreadLinkPrefix))
 

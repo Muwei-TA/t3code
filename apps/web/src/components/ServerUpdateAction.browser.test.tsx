@@ -179,6 +179,26 @@ describe("ServerUpdateAction", () => {
     await click(screen, "Update");
     expect(testState.updateServer).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { kind: "bunx" },
+    { kind: "npm-global", prefix: "/opt/node", legacyPackage: true },
+  ] as const)(
+    "tells a legacy $kind user to relaunch the old server with the copied command",
+    async (installation) => {
+      using _state = setup();
+      await using screen = await renderAction({ selfUpdate: null, installation });
+      await click(screen, "Copy update command");
+
+      expect(testState.clipboard).toHaveBeenCalledOnce();
+      const command = testState.clipboard.mock.lastCall?.[0];
+      expect(testState.toast).toHaveBeenCalledWith({
+        type: "success",
+        title: "Update command copied",
+        description: `Stop the old server on Test server and relaunch with \`${command}\`, keeping any original flags.`,
+      });
+    },
+  );
 });
 
 describe("ServerUpdatesAction", () => {

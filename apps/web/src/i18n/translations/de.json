@@ -2500,6 +2500,7 @@
   "b25472ef70df9b5d": "Alle aktualisieren",
   "febf4ec3cdcdf372": "Update-Befehl kopiert",
   "c1bcad4fe66893fa": "Führe `{command}` auf {serverLabel} aus und starte anschließend vom selben Installationsort neu.",
+  "eb8d76053aaf6469": "Beende den alten Server auf {serverLabel} und starte ihn mit `{command}` neu. Behalte dabei alle ursprünglichen Optionen bei.",
   "d54f9303c5795bad": "Führe `{command}` auf {serverLabel} aus und folge dann den angezeigten Anweisungen zum Neustart.",
   "3cb4fcae1546e2eb": "Update-Befehl konnte nicht kopiert werden",
   "c10262062b7f9a5e": "Die T3-Code-Desktop-App aktualisieren, auf der {serverLabel} läuft? Sie wird auf diesem Rechner geschlossen und neu gestartet.",

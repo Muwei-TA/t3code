@@ -1,6 +1,9 @@
+import * as NodeModule from "node:module";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { NavigationState } from "@react-navigation/native";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { threadShareHref } from "@t3tools/shared/threadLinks";
 import {
   findLinkedRoute,
   findStackRoute,
@@ -8,6 +11,13 @@ import {
   shouldHandleAppLink,
   updateLinkedRoute,
 } from "./appLinking";
+
+const requireFromNative = NodeModule.createRequire(
+  NodeModule.createRequire(import.meta.url).resolve("@react-navigation/native/package.json"),
+);
+const { getStateFromPath } = requireFromNative("@react-navigation/core") as {
+  readonly getStateFromPath: typeof import("@react-navigation/native").getStateFromPath;
+};
 
 describe("shouldHandleAppLink", () => {
   it.each([
@@ -101,6 +111,20 @@ describe("draft deep links", () => {
     expect(restoreDraftLinkState(state, "/new")).toBe(state);
     expect(restoreDraftLinkState(undefined, "/new/draft")).toBeUndefined();
   });
+});
+
+it("opens a copied direct link with the original environment and escaped thread ID", () => {
+  const thread = {
+    environmentId: EnvironmentId.make("env-1"),
+    threadId: ThreadId.make("provider:child/task%3A1"),
+  };
+  const url = threadShareHref(thread, { appScheme: "lightningcode-preview" });
+  expect(shouldHandleAppLink(url, false)).toBe(true);
+  const path = url.slice("lightningcode-preview://".length);
+  const state = getStateFromPath(path, {
+    screens: { Thread: "threads/:environmentId?/:threadId?", NotFound: "*" },
+  });
+  expect(state?.routes.at(-1)).toMatchObject({ name: "Thread", params: thread });
 });
 
 describe("nested link routes", () => {

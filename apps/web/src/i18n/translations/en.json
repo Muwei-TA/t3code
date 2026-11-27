@@ -2500,6 +2500,7 @@
   "b25472ef70df9b5d": "Update all",
   "febf4ec3cdcdf372": "Update command copied",
   "c1bcad4fe66893fa": "Run `{command}` on {serverLabel}, then restart from the same install location.",
+  "eb8d76053aaf6469": "Stop the old server on {serverLabel} and relaunch with `{command}`, keeping any original flags.",
   "d54f9303c5795bad": "Run `{command}` on {serverLabel}, then follow the restart instructions it prints.",
   "3cb4fcae1546e2eb": "Could not copy update command",
   "c10262062b7f9a5e": "Update the T3 Code desktop app that runs the {serverLabel}? It will close and relaunch on that machine.",

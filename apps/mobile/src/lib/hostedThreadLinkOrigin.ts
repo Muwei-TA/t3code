@@ -13,3 +13,8 @@ export const mobileAppScheme =
 export const hostedThreadLinkPrefix = hostedThreadLinkOrigin
   ? `${hostedThreadLinkOrigin}${MOBILE_THREAD_LINK_PATH_PREFIX}`
   : "";
+
+export const mobileThreadShareOptions = {
+  hostedAppUrl: hostedThreadLinkOrigin,
+  appScheme: mobileAppScheme,
+};

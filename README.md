@@ -46,6 +46,7 @@ Open the URL printed by the dev server. Use `vp run dev:desktop` to work on the 
 Build the Lightning client for iOS or Android using the [mobile development guide](./apps/mobile/README.md#development). Open the link from `lightning pair`, or scan its QR code from the client's connection screen. Review the server address in the pairing form before connecting.
 
 To enable verified HTTPS thread links for a signed mobile build, configure your [link domain and signing identities](./apps/mobile/README.md#verified-thread-links).
+Without a hosted link domain, copied thread links open in an installed Lightning app. In the web client, paste one into the composer to turn it into a thread reference.
 
 ## Contributing and license
 
