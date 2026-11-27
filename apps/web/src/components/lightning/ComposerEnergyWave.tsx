@@ -41,7 +41,7 @@ export function ComposerEnergyWave({
   const rootRef = useRef<HTMLDivElement>(null);
   const [typingActive, setTypingActive] = useState(false);
   const [sendBurst, setSendBurst] = useState(false);
-  const [keystrokeKick, setKeystrokeKick] = useState(false);
+  const crestRef = useRef<SVGGElement>(null);
 
   const phase: ComposerTelemetryPhase =
     sendBurst || sending
@@ -54,7 +54,7 @@ export function ComposerEnergyWave({
           ? "typing"
           : "waiting";
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to DOM input/keydown/focus/submit listeners on the parent composer form and window send events
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- synchronizes the wave with native editor input, focus and confirmed sends
   useEffect(() => {
     if (shell === "classic") return;
     const root = rootRef.current;
@@ -63,24 +63,41 @@ export function ComposerEnergyWave({
     const host = root.closest<HTMLElement>('[data-slot="composer-host"]');
 
     let typingTimer: number | undefined;
-    let kickTimer: number | undefined;
+    let strikeFrame = 0;
     let sendTimer: number | undefined;
 
-    const triggerTyping = () => {
+    const focusEditor = (event: Event) => {
+      if (
+        !(event.target instanceof Element) ||
+        !event.target.closest('input, textarea, [contenteditable="true"]')
+      )
+        return false;
       setTypingActive(true);
-      setKeystrokeKick(true);
-      window.dispatchEvent(new Event("lightning:composer-typing"));
-      window.clearTimeout(kickTimer);
-      kickTimer = window.setTimeout(() => setKeystrokeKick(false), 180);
       window.clearTimeout(typingTimer);
       typingTimer = window.setTimeout(() => setTypingActive(false), 1400);
+      return true;
+    };
+
+    const triggerTyping = (event: Event) => {
+      if (!focusEditor(event) || strikeFrame) return;
+      // A physical keystroke can emit both keydown and input for the same edit.
+      strikeFrame = window.requestAnimationFrame(() => {
+        strikeFrame = 0;
+        const crest = crestRef.current;
+        if (!crest || root.style.getPropertyValue("--visible-animation-state") !== "running")
+          return;
+        for (const pulse of crest.getAnimations({ subtree: true })) pulse.currentTime = 0;
+        window.dispatchEvent(new Event("lightning:composer-typing"));
+      });
     };
 
     const triggerSendBurst = () => {
+      window.cancelAnimationFrame(strikeFrame);
+      strikeFrame = 0;
       setTypingActive(false);
       setSendBurst(true);
       window.clearTimeout(sendTimer);
-      sendTimer = window.setTimeout(() => setSendBurst(false), 780);
+      sendTimer = window.setTimeout(() => setSendBurst(false), 800);
     };
 
     const onFocusOut = (event: FocusEvent) => {
@@ -94,24 +111,24 @@ export function ComposerEnergyWave({
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === "Enter" && !event.shiftKey) return;
       if (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete") {
-        triggerTyping();
+        triggerTyping(event);
       }
     };
 
     form?.addEventListener("input", triggerTyping);
     form?.addEventListener("keydown", onKeyDown);
     form?.addEventListener("focusout", onFocusOut);
-    form?.addEventListener("submit", triggerSendBurst);
+    form?.addEventListener("focusin", focusEditor);
     window.addEventListener("lightning:composer-send", triggerSendBurst);
 
     return () => {
       window.clearTimeout(typingTimer);
-      window.clearTimeout(kickTimer);
+      window.cancelAnimationFrame(strikeFrame);
       window.clearTimeout(sendTimer);
       form?.removeEventListener("input", triggerTyping);
       form?.removeEventListener("keydown", onKeyDown);
       form?.removeEventListener("focusout", onFocusOut);
-      form?.removeEventListener("submit", triggerSendBurst);
+      form?.removeEventListener("focusin", focusEditor);
       window.removeEventListener("lightning:composer-send", triggerSendBurst);
       host?.removeAttribute("data-lightning-composer-state");
     };
@@ -135,10 +152,8 @@ export function ComposerEnergyWave({
         : phase === "running"
           ? 1
           : phase === "typing"
-            ? keystrokeKick
-              ? 0.88
-              : 0.74
-            : 0.44;
+            ? 0.84
+            : 0.4;
   const waveStyle = { "--lightning-wave-amp": String(amp) } as CSSProperties;
   const spectrumId = `lc-wave-spec-${uid}`;
   const coreId = `lc-wave-core-${uid}`;
@@ -237,6 +252,18 @@ export function ComposerEnergyWave({
             fill={`url(#${coreId})`}
             d="M0 48 L0 46 C120 46 210 41 278 33 C308 29 334 29 366 33 C434 41 520 46 640 46 L640 48 Z"
           />
+          <g ref={crestRef} fill={`url(#${spectrumId})`}>
+            <path
+              className="lightning-key-crest"
+              d="M215 48c56 0 71-5 85-24 6-9 11-9 17 0 10 16 25 23 62 24z"
+            />
+            <g transform="translate(640 0) scale(-1 1)">
+              <path
+                className="lightning-key-crest"
+                d="M215 48c56 0 71-5 85-24 6-9 11-9 17 0 10 16 25 23 62 24z"
+              />
+            </g>
+          </g>
         </g>
 
         {phase !== "waiting" ? (
@@ -248,7 +275,12 @@ export function ComposerEnergyWave({
                 cy={dot.cy}
                 r={phase === "sending" ? "1.65" : "1.35"}
                 className={cn("lightning-wave-spark", dot.toneClass)}
-                style={{ animationDelay: dot.delay }}
+                style={
+                  {
+                    animationDelay: phase === "sending" ? "0s" : dot.delay,
+                    "--spark-flight": `${(dot.cx - 320) * 0.32}px`,
+                  } as CSSProperties
+                }
               />
             ))}
           </g>

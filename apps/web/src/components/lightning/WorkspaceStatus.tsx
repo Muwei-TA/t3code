@@ -27,11 +27,7 @@ export function WorkspaceStatus({
       <span
         aria-hidden="true"
         data-connected={connected ? "true" : "false"}
-        className={
-          connected
-            ? "lightning-status-led size-1.5 shrink-0 rounded-full"
-            : "size-1.5 shrink-0 rounded-full border border-current opacity-60"
-        }
+        className="lightning-status-led size-1.5 shrink-0 rounded-full"
       />
       <span className="truncate">
         {hero ? (
