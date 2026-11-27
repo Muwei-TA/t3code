@@ -235,6 +235,7 @@ describe("HarnessSyncService", () => {
         );
         const rule = "rules/checks.md";
         const extra = "rules/local-only.md";
+        const script = "skills/tool/scripts/check.sh";
         const sourceDir = path.join(source, "harness");
         const targetDir = path.join(target, "harness");
         yield* fs.makeDirectory(path.join(sourceDir, "rules"), { recursive: true });
@@ -242,6 +243,11 @@ describe("HarnessSyncService", () => {
         yield* fs.writeFileString(path.join(sourceDir, rule), "intro\nnew\nend\n");
         yield* fs.writeFileString(path.join(targetDir, rule), "intro\nold\nend\n");
         yield* fs.writeFileString(path.join(targetDir, extra), "Keep me.\n");
+        yield* fs.makeDirectory(path.dirname(path.join(sourceDir, script)), { recursive: true });
+        yield* fs.makeDirectory(path.dirname(path.join(targetDir, script)), { recursive: true });
+        for (const dir of [sourceDir, targetDir])
+          yield* fs.writeFileString(path.join(dir, script), "echo ok");
+        yield* fs.chmod(path.join(sourceDir, script), 0o755);
         const id = HarnessMcpServerId.make("mcp-guide");
         const localId = HarnessMcpServerId.make("local-mcp");
         const config = {
@@ -263,7 +269,7 @@ describe("HarnessSyncService", () => {
         }).pipe(Effect.provide(srcLayer));
         expect(exportResult.canExport).toBe(true);
         const bundle = exportResult.bundle!;
-        expect(bundle.files.map(({ path }) => path)).toEqual([rule]);
+        expect(bundle.files.map(({ path }) => path)).toEqual([rule, script]);
         expect(bundle.portableMcpServers?.servers[0]?.config.origin).toBeUndefined();
 
         yield* Effect.gen(function* () {
@@ -282,6 +288,7 @@ describe("HarnessSyncService", () => {
           expect(preview.files).toEqual([
             { path: rule, status: "modified", additions: 1, deletions: 1 },
             { path: extra, status: "deleted", additions: 0, deletions: 1 },
+            { path: script, status: "modified", additions: 0, deletions: 0 },
           ]);
           expect(preview.mcpServerDiffs).toEqual([{ id, status: "added", disabledOnImport: true }]);
           expect(preview.missingSecretRefs).toEqual(["${secret:DEMO}"]);
@@ -300,7 +307,8 @@ describe("HarnessSyncService", () => {
             expectedPreviewDigest: next.previewDigest!,
             includeMcpServers: true,
           });
-          expect(applied.appliedPaths).toEqual([rule]);
+          expect(applied.appliedPaths).toEqual([rule, script]);
+          expect((yield* fs.stat(path.join(targetDir, script))).mode & 0o111).toBe(0o111);
           expect(applied.importedDisabledMcpIds).toEqual([id]);
           const after = (yield* store.loadUserConfig).config.mcpServers;
           expect(after[id]).toMatchObject({ enabled: false, transport: config.transport });
@@ -616,6 +624,9 @@ describe("HarnessSyncService", () => {
           const attackerClone = path.join(tempRoot, "attacker");
           yield* Effect.promise(async () => {
             await execGit(tempRoot, ["clone", bareRemote, attackerClone]);
+            const script = NodePath.join(attackerClone, "skills", "tool", "scripts", "check.sh");
+            await NodeFSP.mkdir(NodePath.dirname(script), { recursive: true });
+            await NodeFSP.writeFile(script, "echo ok", { mode: 0o755 });
             await NodeFSP.mkdir(NodePath.join(attackerClone, "rules"), { recursive: true });
             await NodeFSP.writeFile(
               NodePath.join(attackerClone, "rules", "safe-rule.md"),
@@ -634,6 +645,11 @@ describe("HarnessSyncService", () => {
             );
             await execGit(attackerClone, ["add", "-A"]);
             await execGit(attackerClone, [
+              "update-index",
+              "--chmod=+x",
+              "skills/tool/scripts/check.sh",
+            ]);
+            await execGit(attackerClone, [
               "-c",
               "user.name=Remote",
               "-c",
@@ -648,6 +664,10 @@ describe("HarnessSyncService", () => {
           const pulled = yield* sync.pull();
           expect(pulled.pulled).toBe(true);
           expect(pulled.updatedFiles).toContain("rules/safe-rule.md");
+          expect(
+            (yield* fs.stat(path.join(store.harnessDir, "skills/tool/scripts/check.sh"))).mode &
+              0o111,
+          ).toBe(0o111);
           expect(pulled.skippedFiles).toContain("hooks.json");
           expect(pulled.skippedFiles).toContain("plugins-state.json");
 

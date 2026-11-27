@@ -731,7 +731,6 @@ export const layerWithOptions = (
                   harnessCapabilities: adapterCapabilities.value.harness,
                   activeMode,
                   nativeSkills,
-                  nativeReadsProjectAgentsMd: true,
                   codexSkillMount: "prepare",
                   supportsMcpTools: adapterCapabilities.value.tools.supportsMcpTools,
                 })
@@ -775,10 +774,10 @@ export const layerWithOptions = (
             : "";
           const effectiveInteractionMode = runInteractionMode(threadInteractionMode, runMode);
           const hasCreatorTools =
+            librarySnapshot !== null &&
             effectiveInteractionMode !== "plan" &&
             activeMode?.readonly !== true &&
-            (activeMode?.id ?? runMode?.id ?? Option.getOrUndefined(threadRecord)?.modeId) ===
-              "creator";
+            activeMode?.id === "creator";
           const harnessInjection =
             Option.isSome(mcpGateway) && Option.isSome(adapterCapabilities)
               ? yield* mcpGateway.value
@@ -789,7 +788,7 @@ export const layerWithOptions = (
                     emitsProposedPlan: adapterCapabilities.value.planning.emitsProposedPlan,
                     supportsMcpTools: adapterCapabilities.value.tools.supportsMcpTools,
                     harnessCapabilities: adapterCapabilities.value.harness,
-                    hasLibraryGatewayTools: projectedLibrary?.needsGatewayTools === true,
+                    hasLibraryGatewayTools: librarySnapshot !== null,
                     hasCreatorTools,
                     hasMemoryTools: Option.isSome(harnessMemoryStore),
                     sdkToolsDigest,

@@ -217,9 +217,12 @@ function isSkillDeduplicatedByNative(
   const skillPath = normalizePath(skill.sourcePath);
   const skillName = skill.name.trim().toLowerCase();
   const skillId = skill.id.trim().toLowerCase();
+  const hasCompanions =
+    skill.companionTruncated || skill.files?.some((f) => f.relativePath !== "SKILL.md");
   for (const native of nativeSkills) {
     const nativePath = normalizePath(native.path);
     if (nativePath === skillPath) return true;
+    if (hasCompanions) continue;
     if (native.contentDigest !== undefined && native.contentDigest === skill.contentDigest) {
       return true;
     }
@@ -259,8 +262,8 @@ export function projectHarnessContext(input: {
   readonly harnessCapabilities: OrchestrationV2HarnessCapabilities;
   readonly activeMode?: HarnessModeEntry | null | undefined;
   readonly nativeSkills?: ReadonlyArray<NativeDiscoveredSkill> | undefined;
+  readonly claudeMountAvailable?: boolean | undefined;
   readonly codexSkillMount?: "prepare" | "mounted" | undefined;
-  readonly nativeReadsProjectAgentsMd?: boolean | undefined;
   readonly promptText?: string | undefined;
   readonly attachmentPaths?: ReadonlyArray<string> | undefined;
   readonly supportsMcpTools: boolean;
@@ -319,7 +322,7 @@ export function projectHarnessContext(input: {
       continue;
     }
     if (
-      harnessCapabilities.skillMount === "plugin-dir" ||
+      (harnessCapabilities.skillMount === "plugin-dir" && input.claudeMountAvailable !== false) ||
       (harnessCapabilities.skillMount === "managed-home" && input.codexSkillMount !== undefined)
     ) {
       nativeMountSkills.push(skill);
@@ -394,7 +397,7 @@ export function projectHarnessContext(input: {
     library.projectAgentsMd.exists &&
     library.projectAgentsMd.body.trim().length > 0
   ) {
-    if (input.nativeReadsProjectAgentsMd !== false) {
+    if (harnessCapabilities.readsProjectAgentsMd === true) {
       ruleItems.push({
         id: "project:AGENTS.md",
         scope: "project",
@@ -418,7 +421,6 @@ export function projectHarnessContext(input: {
 
   // 2. Conditional user rules (`rules/*.md`)
   const lockedBlocks: typeof candidateBlocks = [];
-  let hasOnDemandOrDegradedRules = false;
   for (const rule of library.rules) {
     if (!rule.effectiveEnabled) {
       ruleItems.push({
@@ -436,7 +438,6 @@ export function projectHarnessContext(input: {
     }
     const forcedByMode = !rule.lockedByPolicy && modeIncludedRules.has(rule.id.toLowerCase());
     if (!forcedByMode && rule.apply === "manual") {
-      hasOnDemandOrDegradedRules = true;
       ruleItems.push({
         id: rule.id,
         scope: rule.scope,
@@ -454,7 +455,6 @@ export function projectHarnessContext(input: {
           rule.globs.some((glob) => matchesRuleGlob(glob, candidatePath)),
         );
       if (!matched) {
-        hasOnDemandOrDegradedRules = true;
         ruleItems.push({
           id: rule.id,
           scope: rule.scope,
@@ -526,11 +526,6 @@ export function projectHarnessContext(input: {
 
   // Pack whole blocks into segments without EVER truncating a block AND guaranteeing
   // emitted total bytes (including fixed scaffold and `\n\n` inter-block separators) <= totalBudget.
-  const preliminaryNeedsGateway =
-    input.supportsMcpTools &&
-    (gatewaySkills.length > 0 ||
-      hasOnDemandOrDegradedRules ||
-      (input.codexSkillMount !== undefined && nativeMountSkills.length > 0));
   const scaffoldText = T3_CODE_HARNESS_SCAFFOLD_INSTRUCTIONS;
   const scaffoldByteSize = utf8Bytes(scaffoldText);
   const lockedBudget = lockedBlocks.reduce(
@@ -544,8 +539,6 @@ export function projectHarnessContext(input: {
     const accepted: Array<{ readonly text: string; readonly bytes: number }> = [];
     const packedRuleItems: Array<ThreadContextRuleItem> = [...ruleItems];
     const packedDegradedItems: Array<ThreadContextDegradedItem> = [...degradedItems];
-    let hasDegraded = false;
-    let extraOnDemandRules = false;
     let remainingBudget = totalBudget;
     let currentSegmentBytes = 0;
     let currentSegmentParts = 0;
@@ -591,7 +584,6 @@ export function projectHarnessContext(input: {
           });
         }
       } else {
-        hasDegraded = true;
         const readHint =
           candidate.kind === "mode"
             ? `Read on demand via harness_rule_read(id: "mode:${candidate.id}") without truncation.`
@@ -602,7 +594,6 @@ export function projectHarnessContext(input: {
         if (candidate.kind === "mode") {
           packedDegradedItems.push({ kind: "mode", id: candidate.id, reason });
         } else if (candidate.kind === "agents_md" || candidate.kind === "rule") {
-          extraOnDemandRules = true;
           packedRuleItems.push({
             id: candidate.id,
             scope: candidate.scope,
@@ -623,27 +614,12 @@ export function projectHarnessContext(input: {
       accepted,
       packedRuleItems,
       packedDegradedItems,
-      hasDegraded,
-      extraOnDemandRules,
       usedScaffoldBytes,
     };
   };
 
-  let packed = packWithScaffold(preliminaryNeedsGateway);
-  let needsGatewayTools =
-    input.supportsMcpTools &&
-    (preliminaryNeedsGateway ||
-      hasOnDemandOrDegradedRules ||
-      packed.extraOnDemandRules ||
-      packed.hasDegraded);
-  // If degrading a block newly requires the gateway scaffold, re-pack reserving the scaffold bytes inside totalBudget.
-  if (needsGatewayTools && !preliminaryNeedsGateway) {
-    packed = packWithScaffold(true);
-    needsGatewayTools =
-      input.supportsMcpTools &&
-      (hasOnDemandOrDegradedRules || packed.extraOnDemandRules || packed.hasDegraded);
-  }
-
+  const packed = packWithScaffold(input.supportsMcpTools);
+  const needsGatewayTools = input.supportsMcpTools;
   const rawBlocks: Array<{ readonly text: string; readonly bytes: number }> = [];
   const scaffoldBytes = packed.usedScaffoldBytes;
   if (scaffoldBytes > 0) {

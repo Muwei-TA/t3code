@@ -50,6 +50,7 @@ import { makeProviderInstanceRegistry } from "./ProviderInstanceRegistry.ts";
 import { ProviderDriverError } from "./Errors.ts";
 import * as ProviderInstallationGate from "./ProviderInstallationGate.ts";
 import * as ProviderOrchestrationAdapterInfrastructure from "./ProviderOrchestrationAdapterInfrastructure.ts";
+import { getDeliveryMatrix } from "../harness/deliveryMatrix.ts";
 import * as PortScanner from "../preview/PortScanner.ts";
 import * as ProviderHostLive from "./ProviderHostLive.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -465,6 +466,24 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       expect(codex).toBeDefined();
       expect(claude).toBeDefined();
 
+      const matrix = yield* getDeliveryMatrix(registry);
+      expect(matrix).toContainEqual(
+        expect.objectContaining({
+          providerInstanceId: codexId,
+          skillDelivery: "conditional-native",
+          mcpDelivery: "hybrid",
+          readsProjectAgentsMd: true,
+        }),
+      );
+      expect(matrix).toContainEqual(
+        expect.objectContaining({
+          providerInstanceId: claudeId,
+          skillDelivery: "native",
+          mcpDelivery: "hybrid",
+          toolHooksDelivery: "gateway",
+          readsProjectAgentsMd: false,
+        }),
+      );
       const [codexSnapshot, claudeSnapshot] = yield* Effect.all(
         [codex!.snapshot.refresh, claude!.snapshot.refresh],
         { concurrency: "unbounded" },

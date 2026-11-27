@@ -128,10 +128,11 @@ const make = Effect.gen(function* () {
             })
             .pipe(Effect.orElseSucceed(() => null))
         : null;
-      const codexMount =
-        harnessCapabilities.skillMount === "managed-home" && Option.isSome(mcpSessions)
-          ? (yield* mcpSessions.value.read(threadId))?.harnessCodexSkillRoot
+      const mountSession =
+        harnessCapabilities.skillMount !== "none" && Option.isSome(mcpSessions)
+          ? yield* mcpSessions.value.read(threadId)
           : undefined;
+      const codexMount = mountSession?.harnessCodexSkillRoot;
       const projected =
         librarySnapshot !== null
           ? projectHarnessContext({
@@ -139,7 +140,7 @@ const make = Effect.gen(function* () {
               harnessCapabilities,
               activeMode,
               nativeSkills,
-              nativeReadsProjectAgentsMd: true,
+              claudeMountAvailable: !!mountSession?.harnessSkillPluginDir,
               codexSkillMount: codexMount?.mounts.size ? "mounted" : undefined,
               supportsMcpTools,
             })
@@ -305,9 +306,7 @@ const make = Effect.gen(function* () {
             (supportsMcpTools &&
               (projected?.needsGatewayTools === true ||
                 Option.isSome(memoryStore) ||
-                (activeMode?.id === "creator" &&
-                  thread.interactionMode !== "plan" &&
-                  !activeMode.readonly) ||
+                librarySnapshot !== null ||
                 (Option.isSome(pluginHost) && pluginHost.value.listActiveSdkTools().length > 0))) ||
             ((thread.interactionMode === "plan" || activeMode?.proposePlan === true) &&
               planModeSource === "harness-propose-plan")),

@@ -282,6 +282,7 @@ export interface HarnessHooksServiceShape {
   readonly list: () => Effect.Effect<HarnessHooksSnapshot, HarnessError>;
   readonly upsertUserHook: (
     input: HarnessHookUpsertInput,
+    proposal?: boolean,
   ) => Effect.Effect<HarnessHooksSnapshot, HarnessError>;
   readonly removeUserHook: (
     input: HarnessHookRemoveInput,
@@ -516,7 +517,7 @@ export const layer = Layer.effect(
         return yield* buildSnapshot();
       }),
 
-      upsertUserHook: Effect.fn("HarnessHooksService.upsertUserHook")(function* (input) {
+      upsertUserHook: Effect.fn("HarnessHooksService.upsertUserHook")(function* (input, proposal) {
         const policy = yield* readPolicy();
         if (!policy.allowsHarness) {
           return yield* new HarnessError({
@@ -537,10 +538,16 @@ export const layer = Layer.effect(
           });
         }
         const existing = yield* readUserHooks();
+        if (proposal && existing.some((h) => h.id === input.id))
+          return yield* new HarnessError({
+            code: "invalid_config",
+            detail: "Hook id is already installed.",
+          });
         const nextHook: HarnessHookDefinition = {
           id: input.id,
           event: input.event,
-          enabled: input.enabled ?? true,
+          enabled: proposal ? false : (input.enabled ?? true),
+          ...(proposal ? { pendingApproval: true } : {}),
           ...(input.matcher ? { matcher: input.matcher } : {}),
           ...(input.timeoutMs !== undefined
             ? { timeoutMs: PositiveInt.make(clampTimeoutMs(input.timeoutMs)) }
@@ -578,7 +585,13 @@ export const layer = Layer.effect(
         }
         if (input.enabled && found.target.type === "command") yield* authorizeCommand;
         const nextHooks = existing.map((h) =>
-          h.id === input.id ? { ...h, enabled: input.enabled } : h,
+          h.id === input.id
+            ? {
+                ...h,
+                enabled: input.enabled,
+                ...(input.enabled && h.pendingApproval ? { pendingApproval: false } : {}),
+              }
+            : h,
         );
         yield* writeUserHooks(nextHooks);
         return yield* buildSnapshot();
@@ -593,6 +606,11 @@ export const layer = Layer.effect(
             detail: `Hook "${input.id}" was not found.`,
           });
         }
+        if (hook.pendingApproval)
+          return yield* new HarnessError({
+            code: "policy_denied",
+            detail: "Approve this hook before testing it.",
+          });
         return yield* executeOneHook(
           hook,
           hook.event,
@@ -629,6 +647,7 @@ export const layer = Layer.effect(
         const hooks = loaded.success.filter(
           (hook) =>
             hook.enabled &&
+            !hook.pendingApproval &&
             hook.event === "turn.beforeStart" &&
             matchesHookMatcher(hook.matcher, payload.modeId ?? "build"),
         );
@@ -675,6 +694,7 @@ export const layer = Layer.effect(
         const hooks = loaded.success.filter(
           (hook) =>
             hook.enabled &&
+            !hook.pendingApproval &&
             hook.event === phase &&
             matchesHookMatcher(hook.matcher, payload.toolName),
         );
@@ -718,7 +738,7 @@ export const layer = Layer.effect(
                 Effect.as([]),
               ),
             ),
-          )).filter((hook) => hook.enabled && hook.event === event);
+          )).filter((hook) => hook.enabled && !hook.pendingApproval && hook.event === event);
           if (hooks.length === 0) return;
           const policy = yield* readPolicy();
           yield* Effect.forkDetach(

@@ -90,6 +90,18 @@ export function createHarnessEnvironmentAtoms<R, E>(
       label: "environment-command:harness:agents-md:save",
       tag: WS_METHODS.harnessAgentsMdSave,
     }),
+    readSkillFile: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness.readSkillFile",
+      tag: WS_METHODS.harnessReadSkillFile,
+    }),
+    installSkillPackage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness.installSkillPackage",
+      tag: WS_METHODS.harnessInstallSkillPackage,
+    }),
+    getDeliveryMatrix: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:harness.getDeliveryMatrix",
+      tag: WS_METHODS.harnessGetDeliveryMatrix,
+    }),
     upsertSkill: createEnvironmentRpcCommand(runtime, {
       label: "environment-command:harness:skill:upsert",
       tag: WS_METHODS.harnessSkillUpsert,

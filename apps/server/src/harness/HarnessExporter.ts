@@ -28,12 +28,13 @@ import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import {
   formatCommandMarkdown,
   formatMarkdownWithFrontmatter,
-  formatSkillMarkdown,
   sha256Hex,
 } from "./HarnessLibraryStore.ts";
 import { configContainsSecretPlaceholder, redactHarnessServerConfig } from "./HarnessSecrets.ts";
 import * as HarnessStore from "./HarnessStore.ts";
-import { safeReadFileUtf8, safeWriteFileAtomic } from "./safeFileOps.ts";
+import { assertContainedNoSymlinks, safeReadFileUtf8, safeWriteFileAtomic } from "./safeFileOps.ts";
+
+import { loadPackage, readPackageFile } from "./skillPackage.ts";
 
 const ALL_SECTIONS: ReadonlyArray<HarnessExportSection> = ["mcp", "skills", "rules", "commands"];
 const MAX_SNIPPET_CHARS = 800;
@@ -44,6 +45,7 @@ const MANAGED_RULES_BLOCK =
   /^<!-- T3-HARNESS-BEGIN -->\r?\n(?:(?!^<!-- T3-HARNESS-(?:BEGIN|END) -->\r?$)[\s\S])*?^<!-- T3-HARNESS-END -->(?=\r?$)/mu;
 
 interface PlannedExportFile {
+  readonly executable?: boolean;
   readonly targetPath: string;
   readonly action: HarnessExportFileAction;
   readonly section: HarnessExportSection;
@@ -257,7 +259,7 @@ function computeExportPlanDigest(
     .update(
       JSON.stringify({
         target,
-        files: files.map((f) => [f.targetPath, f.action, sha256Hex(f.content)]),
+        files: files.map((f) => [f.targetPath, f.action, sha256Hex(f.content), f.executable]),
       }),
     )
     .digest("hex")
@@ -311,10 +313,11 @@ const make = Effect.gen(function* () {
 
   const writeFileAtomic = Effect.fn("HarnessExporter.writeFileAtomic")(function* (
     targetPath: string,
-    contents: string,
+    contents: string | Uint8Array,
+    mode?: number,
   ) {
     yield* Effect.tryPromise({
-      try: () => safeWriteFileAtomic(homeDir, targetPath, contents),
+      try: () => safeWriteFileAtomic(homeDir, targetPath, contents, mode),
       catch: (error) =>
         new HarnessError({
           code: "io_error",
@@ -380,7 +383,12 @@ const make = Effect.gen(function* () {
     // 1. MCP Servers
     if (sections.has("mcp")) {
       const exportableServers = workspace.servers
-        .filter((s) => s.scope === "user" && s.effectiveEnabled)
+        .filter(
+          (s) =>
+            s.scope === "user" &&
+            s.effectiveEnabled &&
+            !s.config.origin?.source?.startsWith("plugin:"),
+        )
         .map((s) => ({ id: s.id, config: s.config }));
       const redactedServers = exportableServers.map((s) => ({
         id: s.id,
@@ -452,17 +460,51 @@ const make = Effect.gen(function* () {
             : path.join(homeDir, ".cursor", "skills");
       for (const skill of lib.skills) {
         if (skill.scope !== "user" || !skill.effectiveEnabled) continue;
-        const targetPath = path.join(targetSkillsRoot, skill.id, "SKILL.md");
-        const existing = Option.getOrNull(yield* readFileOpt(targetPath));
-        const content = formatSkillMarkdown({
-          name: skill.name,
-          description: skill.description,
-          shortDescription: skill.shortDescription,
-          userInvocable: skill.userInvocable,
-          userInvocationOnly: skill.userInvocationOnly,
-          body: skill.body,
+        const planned = yield* Effect.tryPromise({
+          try: async () => {
+            await assertContainedNoSymlinks(lib.harnessDir, path.dirname(skill.sourcePath));
+            const source = await loadPackage(path.dirname(skill.sourcePath));
+            return await Promise.all(
+              source.map(async (file) => {
+                const targetPath = path.join(targetSkillsRoot, skill.id, file.relativePath);
+                const existing = await readPackageFile(
+                  homeDir,
+                  path.relative(homeDir, targetPath).split(path.sep).join("/"),
+                ).catch((error: unknown) => {
+                  if (error instanceof Error && "code" in error && error.code === "ENOENT")
+                    return null;
+                  throw error;
+                });
+                const bytes = Buffer.from(file.content, "base64");
+                const text = bytes.toString("utf8");
+                return {
+                  targetPath,
+                  section: "skills",
+                  itemId: skill.id,
+                  content: file.content,
+                  executable: file.executable === true,
+                  action:
+                    existing === null
+                      ? "create"
+                      : existing.bytes.equals(bytes) && existing.executable === file.executable
+                        ? "unchanged"
+                        : "update",
+                  redactedPreviewContent:
+                    bytes.includes(0) || !Buffer.from(text).equals(bytes)
+                      ? `Binary file (${bytes.length} bytes)`
+                      : text,
+                  hasSecretPlaceholders: false,
+                } satisfies PlannedExportFile;
+              }),
+            );
+          },
+          catch: (error) =>
+            new HarnessError({
+              code: "io_error",
+              detail: `Could not export skill package: ${error instanceof Error ? error.message : error}`,
+            }),
         });
-        addPlannedFile(targetPath, existing, "skills", skill.id, content, content, false);
+        files.push(...planned);
       }
     }
 
@@ -586,7 +628,9 @@ const make = Effect.gen(function* () {
         action: file.action,
         section: file.section,
         itemId: file.itemId,
-        bytes: NonNegativeInt.make(Buffer.byteLength(file.content, "utf8")),
+        bytes: NonNegativeInt.make(
+          Buffer.byteLength(file.content, file.executable === undefined ? "utf8" : "base64"),
+        ),
         previewSnippet: truncateSnippet(file.redactedPreviewContent),
         hasSecretPlaceholders: file.hasSecretPlaceholders,
       }));
@@ -618,7 +662,14 @@ const make = Effect.gen(function* () {
               skippedPaths.push(file.targetPath);
               continue;
             }
-            yield* writeFileAtomic(file.targetPath, file.content);
+            if (file.executable === undefined)
+              yield* writeFileAtomic(file.targetPath, file.content);
+            else
+              yield* writeFileAtomic(
+                file.targetPath,
+                Buffer.from(file.content, "base64"),
+                file.executable ? 0o755 : 0o644,
+              );
             writtenPaths.push(file.targetPath);
           }
           return {

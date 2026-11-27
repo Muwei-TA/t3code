@@ -206,6 +206,7 @@ const MuseProviderCapabilitiesV2 = {
     skillMount: "none",
     systemContextMutableMidSession: false,
     maxSystemContextBytes: null,
+    readsProjectAgentsMd: false,
     nativeToolHooks: false,
     nativeAllowAlways: false,
     planReadOnlyEnforcement: "advisory",

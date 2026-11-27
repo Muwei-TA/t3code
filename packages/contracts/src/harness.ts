@@ -229,6 +229,7 @@ export const HarnessMcpOrigin = Schema.Struct({
 export type HarnessMcpOrigin = typeof HarnessMcpOrigin.Type;
 
 export const HarnessMcpServerConfig = Schema.Struct({
+  pendingApproval: Schema.optionalKey(Schema.Boolean),
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   transport: HarnessMcpTransport,
   injectionMode: HarnessMcpInjectionMode.pipe(
@@ -438,7 +439,60 @@ export const HarnessAgentsMdView = Schema.Struct({
 });
 export type HarnessAgentsMdView = typeof HarnessAgentsMdView.Type;
 
+export const HarnessSkillFile = Schema.Struct({
+  relativePath: Schema.String,
+  sizeBytes: NonNegativeInt,
+  executable: Schema.Boolean,
+  kind: Schema.Literals(["doc", "script", "asset"]),
+});
+export type HarnessSkillFile = typeof HarnessSkillFile.Type;
+
+const skillLocation = {
+  id: HarnessSkillId,
+  scope: HarnessMcpServerScope,
+  workspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+};
+export const HarnessReadSkillFileInput = Schema.Struct({
+  ...skillLocation,
+  relativePath: TrimmedNonEmptyString,
+});
+export type HarnessReadSkillFileInput = typeof HarnessReadSkillFileInput.Type;
+export const HarnessReadSkillFileResult = Schema.Struct({
+  path: Schema.String,
+  sizeBytes: NonNegativeInt,
+  executable: Schema.Boolean,
+  binary: Schema.Boolean,
+  content: Schema.optionalKey(Schema.String),
+});
+export type HarnessReadSkillFileResult = typeof HarnessReadSkillFileResult.Type;
+export const HarnessPackageFile = Schema.Struct({
+  relativePath: Schema.String.check(Schema.isMaxLength(512)),
+  content: Schema.String.check(Schema.isMaxLength(1_398_104)),
+  encoding: Schema.optionalKey(Schema.Literals(["utf8", "base64"])),
+  executable: Schema.optionalKey(Schema.Boolean),
+});
+export type HarnessPackageFile = typeof HarnessPackageFile.Type;
+export const HarnessInstallSkillPackageInput = Schema.Struct({
+  ...skillLocation,
+  sourceDir: Schema.optionalKey(TrimmedNonEmptyString),
+  files: Schema.optionalKey(Schema.Array(HarnessPackageFile).check(Schema.isMaxLength(512))),
+});
+export type HarnessInstallSkillPackageInput = typeof HarnessInstallSkillPackageInput.Type;
+export const HarnessDeliveryMatrixEntry = Schema.Struct({
+  providerInstanceId: Schema.String,
+  driverKind: Schema.String,
+  displayName: Schema.String,
+  skillDelivery: Schema.Literals(["native", "conditional-native", "gateway"]),
+  mcpDelivery: Schema.Literals(["native", "hybrid", "gateway"]),
+  toolHooksDelivery: Schema.Literals(["native", "gateway"]),
+  readsProjectAgentsMd: Schema.Boolean,
+  notes: Schema.optionalKey(Schema.String),
+});
+export type HarnessDeliveryMatrixEntry = typeof HarnessDeliveryMatrixEntry.Type;
+
 export const HarnessSkillEntry = Schema.Struct({
+  files: Schema.optionalKey(Schema.Array(HarnessSkillFile)),
+  companionTruncated: Schema.optionalKey(Schema.Boolean),
   id: HarnessSkillId,
   name: TrimmedNonEmptyString,
   scope: HarnessMcpServerScope,
@@ -1100,6 +1154,7 @@ export const HarnessHookSource = Schema.Literals(["user", "plugin"]);
 export type HarnessHookSource = typeof HarnessHookSource.Type;
 
 export const HarnessHookDefinition = Schema.Struct({
+  pendingApproval: Schema.optionalKey(Schema.Boolean),
   id: HarnessHookId,
   event: HarnessHookEvent,
   enabled: Schema.Boolean,
@@ -1356,6 +1411,7 @@ const HarnessSyncBundle = Schema.Struct({
   files: Schema.Array(
     Schema.Struct({
       path: HarnessSyncBundlePath,
+      executable: Schema.optionalKey(Schema.Boolean),
       text: Schema.String.check(Schema.isMaxLength(512 * 1024)),
     }),
   ).check(Schema.isMaxLength(512)),

@@ -41,6 +41,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as HarnessHooksService from "./HarnessHooksService.ts";
@@ -286,6 +287,12 @@ describe("HarnessMcpHttpServer", () => {
           );
           expect(listRes.result.tools.map((t) => t.name)).toEqual([
             "propose_plan",
+            "harness_skill_search",
+            "harness_skill_load",
+            "harness_rule_read",
+            "workflow_validate",
+            "harness_inspect",
+            "harness_skill_read_file",
             "tracker__read_issue",
           ]);
 
@@ -646,269 +653,380 @@ describe("HarnessMcpHttpServer", () => {
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.live("exposes Creator Mode tools only in creator mode and enforces PreToolUse hooks", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const tempRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-harness-creator-" });
-      const baseDir = path.join(tempRoot, "t3home");
-      const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+  it.live(
+    "manages harness assets in Build mode and enforces read-only ceilings and PreToolUse hooks",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const tempRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-harness-creator-" });
+        const baseDir = path.join(tempRoot, "t3home");
+        const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
 
-      const threadId = ThreadId.make("thread-creator-http");
-      const projectId = ProjectId.make("project-creator-http");
-      const providerInstanceId = ProviderInstanceId.make("cursor");
-      const activeRunId = RunId.make("run:creator-1");
+        const threadId = ThreadId.make("thread-creator-http");
+        const projectId = ProjectId.make("project-creator-http");
+        const providerInstanceId = ProviderInstanceId.make("cursor");
+        const activeRunId = RunId.make("run:creator-1");
 
-      const mutableShell = {
-        id: threadId,
-        projectId,
-        providerInstanceId,
-        interactionMode: "default" as "plan" | "default",
-        modeId: "build" as string | undefined,
-        runtimeMode: "full-access" as const,
-        worktreePath: null,
-        deletedAt: null,
-        archivedAt: null,
-        activeRunId: activeRunId as RunId | null,
-        pendingBackgroundTasks: [],
-      };
-
-      const configLayer = Layer.succeed(ServerConfig.ServerConfig, {
-        ...paths,
-        mode: "web",
-        port: 0,
-        host: "127.0.0.1",
-        cwd: baseDir,
-        baseDir,
-      } as unknown as ServerConfig.ServerConfig["Service"]);
-
-      const policyLayer = Layer.succeed(ManagedPolicy.ManagedPolicy, {
-        document: undefined,
-        source: undefined,
-        error: undefined,
-      } as unknown as ManagedPolicy.ManagedPolicy["Service"]);
-
-      const secretStoreLayer = Layer.succeed(ServerSecretStore.ServerSecretStore, {
-        get: () => Effect.succeed(Option.none<Uint8Array>()),
-      } as unknown as ServerSecretStore.ServerSecretStore["Service"]);
-
-      const secretResolverLayer = Layer.succeed(SecretResolver.SecretResolver, {
-        read: () => Effect.succeed([]),
-      } as unknown as SecretResolver.SecretResolver["Service"]);
-
-      const storeLayer = HarnessStore.layer.pipe(
-        Layer.provideMerge(configLayer),
-        Layer.provideMerge(policyLayer),
-        Layer.provideMerge(T3ProjectFileLoader.layer),
-        Layer.provideMerge(NodeServices.layer),
-      );
-      const hooksLayer = HarnessHooksService.layer.pipe(Layer.provideMerge(storeLayer));
-      const pluginHostLayer = PluginHost.layer.pipe(
-        Layer.provideMerge(hooksLayer),
-        Layer.provideMerge(storeLayer),
-      );
-      const libraryLayer = HarnessLibraryStore.layer.pipe(
-        Layer.provideMerge(pluginHostLayer),
-        Layer.provideMerge(storeLayer),
-      );
-      const gatewayLayer = Layer.effect(McpGateway.McpGateway, McpGateway.makeWithOptions({})).pipe(
-        Layer.provideMerge(storeLayer),
-        Layer.provide(secretStoreLayer),
-        Layer.provide(secretResolverLayer),
-      );
-
-      const mockEnvLayer = Layer.succeed(ServerEnvironment.ServerEnvironment, {
-        getEnvironmentId: Effect.succeed(EnvironmentId.make("env-creator-test")),
-      } as unknown as ServerEnvironment.ServerEnvironment["Service"]);
-
-      const mockProjectionLayer = Layer.succeed(ProjectionStore.ProjectionStoreV2, {
-        getThreadShell: () => Effect.sync(() => ({ ...mutableShell })),
-        getThread: () => Effect.sync(() => ({ ...mutableShell })),
-      } as unknown as ProjectionStore.ProjectionStoreV2["Service"]);
-
-      const mockProjectLayer = Layer.succeed(ProjectStore.ProjectStoreV2, {
-        get: () => Effect.succeedNone,
-      } as unknown as ProjectStore.ProjectStoreV2["Service"]);
-
-      const mockAdapterRegistryLayer = Layer.succeed(
-        ProviderAdapterRegistry.ProviderAdapterRegistryV2,
-        {
-          get: () =>
-            Effect.succeed({
-              getCapabilities: () =>
-                Effect.succeed({
-                  planning: { emitsProposedPlan: false },
-                  tools: { supportsMcpTools: true },
-                  harness: DEFAULT_HARNESS_CAPABILITIES,
-                }),
-            }),
-        } as unknown as ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"],
-      );
-
-      const mockOrchestratorLayer = Layer.succeed(Orchestrator.OrchestratorV2, {
-        dispatch: () => Effect.succeed({ sequence: 1 }),
-      } as unknown as Orchestrator.OrchestratorV2["Service"]);
-
-      const serverLayer = HttpRouter.serve(HarnessMcpHttpServer.layer, {
-        disableLogger: true,
-      }).pipe(
-        Layer.provideMerge(McpSessionRegistry.layer),
-        Layer.provideMerge(gatewayLayer),
-        Layer.provideMerge(libraryLayer),
-        Layer.provideMerge(NodeHttpServer.layerTest),
-        Layer.provide(mockEnvLayer),
-        Layer.provide(mockProjectionLayer),
-        Layer.provide(mockProjectLayer),
-        Layer.provide(mockAdapterRegistryLayer),
-        Layer.provide(mockOrchestratorLayer),
-        Layer.provide(NodeCrypto.layer),
-        Layer.provide(NodeServices.layer),
-      );
-
-      yield* Effect.gen(function* () {
-        const registry = yield* McpSessionRegistry.McpSessionRegistry;
-        const hooks = yield* HarnessHooksService.HarnessHooksService;
-        const httpServer = yield* HttpServer.HttpServer;
-        const address = httpServer.address;
-        if (!NetAddress.isInetAddress(address)) {
-          throw new Error("Expected InetAddress in test server");
-        }
-        const harnessUrl = `http://127.0.0.1:${address.port}/mcp/harness`;
-        const issued = yield* registry.issue({
-          threadId,
+        const mutableShell = {
+          id: threadId,
+          projectId,
           providerInstanceId,
-          capabilities: new Set(["harness"]),
-        });
-        const authHeader = issued.config.authorizationHeader;
+          interactionMode: "default" as "plan" | "default",
+          modeId: "build" as string | undefined,
+          runtimeMode: "full-access" as const,
+          worktreePath: null,
+          deletedAt: null,
+          archivedAt: null,
+          activeRunId: activeRunId as RunId | null,
+          pendingBackgroundTasks: [],
+        };
 
-        const callRpc = (id: number, method: string, params: unknown) =>
-          Effect.promise(() =>
-            fetch(harnessUrl, {
-              method: "POST",
-              headers: {
-                authorization: authHeader,
-                "content-type": "application/json",
-              },
-              body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-            }).then(
-              (r) =>
-                r.json() as Promise<{
-                  result: {
-                    tools?: Array<{ name: string }>;
-                    isError?: boolean;
-                    content?: Array<{ text?: string }>;
-                  };
-                }>,
-            ),
-          );
+        const configLayer = Layer.succeed(ServerConfig.ServerConfig, {
+          ...paths,
+          mode: "web",
+          port: 0,
+          host: "127.0.0.1",
+          cwd: baseDir,
+          baseDir,
+        } as unknown as ServerConfig.ServerConfig["Service"]);
 
-        // Build mode must NOT expose mutating Creator Mode tools and must refuse direct calls.
-        const buildTools = yield* callRpc(1, "tools/list", {});
-        const buildNames = (buildTools.result.tools ?? []).map((t) => t.name);
-        expect(buildNames).not.toContain("harness_write_skill");
-        expect(buildNames).not.toContain("harness_create_mode");
-        expect(buildNames).not.toContain("plugin_pack");
+        const policyLayer = Layer.succeed(ManagedPolicy.ManagedPolicy, {
+          document: undefined,
+          source: undefined,
+          error: undefined,
+        } as unknown as ManagedPolicy.ManagedPolicy["Service"]);
 
-        const refusedSkill = yield* callRpc(2, "tools/call", {
-          name: "harness_write_skill",
-          arguments: { id: "blocked-skill", body: "No creator mode" },
-        });
-        expect(refusedSkill.result.isError).toBe(true);
+        const secretStoreLayer = Layer.succeed(ServerSecretStore.ServerSecretStore, {
+          get: () => Effect.succeed(Option.none<Uint8Array>()),
+        } as unknown as ServerSecretStore.ServerSecretStore["Service"]);
 
-        // Switch thread to Creator Mode: all 4 creator tools are exposed and callable.
-        mutableShell.modeId = "creator";
-        const creatorTools = yield* callRpc(3, "tools/list", {});
-        const creatorNames = (creatorTools.result.tools ?? []).map((t) => t.name);
-        expect(creatorNames).toContain("harness_write_skill");
-        expect(creatorNames).toContain("harness_create_mode");
-        expect(creatorNames).toContain("workflow_validate");
-        expect(creatorNames).toContain("plugin_pack");
+        const secretResolverLayer = Layer.succeed(SecretResolver.SecretResolver, {
+          read: () => Effect.succeed([]),
+        } as unknown as SecretResolver.SecretResolver["Service"]);
 
-        const skillWrite = yield* callRpc(4, "tools/call", {
-          name: "harness_write_skill",
-          arguments: {
-            id: "release-checklist",
-            description: "Release checklist",
-            body: "1. Run tests\n2. Tag release",
-          },
-        });
-        expect(skillWrite.result.isError).not.toBe(true);
-
-        const modeCreate = yield* callRpc(5, "tools/call", {
-          name: "harness_create_mode",
-          arguments: {
-            id: "release-pilot",
-            name: "Release Pilot",
-            baseInteractionMode: "default",
-            body: "Verify changelog before tagging.",
-          },
-        });
-        expect(modeCreate.result.isError).not.toBe(true);
-
-        for (const id of ["review", "release-pilot"]) {
-          const overwritten = yield* callRpc(12, "tools/call", {
-            name: "harness_create_mode",
-            arguments: { id, baseInteractionMode: "default", body: "Replacement" },
-          });
-          expect(overwritten.result.isError).toBe(true);
-        }
-        const library = yield* HarnessLibraryStore.HarnessLibraryStore;
-        const { modes } = yield* library.getSnapshot();
-        expect(modes.find((mode) => mode.id === "review")?.scope).toBe("builtin");
-        expect(modes.find((mode) => mode.id === "release-pilot")?.body).toContain(
-          "Verify changelog",
+        const storeLayer = HarnessStore.layer.pipe(
+          Layer.provideMerge(configLayer),
+          Layer.provideMerge(policyLayer),
+          Layer.provideMerge(T3ProjectFileLoader.layer),
+          Layer.provideMerge(NodeServices.layer),
+        );
+        const hooksLayer = HarnessHooksService.layer.pipe(Layer.provideMerge(storeLayer));
+        const pluginHostLayer = PluginHost.layer.pipe(
+          Layer.provideMerge(hooksLayer),
+          Layer.provideMerge(storeLayer),
+        );
+        const libraryLayer = HarnessLibraryStore.layer.pipe(
+          Layer.provideMerge(pluginHostLayer),
+          Layer.provideMerge(storeLayer),
+        );
+        const gatewayLayer = Layer.effect(
+          McpGateway.McpGateway,
+          McpGateway.makeWithOptions({}),
+        ).pipe(
+          Layer.provideMerge(storeLayer),
+          Layer.provide(secretStoreLayer),
+          Layer.provide(secretResolverLayer),
         );
 
-        const wfValidate = yield* callRpc(6, "tools/call", {
-          name: "workflow_validate",
-          arguments: {
-            yaml: "name: release-flow\nsteps:\n  - id: check\n    prompt: Verify build\n",
-          },
-        });
-        expect(wfValidate.result.isError).not.toBe(true);
-        expect(wfValidate.result.content?.[0]?.text).toContain("Valid workflow");
+        const mockEnvLayer = Layer.succeed(ServerEnvironment.ServerEnvironment, {
+          getEnvironmentId: Effect.succeed(EnvironmentId.make("env-creator-test")),
+        } as unknown as ServerEnvironment.ServerEnvironment["Service"]);
 
-        const packRes = yield* callRpc(7, "tools/call", {
-          name: "plugin_pack",
-          arguments: {
-            id: "release-kit",
-            name: "Release Kit",
-            version: "1.0.0",
-          },
-        });
-        expect(packRes.result.isError).not.toBe(true);
-        expect(packRes.result.content?.[0]?.text).toContain("sha256:");
+        const mockProjectionLayer = Layer.succeed(ProjectionStore.ProjectionStoreV2, {
+          getThreadShell: () => Effect.sync(() => ({ ...mutableShell })),
+          getThread: () => Effect.sync(() => ({ ...mutableShell })),
+        } as unknown as ProjectionStore.ProjectionStoreV2["Service"]);
 
-        // PreToolUse hook blocks matching tools/call on /mcp/harness.
-        yield* hooks.upsertUserHook({
-          id: HarnessHookId.make("block-pack"),
-          event: "PreToolUse",
-          enabled: true,
-          matcher: TrimmedNonEmptyString.make("plugin_pack"),
-          timeoutMs: PositiveInt.make(2_000),
-          failClosed: true,
-          target: {
-            type: "command",
-            command: TrimmedNonEmptyString.make(process.execPath),
-            args: [
-              "-e",
-              'process.stdout.write(JSON.stringify({ allow: false, reason: "Packaging frozen" }))',
+        const mockProjectLayer = Layer.succeed(ProjectStore.ProjectStoreV2, {
+          get: () => Effect.succeedNone,
+        } as unknown as ProjectStore.ProjectStoreV2["Service"]);
+
+        const mockAdapterRegistryLayer = Layer.succeed(
+          ProviderAdapterRegistry.ProviderAdapterRegistryV2,
+          {
+            get: () =>
+              Effect.succeed({
+                getCapabilities: () =>
+                  Effect.succeed({
+                    planning: { emitsProposedPlan: false },
+                    tools: { supportsMcpTools: true },
+                    harness: DEFAULT_HARNESS_CAPABILITIES,
+                  }),
+              }),
+          } as unknown as ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"],
+        );
+
+        const mockOrchestratorLayer = Layer.succeed(Orchestrator.OrchestratorV2, {
+          dispatch: () => Effect.succeed({ sequence: 1 }),
+        } as unknown as Orchestrator.OrchestratorV2["Service"]);
+
+        const serverLayer = HttpRouter.serve(HarnessMcpHttpServer.layer, {
+          disableLogger: true,
+        }).pipe(
+          Layer.provideMerge(McpSessionRegistry.layer),
+          Layer.provideMerge(gatewayLayer),
+          Layer.provideMerge(libraryLayer),
+          Layer.provideMerge(NodeHttpServer.layerTest),
+          Layer.provide(
+            Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+              listInstances: Effect.succeed([]),
+              listUnavailable: Effect.succeed([]),
+            }),
+          ),
+          Layer.provide(mockEnvLayer),
+          Layer.provide(mockProjectionLayer),
+          Layer.provide(mockProjectLayer),
+          Layer.provide(mockAdapterRegistryLayer),
+          Layer.provide(mockOrchestratorLayer),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provide(NodeServices.layer),
+        );
+
+        yield* Effect.gen(function* () {
+          const registry = yield* McpSessionRegistry.McpSessionRegistry;
+          const hooks = yield* HarnessHooksService.HarnessHooksService;
+          const httpServer = yield* HttpServer.HttpServer;
+          const address = httpServer.address;
+          if (!NetAddress.isInetAddress(address)) {
+            throw new Error("Expected InetAddress in test server");
+          }
+          const harnessUrl = `http://127.0.0.1:${address.port}/mcp/harness`;
+          const issued = yield* registry.issue({
+            threadId,
+            providerInstanceId,
+            capabilities: new Set(["harness"]),
+          });
+          const authHeader = issued.config.authorizationHeader;
+
+          const callRpc = (id: number, method: string, params: unknown) =>
+            Effect.promise(() =>
+              fetch(harnessUrl, {
+                method: "POST",
+                headers: {
+                  authorization: authHeader,
+                  "content-type": "application/json",
+                },
+                body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+              }).then(
+                (r) =>
+                  r.json() as Promise<{
+                    result: {
+                      tools?: Array<{ name: string }>;
+                      isError?: boolean;
+                      content?: Array<{ text?: string }>;
+                    };
+                  }>,
+              ),
+            );
+
+          const buildTools = yield* callRpc(1, "tools/list", {});
+          expect(buildTools.result.tools?.map((t) => t.name)).toContain("harness_install_skill");
+          const install = {
+            name: "harness_install_skill",
+            arguments: {
+              id: "release-notes",
+              scope: "user",
+              files: [
+                {
+                  relativePath: "SKILL.md",
+                  content: "---\nname: Release notes\n---\nInstructions",
+                },
+                { relativePath: "scripts/check.sh", content: "echo ok", executable: true },
+              ],
+            },
+          };
+          mutableShell.interactionMode = "plan";
+          expect((yield* callRpc(2, "tools/call", install)).result.isError).toBe(true);
+          mutableShell.interactionMode = "default";
+          expect((yield* callRpc(3, "tools/call", install)).result.isError).not.toBe(true);
+          const read = yield* callRpc(4, "tools/call", {
+            name: "harness_skill_read_file",
+            arguments: { skillId: "release-notes", relativePath: "scripts/check.sh" },
+          });
+          expect(JSON.parse(read.result.content![0]!.text!)).toMatchObject({
+            content: "echo ok",
+            executable: true,
+          });
+          for (const [name, args] of [
+            ["harness_manage_command", { id: "ship", body: "Describe release" }],
+            [
+              "harness_manage_mode",
+              { id: "ship", body: "Describe release", baseInteractionMode: "default" },
             ],
-          },
-        });
+            ["harness_manage_rule", { id: "ship", body: "Describe release", apply: "always" }],
+            ["harness_manage_rule", { id: "AGENTS.md", body: "Describe release" }],
+            [
+              "harness_manage_workflow",
+              {
+                id: "ship",
+                yaml: "name: ship\nsteps:\n  - id: draft\n    prompt: Describe release\n",
+              },
+            ],
+          ] as const) {
+            for (const action of ["upsert", "delete"]) {
+              const output = yield* callRpc(5, "tools/call", {
+                name,
+                arguments: { ...args, action },
+              });
+              expect(output.result.isError, output.result.content?.[0]?.text).not.toBe(true);
+            }
+          }
+          const proposed = yield* callRpc(6, "tools/call", {
+            name: "harness_propose_mcp",
+            arguments: {
+              id: "proposed",
+              config: {
+                enabled: true,
+                transport: { type: "http", url: "https://example.com/mcp" },
+              },
+            },
+          });
+          expect(proposed.result.isError).not.toBe(true);
+          const store = yield* HarnessStore.HarnessStore;
+          const pending = (yield* store.resolveWorkspace()).servers.find(
+            (s) => s.id === "proposed",
+          );
+          expect(pending).toMatchObject({
+            effectiveEnabled: false,
+            config: { enabled: false, pendingApproval: true },
+          });
+          const hook = yield* callRpc(7, "tools/call", {
+            name: "harness_propose_hook",
+            arguments: {
+              id: "proposed",
+              event: "PostToolUse",
+              enabled: true,
+              target: { type: "command", command: "never-executed" },
+            },
+          });
+          expect(hook.result.isError).not.toBe(true);
+          expect((yield* hooks.list()).hooks.find((h) => h.id === "proposed")).toMatchObject({
+            enabled: false,
+            pendingApproval: true,
+          });
 
-        const blockedByHook = yield* callRpc(8, "tools/call", {
-          name: "plugin_pack",
-          arguments: {
-            id: "release-kit-2",
-            name: "Release Kit 2",
-            version: "1.0.1",
-          },
-        });
-        expect(blockedByHook.result.isError).toBe(true);
-        expect(blockedByHook.result.content?.[0]?.text).toContain("Packaging frozen");
-      }).pipe(Effect.provide(serverLayer));
-    }).pipe(Effect.provide(NodeServices.layer)),
+          const sourceDir = path.join(tempRoot, "portable-plugin");
+          yield* fs.makeDirectory(sourceDir);
+          yield* fs.writeFileString(
+            path.join(sourceDir, "t3-plugin.json"),
+            '{"id":"portable","name":"Portable"}',
+          );
+          const installed = yield* callRpc(8, "tools/call", {
+            name: "harness_install_plugin",
+            arguments: { sourceDir },
+          });
+          expect(JSON.parse(installed.result.content![0]!.text!)).toMatchObject({
+            id: "portable",
+            trustStatus: "untrusted",
+            enabled: false,
+            contentDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+          });
+          const inspected = yield* callRpc(9, "tools/call", {
+            name: "harness_inspect",
+            arguments: {},
+          });
+          expect(JSON.parse(inspected.result.content![0]!.text!)).toMatchObject({
+            harnessDir: paths.harnessDir,
+            deliveryMatrix: [],
+            plugins: [{ id: "portable", enabled: false }],
+            mcpServers: [{ id: "proposed", effectiveEnabled: false, pendingApproval: true }],
+          });
+
+          // Switch thread to Creator Mode: all 4 creator tools are exposed and callable.
+          mutableShell.modeId = "creator";
+          const creatorTools = yield* callRpc(3, "tools/list", {});
+          const creatorNames = (creatorTools.result.tools ?? []).map((t) => t.name);
+          expect(creatorNames).toContain("harness_write_skill");
+          expect(creatorNames).toContain("harness_create_mode");
+          expect(creatorNames).toContain("workflow_validate");
+          expect(creatorNames).toContain("plugin_pack");
+
+          const skillWrite = yield* callRpc(4, "tools/call", {
+            name: "harness_write_skill",
+            arguments: {
+              id: "release-checklist",
+              description: "Release checklist",
+              body: "1. Run tests\n2. Tag release",
+            },
+          });
+          expect(skillWrite.result.isError).not.toBe(true);
+
+          const modeCreate = yield* callRpc(5, "tools/call", {
+            name: "harness_create_mode",
+            arguments: {
+              id: "release-pilot",
+              name: "Release Pilot",
+              baseInteractionMode: "default",
+              body: "Verify changelog before tagging.",
+            },
+          });
+          expect(modeCreate.result.isError).not.toBe(true);
+
+          for (const id of ["review", "release-pilot"]) {
+            const overwritten = yield* callRpc(12, "tools/call", {
+              name: "harness_create_mode",
+              arguments: { id, baseInteractionMode: "default", body: "Replacement" },
+            });
+            expect(overwritten.result.isError).toBe(true);
+          }
+          const library = yield* HarnessLibraryStore.HarnessLibraryStore;
+          const { modes } = yield* library.getSnapshot();
+          expect(modes.find((mode) => mode.id === "review")?.scope).toBe("builtin");
+          expect(modes.find((mode) => mode.id === "release-pilot")?.body).toContain(
+            "Verify changelog",
+          );
+
+          const wfValidate = yield* callRpc(6, "tools/call", {
+            name: "workflow_validate",
+            arguments: {
+              yaml: "name: release-flow\nsteps:\n  - id: check\n    prompt: Verify build\n",
+            },
+          });
+          expect(wfValidate.result.isError).not.toBe(true);
+          expect(wfValidate.result.content?.[0]?.text).toContain("Valid workflow");
+
+          const packRes = yield* callRpc(7, "tools/call", {
+            name: "plugin_pack",
+            arguments: {
+              id: "release-kit",
+              name: "Release Kit",
+              version: "1.0.0",
+            },
+          });
+          expect(packRes.result.isError).not.toBe(true);
+          expect(packRes.result.content?.[0]?.text).toContain("sha256:");
+
+          // PreToolUse hook blocks matching tools/call on /mcp/harness.
+          yield* hooks.upsertUserHook({
+            id: HarnessHookId.make("block-pack"),
+            event: "PreToolUse",
+            enabled: true,
+            matcher: TrimmedNonEmptyString.make("plugin_pack"),
+            timeoutMs: PositiveInt.make(2_000),
+            failClosed: true,
+            target: {
+              type: "command",
+              command: TrimmedNonEmptyString.make(process.execPath),
+              args: [
+                "-e",
+                'process.stdout.write(JSON.stringify({ allow: false, reason: "Packaging frozen" }))',
+              ],
+            },
+          });
+
+          const blockedByHook = yield* callRpc(8, "tools/call", {
+            name: "plugin_pack",
+            arguments: {
+              id: "release-kit-2",
+              name: "Release Kit 2",
+              version: "1.0.1",
+            },
+          });
+          expect(blockedByHook.result.isError).toBe(true);
+          expect(blockedByHook.result.content?.[0]?.text).toContain("Packaging frozen");
+        }).pipe(Effect.provide(serverLayer));
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.live(

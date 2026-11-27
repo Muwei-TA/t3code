@@ -118,6 +118,27 @@ describe("PluginHost", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("discovers a directly copied bundle under its installed id without activating it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped();
+      const paths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+      yield* Effect.gen(function* () {
+        const host = yield* PluginHost.PluginHost;
+        expect((yield* host.list()).plugins).toEqual([]);
+        const directory = path.join(paths.harnessDir, "plugins", "copied");
+        yield* fs.makeDirectory(directory, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(directory, "t3-plugin.json"),
+          '{"id":"original","name":"Copied"}',
+        );
+        expect((yield* host.list()).plugins).toMatchObject([
+          { id: "copied", enabled: false, active: false, trustStatus: "untrusted" },
+        ]);
+      }).pipe(Effect.provide(makeTestLayer(baseDir, paths)));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect(
     "enforces owner digest trust, reversible Scope activation/unload, tamper detection, and .claude-plugin compatibility",
     () =>
@@ -144,6 +165,7 @@ describe("PluginHost", () => {
                 name: "Acme Audit",
                 version: "1.0.0",
                 description: "Security audit bundle",
+                mcpServers: { search: { url: "https://example.invalid/mcp" } },
                 hooks: [
                   {
                     id: "before-check",
@@ -199,6 +221,12 @@ describe("PluginHost", () => {
           const hooks = yield* HarnessHooksService.HarnessHooksService;
           const library = yield* HarnessLibraryStore.HarnessLibraryStore;
 
+          const store = yield* HarnessStore.HarnessStore;
+          const gatewayServer = store
+            .resolveWorkspace()
+            .pipe(Effect.map((w) => w.servers.find((s) => s.id === "plugin-acme-audit-search")));
+          yield* fs.writeFileString(path.join(srcNative, "check.sh"), "echo ok");
+          yield* fs.chmod(path.join(srcNative, "check.sh"), 0o755);
           const sourcePath = TrimmedNonEmptyString.make(srcNative);
           const risk = yield* host.inspectExecutableRisk({ kind: "sourcePath", sourcePath });
           expect(risk.manifestDigest).toMatch(/^[a-f0-9]{64}$/u);
@@ -222,6 +250,11 @@ describe("PluginHost", () => {
           expect(plugin).toBeDefined();
           expect(plugin?.trustStatus).toBe("untrusted");
           expect(plugin?.active).toBe(false);
+          expect(yield* gatewayServer).toBeUndefined();
+          expect(
+            (yield* fs.stat(path.join(installed.pluginsDir, "acme-audit", "check.sh"))).mode &
+              0o111,
+          ).toBe(0o111);
           expect((yield* hooks.list()).hooks).toHaveLength(0);
           expect((yield* library.getSnapshot()).skills.some((s) => s.id === "audit-skill")).toBe(
             false,
@@ -243,6 +276,10 @@ describe("PluginHost", () => {
           });
           expect(trusted.plugins.find((p) => p.id === "acme-audit")?.active).toBe(true);
           expect((yield* hooks.list()).hooks.some((h) => h.pluginId === "acme-audit")).toBe(true);
+          expect(yield* gatewayServer).toMatchObject({
+            effectiveEnabled: true,
+            config: { injectionMode: "gateway" },
+          });
           const libWhileActive = yield* library.getSnapshot();
           expect(libWhileActive.skills.some((s) => s.id === "audit-skill")).toBe(true);
           expect(libWhileActive.modes.some((m) => m.id === "sec-audit")).toBe(true);
@@ -272,6 +309,7 @@ describe("PluginHost", () => {
           expect(disabled.plugins.find((p) => p.id === "acme-audit")?.active).toBe(false);
           expect((yield* hooks.list()).hooks).toHaveLength(0);
           expect(host.getActiveContributions()).toEqual([]);
+          expect(yield* gatewayServer).toBeUndefined();
           expect((yield* library.getSnapshot()).skills.some((s) => s.id === "audit-skill")).toBe(
             false,
           );

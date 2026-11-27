@@ -113,11 +113,12 @@ export async function safeReadFileUtf8(rootDir: string, targetPath: string): Pro
   }
 }
 
-/** Atomically writes a UTF-8 file inside `rootDir`, rejecting symlinks on all ancestors and target. */
+/** Atomically writes a regular file inside `rootDir`, rejecting symlinks on all ancestors and target. */
 export async function safeWriteFileAtomic(
   rootDir: string,
   targetPath: string,
-  content: string,
+  content: string | Uint8Array,
+  mode?: number,
 ): Promise<string> {
   const parentDir = NodePath.dirname(NodePath.resolve(targetPath));
   const safeParent = await safeEnsureDir(rootDir, parentDir);
@@ -140,7 +141,8 @@ export async function safeWriteFileAtomic(
     NodeFS.constants.O_WRONLY | NodeFS.constants.O_CREAT | NodeFS.constants.O_EXCL | O_NOFOLLOW;
   const handle = await NodeFSP.open(tmpPath, flags, 0o600);
   try {
-    await handle.writeFile(content, { encoding: "utf8" });
+    await handle.writeFile(content);
+    if (mode !== undefined) await handle.chmod(mode);
   } catch (error) {
     await handle.close().catch(() => {});
     await NodeFSP.unlink(tmpPath).catch(() => {});
@@ -171,4 +173,44 @@ export async function safeRemoveFile(rootDir: string, targetPath: string): Promi
     throw new Error(`Refusing to remove symlink or non-regular file: ${resolvedTarget}`);
   }
   await NodeFSP.unlink(resolvedTarget);
+}
+
+export async function replaceDirectory(
+  root: string,
+  target: string,
+  createOnly: boolean,
+  populate: (staged: string) => Promise<void>,
+) {
+  const parent = await safeEnsureDir(root, NodePath.dirname(target));
+  await assertContainedNoSymlinks(root, target);
+  const stage = await NodeFSP.mkdtemp(NodePath.join(parent, ".install-"));
+  const staged = NodePath.join(stage, "new");
+  const backup = NodePath.join(stage, "old");
+  let backedUp = false;
+  try {
+    await NodeFSP.mkdir(staged, { mode: 0o700 });
+    await populate(staged);
+    await assertContainedNoSymlinks(root, target);
+    if (createOnly) {
+      if (
+        await NodeFSP.lstat(target).catch((error) => {
+          if (isEnoent(error)) return null;
+          throw error;
+        })
+      )
+        throw new Error("Package id is already installed.");
+    } else {
+      try {
+        await NodeFSP.rename(target, backup);
+        backedUp = true;
+      } catch (error) {
+        if (!isEnoent(error)) throw error;
+      }
+    }
+    await NodeFSP.rename(staged, target);
+    backedUp = false;
+  } finally {
+    if (backedUp) await NodeFSP.rename(backup, target);
+    await NodeFSP.rm(stage, { recursive: true, force: true });
+  }
 }

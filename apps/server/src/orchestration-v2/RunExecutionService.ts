@@ -2324,16 +2324,17 @@ export const layer: Layer.Layer<
                 override: input.run.harnessMode,
               });
               const capabilities = input.session.providerSession.capabilities;
-              const codexMount =
-                capabilities.harness.skillMount === "managed-home" && Option.isSome(mcpSessions)
-                  ? (yield* mcpSessions.value.read(input.run.threadId))?.harnessCodexSkillRoot
+              const mountSession =
+                capabilities.harness.skillMount !== "none" && Option.isSome(mcpSessions)
+                  ? yield* mcpSessions.value.read(input.run.threadId)
                   : undefined;
+              const codexMount = mountSession?.harnessCodexSkillRoot;
               const projected = projectHarnessContext({
                 library: librarySnapshot,
                 harnessCapabilities: capabilities.harness,
                 activeMode,
                 nativeSkills,
-                nativeReadsProjectAgentsMd: true,
+                claudeMountAvailable: !!mountSession?.harnessSkillPluginDir,
                 codexSkillMount: codexMount?.mounts.size ? "mounted" : undefined,
                 promptText: input.message.text,
                 attachmentPaths: input.message.attachments.map((att) => att.name),

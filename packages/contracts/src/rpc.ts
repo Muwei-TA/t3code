@@ -548,6 +548,10 @@ import {
   HarnessPluginTrustInput,
   HarnessSkillRemoveInput,
   HarnessSkillSetEnabledInput,
+  HarnessReadSkillFileInput,
+  HarnessReadSkillFileResult,
+  HarnessInstallSkillPackageInput,
+  HarnessDeliveryMatrixEntry,
   HarnessSkillUpsertInput,
   HarnessSyncConfigureInput,
   HarnessSyncExportBundleInput,
@@ -843,6 +847,9 @@ export const WS_METHODS = {
   harnessThreadContextManifest: "harness.thread.contextManifest",
   harnessLibrarySnapshot: "harness.library.snapshot",
   harnessAgentsMdSave: "harness.agentsMd.save",
+  harnessReadSkillFile: "harness.readSkillFile",
+  harnessInstallSkillPackage: "harness.installSkillPackage",
+  harnessGetDeliveryMatrix: "harness.getDeliveryMatrix",
   harnessSkillUpsert: "harness.skill.upsert",
   harnessSkillRemove: "harness.skill.remove",
   harnessSkillSetEnabled: "harness.skill.setEnabled",
@@ -2720,6 +2727,24 @@ const WsHarnessAgentsMdSaveRpc = Rpc.make(WS_METHODS.harnessAgentsMdSave, {
   error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
 });
 
+const WsHarnessReadSkillFileRpc = Rpc.make(WS_METHODS.harnessReadSkillFile, {
+  payload: HarnessReadSkillFileInput,
+  success: HarnessReadSkillFileResult,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessInstallSkillPackageRpc = Rpc.make(WS_METHODS.harnessInstallSkillPackage, {
+  payload: HarnessInstallSkillPackageInput,
+  success: HarnessLibrarySnapshot,
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
+const WsHarnessGetDeliveryMatrixRpc = Rpc.make(WS_METHODS.harnessGetDeliveryMatrix, {
+  payload: Schema.Struct({}),
+  success: Schema.Array(HarnessDeliveryMatrixEntry),
+  error: Schema.Union([HarnessError, EnvironmentAuthorizationError]),
+});
+
 const WsHarnessSkillUpsertRpc = Rpc.make(WS_METHODS.harnessSkillUpsert, {
   payload: HarnessSkillUpsertInput,
   success: HarnessLibrarySnapshot,
@@ -3255,6 +3280,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsHarnessThreadContextManifestRpc,
   WsHarnessLibrarySnapshotRpc,
   WsHarnessAgentsMdSaveRpc,
+  WsHarnessReadSkillFileRpc,
+  WsHarnessInstallSkillPackageRpc,
+  WsHarnessGetDeliveryMatrixRpc,
   WsHarnessSkillUpsertRpc,
   WsHarnessSkillRemoveRpc,
   WsHarnessSkillSetEnabledRpc,

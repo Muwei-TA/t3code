@@ -398,6 +398,7 @@ export const CodexProviderCapabilitiesV2 = {
     skillMount: "managed-home",
     systemContextMutableMidSession: true,
     maxSystemContextBytes: 3600,
+    readsProjectAgentsMd: true,
     nativeToolHooks: false,
     nativeAllowAlways: false,
     planReadOnlyEnforcement: "native",

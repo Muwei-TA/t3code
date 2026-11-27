@@ -61,6 +61,7 @@ const DEFAULT_KIRO_SETTINGS = Schema.decodeSync(KiroSettings)({});
 
 const KiroProviderCapabilitiesV2 = {
   ...AcpProviderCapabilitiesV2,
+  harness: { ...AcpProviderCapabilitiesV2.harness, readsProjectAgentsMd: true },
   sessions: {
     ...AcpProviderCapabilitiesV2.sessions,
     supportsModelSwitchInSession: true,

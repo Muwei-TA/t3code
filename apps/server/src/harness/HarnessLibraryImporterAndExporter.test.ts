@@ -120,6 +120,10 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
         const codexSkillOriginal =
           "---\nname: codex-helper\ndescription: From Codex\n---\nCodex steps.\n";
         yield* fs.writeFileString(codexSkillPath, codexSkillOriginal);
+        const script = path.join(path.dirname(codexSkillPath), "scripts", "check");
+        yield* fs.makeDirectory(path.dirname(script));
+        yield* fs.writeFileString(script, "echo ok");
+        yield* fs.chmod(script, 0o755);
         yield* fs.writeFileString(
           claudeCmdPath,
           "---\ndescription: Verify deployment\nargument-hint: <env>\n---\nCheck deploy for $1.\n",
@@ -209,6 +213,16 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
             ],
             workspaceRoot: repoRoot,
           });
+          const scriptCopy = path.join(
+            paths.harnessDir,
+            "skills",
+            "codex-helper",
+            "scripts",
+            "check",
+          );
+          expect(yield* fs.readFileString(scriptCopy)).toBe("echo ok");
+          expect((yield* fs.stat(scriptCopy)).mode & 0o111).toBe(0o111);
+
           expect(applied.importedKeys).toHaveLength(4);
           expect(applied.snapshot.skills.some((s) => s.id === "codex-helper")).toBe(true);
           expect(applied.snapshot.skills.some((s) => s.id === "agy-perf")).toBe(true);
@@ -297,6 +311,9 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
             body: "Fix lint in $ARGUMENTS",
           });
 
+          const asset = path.join(paths.harnessDir, "skills", "ship-check", "asset.bin");
+          yield* fs.writeFile(asset, Uint8Array.from([0, 255, 128]));
+          yield* fs.chmod(asset, 0o755);
           // 1. Codex preview redacts literal header secret + rejects drifted planDigest
           const codexPreview = yield* exporter.preview({ target: "codex" });
           const codexTomlFile = codexPreview.files.find((f) => f.targetPath === codexConfigPath);
@@ -316,6 +333,9 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
             planDigest: TrimmedNonEmptyString.make(codexPreview.planDigest),
           });
           expect(codexApplied.writtenPaths).toContain(codexConfigPath);
+          const exportedAsset = path.join(homeDir, ".codex", "skills", "ship-check", "asset.bin");
+          expect(Array.from(yield* fs.readFile(exportedAsset))).toEqual([0, 255, 128]);
+          expect((yield* fs.stat(exportedAsset)).mode & 0o111).toBe(0o111);
           const writtenToml = yield* fs.readFileString(codexConfigPath);
           expect(writtenToml).toContain('model = "gpt-5.4"');
           expect(writtenToml).toContain("[mcp_servers.docs]");

@@ -8,6 +8,8 @@ import {
   type HarnessCommandEntry,
   HarnessCommandId,
   HarnessError,
+  HarnessMcpServerConfig,
+  HarnessMcpServerId,
   type HarnessHookDefinition,
   HarnessHookEvent,
   HarnessHookId,
@@ -49,9 +51,16 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { parse as parseYaml } from "yaml";
 
 import * as HarnessHooksService from "./HarnessHooksService.ts";
+import { configContainsSecretPlaceholder } from "./HarnessSecrets.ts";
 import * as HarnessStore from "./HarnessStore.ts";
-import { assertContainedNoSymlinks, safeReadFileUtf8, safeWriteFileAtomic } from "./safeFileOps.ts";
+import {
+  assertContainedNoSymlinks,
+  replaceDirectory,
+  safeReadFileUtf8,
+  safeWriteFileAtomic,
+} from "./safeFileOps.ts";
 
+const decodeMcpConfig = Schema.decodeUnknownSync(HarnessMcpServerConfig);
 const PLUGINS_DIR_NAME = "plugins";
 const PLUGINS_STATE_FILE = "plugins-state.json";
 const MAX_PLUGIN_FILES = 256;
@@ -131,13 +140,14 @@ function isContainedIn(rootReal: string, candidateReal: string): boolean {
 }
 
 interface ContainedPluginFile {
+  readonly executeBits: number;
   readonly relPath: string;
   readonly fullPath: string;
   readonly content: Buffer;
 }
 
 async function walkContainedFiles(rootDir: string): Promise<ReadonlyArray<ContainedPluginFile>> {
-  const rootReal = await NodeFSP.realpath(rootDir);
+  const { canonicalRoot: rootReal } = await assertContainedNoSymlinks(rootDir, rootDir);
   const files: Array<ContainedPluginFile> = [];
   let totalBytes = 0;
 
@@ -147,6 +157,7 @@ async function walkContainedFiles(rootDir: string): Promise<ReadonlyArray<Contai
     for (const entry of entries) {
       if (entry.name === ".git" || entry.name === "node_modules") continue;
       const fullPath = NodePath.join(dir, entry.name);
+      if (entry.isSymbolicLink()) throw new Error("Plugin symlink rejected: " + entry.name);
       const real = await NodeFSP.realpath(fullPath);
       if (!isContainedIn(rootReal, real)) {
         throw new Error(`Plugin path escapes plugin root via symlink: ${entry.name}`);
@@ -164,7 +175,7 @@ async function walkContainedFiles(rootDir: string): Promise<ReadonlyArray<Contai
         }
         const content = await NodeFSP.readFile(real);
         const relPath = NodePath.relative(rootReal, real).split(NodePath.sep).join("/");
-        files.push({ relPath, fullPath: real, content });
+        files.push({ relPath, fullPath: real, content, executeBits: stat.mode & 0o111 });
       }
     }
   };
@@ -178,12 +189,11 @@ async function copyPluginFiles(
   files: ReadonlyArray<ContainedPluginFile>,
   destDir: string,
 ): Promise<void> {
-  await NodeFSP.rm(destDir, { recursive: true, force: true });
-  await NodeFSP.mkdir(destDir, { recursive: true });
   for (const file of files) {
     const target = NodePath.join(destDir, file.relPath);
     await NodeFSP.mkdir(NodePath.dirname(target), { recursive: true });
     await NodeFSP.writeFile(target, file.content);
+    await NodeFSP.chmod(target, 0o644 | file.executeBits);
   }
 }
 
@@ -603,6 +613,7 @@ interface ParsedPluginBundle {
   readonly commands: ReadonlyArray<HarnessCommandEntry>;
   readonly modes: ReadonlyArray<HarnessModeEntry>;
   readonly hooks: ReadonlyArray<HarnessHookDefinition>;
+  readonly mcpServers: Readonly<Record<string, HarnessMcpServerConfig>>;
   readonly mcpServerIds: ReadonlyArray<string>;
   readonly workflows: ReadonlyArray<PluginWorkflowSource>;
   readonly manifestDigest: string;
@@ -612,12 +623,14 @@ interface ParsedPluginBundle {
 async function parsePluginDirectory(
   pluginDir: string,
   fallbackId: string,
+  installed = false,
 ): Promise<ParsedPluginBundle> {
   const files = await walkContainedFiles(pluginDir);
   const fileByRel = new Map(files.map((f) => [f.relPath, f]));
 
   const hasher = NodeCrypto.createHash("sha256");
   for (const file of files) {
+    if (file.executeBits) hasher.update(`\0execute:${file.executeBits}\0`);
     hasher.update(file.relPath, "utf8");
     hasher.update("\0", "utf8");
     hasher.update(file.content);
@@ -640,7 +653,9 @@ async function parsePluginDirectory(
   }
 
   const rawId =
-    typeof manifest.id === "string" && manifest.id.trim() ? manifest.id.trim() : fallbackId;
+    !installed && typeof manifest.id === "string" && manifest.id.trim()
+      ? manifest.id.trim()
+      : fallbackId;
   const decodedId = decodePluginId(rawId);
   if (decodedId._tag === "None") {
     throw new Error(`Invalid plugin id "${rawId}".`);
@@ -709,7 +724,24 @@ async function parsePluginDirectory(
           typeof frontmatter.name === "string" && frontmatter.name.trim().length > 0
             ? frontmatter.name.trim()
             : idOpt.value;
+        const prefix = NodePath.posix.dirname(file.relPath) + "/";
+        const members = files.filter((member) => member.relPath.startsWith(prefix));
         skills.push({
+          files: members.slice(0, 65).map((member) => {
+            const relativePath = member.relPath.slice(prefix.length);
+            return {
+              relativePath,
+              sizeBytes: NonNegativeInt.make(member.content.length),
+              executable: member.executeBits !== 0,
+              kind:
+                member.executeBits !== 0 || relativePath.startsWith("scripts/")
+                  ? "script"
+                  : /\.(md|txt|rst)$/iu.test(relativePath)
+                    ? "doc"
+                    : "asset",
+            };
+          }),
+          companionTruncated: members.length > 65,
           id: idOpt.value,
           name: TrimmedNonEmptyString.make(skillName),
           ...(typeof frontmatter.description === "string" && frontmatter.description.trim()
@@ -865,29 +897,32 @@ async function parsePluginDirectory(
     }
   }
 
-  const mcpServerIds: Array<string> = [];
-  let hasStdioMcp = false;
-  if (
-    manifest.mcpServers !== null &&
-    typeof manifest.mcpServers === "object" &&
-    !Array.isArray(manifest.mcpServers)
-  ) {
-    for (const [serverId, cfg] of Object.entries(manifest.mcpServers as Record<string, unknown>)) {
-      mcpServerIds.push(serverId);
-      if (cfg !== null && typeof cfg === "object") {
-        const transport = Reflect.get(cfg, "transport");
-        const command = Reflect.get(cfg, "command");
-        if (
-          typeof command === "string" ||
-          (transport !== null &&
-            typeof transport === "object" &&
-            Reflect.get(transport, "type") === "stdio")
-        ) {
-          hasStdioMcp = true;
-        }
-      }
-    }
+  const mcpServers: Record<string, HarnessMcpServerConfig> = {};
+  for (const [name, raw] of Object.entries(manifest.mcpServers ?? {})) {
+    const id = HarnessMcpServerId.make(`plugin-${pluginId}-${name}`);
+    if (!raw || typeof raw !== "object") throw new Error("Invalid plugin MCP server.");
+    const cfg = raw as Record<string, unknown>;
+    const transport =
+      cfg.transport ??
+      (cfg.command ? { ...cfg, type: "stdio" } : { ...cfg, type: cfg.type ?? "http" });
+    const decoded = decodeMcpConfig({
+      ...cfg,
+      transport,
+      injectionMode: "gateway",
+      origin: { kind: "imported", source: "plugin:" + pluginId },
+    });
+    mcpServers[id] =
+      decoded.transport.type === "stdio"
+        ? {
+            ...decoded,
+            transport: {
+              ...decoded.transport,
+              cwd: NodePath.resolve(pluginDir, decoded.transport.cwd ?? "."),
+            },
+          }
+        : decoded;
   }
+  const hasStdioMcp = Object.values(mcpServers).some((config) => config.transport.type === "stdio");
 
   return {
     id: pluginId,
@@ -906,7 +941,8 @@ async function parsePluginDirectory(
     commands,
     modes,
     hooks,
-    mcpServerIds,
+    mcpServers,
+    mcpServerIds: Object.keys(mcpServers),
     workflows,
     manifestDigest: sha256Hex(manifestFile.content),
     files,
@@ -942,7 +978,9 @@ export interface PluginHostShape {
       | { readonly kind: "allInstalled" },
   ) => Effect.Effect<
     {
+      readonly id?: HarnessPluginId;
       readonly requiresTerminalOperate: boolean;
+      readonly requiresSecretAccess?: boolean;
       readonly manifestDigest?: string | undefined;
       readonly contentDigest?: string | undefined;
     },
@@ -950,6 +988,7 @@ export interface PluginHostShape {
   >;
   readonly install: (
     input: HarnessPluginInstallInput & {
+      readonly createOnly?: boolean;
       readonly expectedManifestDigest?: string | undefined;
       readonly expectedContentDigest?: string | undefined;
     },
@@ -1124,6 +1163,25 @@ export const layer = Layer.effect(
             );
           }
         }
+        if (Object.keys(bundle.mcpServers).length) {
+          yield* store.registerPluginServers(
+            bundle.id,
+            bundle.mcpServers,
+            Effect.gen(function* () {
+              const state = yield* readState();
+              if (
+                !state.enabled[bundle.id] ||
+                state.trustedDigests[bundle.id] !== bundle.contentDigest
+              )
+                return false;
+              return yield* Effect.tryPromise({
+                try: () => parsePluginDirectory(bundle.sourcePath, bundle.id, true),
+                catch: () =>
+                  new HarnessError({ code: "invalid_config", detail: "Invalid plugin bundle." }),
+              }).pipe(Effect.map((current) => current.contentDigest === bundle.contentDigest));
+            }).pipe(Effect.orElseSucceed(() => false)),
+          );
+        }
         const combinedHooks = [...bundle.hooks, ...sdkHooks];
         const contribution: PluginActiveContribution = {
           pluginId: bundle.id,
@@ -1184,10 +1242,10 @@ export const layer = Layer.effect(
           NodeFSP.readdir(root, { withFileTypes: true }).catch(() => []),
         );
         for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
+          if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
           const dirPath = NodePath.join(root, entry.name);
           const parsed = yield* Effect.tryPromise({
-            try: () => parsePluginDirectory(dirPath, entry.name),
+            try: () => parsePluginDirectory(dirPath, entry.name, true),
             catch: (error) => (error instanceof Error ? error.message : String(error)),
           }).pipe(Effect.result);
 
@@ -1308,7 +1366,10 @@ export const layer = Layer.effect(
           trustedDigest,
           trustStatus,
           enabled,
-          active: activeScopes.has(pluginId) && (sdkRuntime === undefined || runtimeAlive),
+          active:
+            shouldBeActive &&
+            activeScopes.has(pluginId) &&
+            (sdkRuntime === undefined || runtimeAlive),
           hasCommandHooks: bundle.hasCommandHooks || (runtimeAlive && sdkRuntime.hooks.length > 0),
           hasStdioMcp: bundle.hasStdioMcp,
           skillIds: bundle.skills.map((s) => s.id),
@@ -1359,6 +1420,10 @@ export const layer = Layer.effect(
           });
           return {
             requiresTerminalOperate: bundleRequiresTerminalOperate(parsed),
+            requiresSecretAccess: Object.values(parsed.mcpServers).some(
+              configContainsSecretPlaceholder,
+            ),
+            id: parsed.id,
             manifestDigest: parsed.manifestDigest,
             contentDigest: parsed.contentDigest,
           };
@@ -1366,7 +1431,7 @@ export const layer = Layer.effect(
         if (input.kind === "installedId") {
           const dirPath = NodePath.join(pluginsDir(), input.id);
           const parsed = yield* Effect.tryPromise({
-            try: () => parsePluginDirectory(dirPath, input.id),
+            try: () => parsePluginDirectory(dirPath, input.id, true),
             catch: (error) =>
               new HarnessError({
                 code: "not_found",
@@ -1375,6 +1440,10 @@ export const layer = Layer.effect(
           });
           return {
             requiresTerminalOperate: bundleRequiresTerminalOperate(parsed),
+            requiresSecretAccess: Object.values(parsed.mcpServers).some(
+              configContainsSecretPlaceholder,
+            ),
+            id: parsed.id,
             manifestDigest: parsed.manifestDigest,
             contentDigest: parsed.contentDigest,
           };
@@ -1385,17 +1454,22 @@ export const layer = Layer.effect(
         const entries = yield* Effect.promise(() =>
           NodeFSP.readdir(root, { withFileTypes: true }).catch(() => []),
         );
+        let requiresTerminalOperate = false;
+        let requiresSecretAccess = false;
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
           const parsed = yield* Effect.tryPromise({
-            try: () => parsePluginDirectory(NodePath.join(root, entry.name), entry.name),
+            try: () => parsePluginDirectory(NodePath.join(root, entry.name), entry.name, true),
             catch: () => null,
           }).pipe(Effect.orElseSucceed(() => null));
-          if (parsed && bundleRequiresTerminalOperate(parsed)) {
-            return { requiresTerminalOperate: true };
+          if (parsed) {
+            requiresTerminalOperate ||= bundleRequiresTerminalOperate(parsed);
+            requiresSecretAccess ||= Object.values(parsed.mcpServers).some(
+              configContainsSecretPlaceholder,
+            );
           }
         }
-        return { requiresTerminalOperate: false };
+        return { requiresTerminalOperate, requiresSecretAccess };
       }),
 
       install: Effect.fn("PluginHost.install")(function* (input) {
@@ -1408,6 +1482,11 @@ export const layer = Layer.effect(
                 detail: "Portable harness plugins are disabled by managed policy.",
               });
             }
+            if (input.createOnly && !NodePath.isAbsolute(input.sourcePath))
+              return yield* new HarnessError({
+                code: "invalid_config",
+                detail: "Plugin sourceDir must be absolute.",
+              });
             const sourceDir = NodePath.resolve(input.sourcePath);
             const fallbackId = input.id ?? NodePath.basename(sourceDir);
             const parsed = yield* Effect.tryPromise({
@@ -1434,10 +1513,10 @@ export const layer = Layer.effect(
             const root = pluginsDir();
             const destDir = NodePath.join(root, targetId);
             yield* Effect.tryPromise({
-              try: async () => {
-                await assertContainedNoSymlinks(root, destDir, { createRoot: true });
-                await copyPluginFiles(parsed.files, destDir);
-              },
+              try: () =>
+                replaceDirectory(root, destDir, input.createOnly === true, (stage) =>
+                  copyPluginFiles(parsed.files, stage),
+                ),
               catch: (error) =>
                 new HarnessError({
                   code: "io_error",
@@ -1473,7 +1552,7 @@ export const layer = Layer.effect(
             }
             const dirPath = NodePath.join(pluginsDir(), input.id);
             const parsed = yield* Effect.tryPromise({
-              try: () => parsePluginDirectory(dirPath, input.id),
+              try: () => parsePluginDirectory(dirPath, input.id, true),
               catch: (error) =>
                 new HarnessError({
                   code: "not_found",
@@ -1595,7 +1674,7 @@ export const layer = Layer.effect(
                 }),
             });
             const parsed = yield* Effect.tryPromise({
-              try: () => parsePluginDirectory(pluginDir, input.id),
+              try: () => parsePluginDirectory(pluginDir, input.id, true),
               catch: (error) =>
                 new HarnessError({
                   code: "invalid_config",

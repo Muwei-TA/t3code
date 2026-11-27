@@ -28,6 +28,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "../config.ts";
@@ -468,6 +469,11 @@ export class HarnessStore extends Context.Service<
     readonly managedPolicyAllowsPlugins: boolean;
     /** Computes a server-secret-keyed confirmation digest that cannot be offline brute-forced from read-only snapshots. */
     readonly computeConfirmationDigest: (config: HarnessMcpServerConfig) => string;
+    readonly registerPluginServers: (
+      pluginId: string,
+      configs: Readonly<Record<string, HarnessMcpServerConfig>>,
+      stillTrusted: Effect.Effect<boolean>,
+    ) => Effect.Effect<void, never, Scope.Scope>;
     readonly loadUserConfig: Effect.Effect<LoadedUserHarnessConfig>;
     readonly resolveWorkspace: (
       workspaceRoot?: string | undefined,
@@ -684,6 +690,22 @@ const make = Effect.gen(function* () {
     return yield* decodeProjectHarnessLeniently(raw.value, projectFilePath);
   });
 
+  const pluginServers = new Map<
+    string,
+    {
+      configs: Readonly<Record<string, HarnessMcpServerConfig>>;
+      stillTrusted: Effect.Effect<boolean>;
+    }
+  >();
+  const registerPluginServers: HarnessStore["Service"]["registerPluginServers"] = Effect.fn(
+    "HarnessStore.registerPluginServers",
+  )(function* (pluginId, configs, stillTrusted) {
+    yield* Effect.acquireRelease(
+      Effect.sync(() => pluginServers.set(pluginId, { configs, stillTrusted })),
+      () => Effect.sync(() => pluginServers.delete(pluginId)),
+    );
+  });
+
   const resolveWorkspace: HarnessStore["Service"]["resolveWorkspace"] = Effect.fn(
     "HarnessStore.resolveWorkspace",
   )(function* (workspaceRoot) {
@@ -709,7 +731,14 @@ const make = Effect.gen(function* () {
     const resolved: Array<ResolvedHarnessMcpServer> = [];
 
     // 1. User-level servers (`~/.t3/harness/harness.json`)
-    for (const [id, serverConfigEntry] of Object.entries(userConfig.mcpServers)) {
+    const servers = { ...userConfig.mcpServers };
+    for (const plugin of pluginServers.values()) {
+      if (!(yield* plugin.stillTrusted)) continue;
+      for (const [id, config] of Object.entries(plugin.configs)) {
+        if (!Object.hasOwn(servers, id)) servers[id] = config;
+      }
+    }
+    for (const [id, serverConfigEntry] of Object.entries(servers)) {
       if (isReservedHarnessMcpServerId(id)) continue;
       const serverId = id as HarnessMcpServerId;
       const disabledByProject = projectDisabled.has(serverId);
@@ -717,14 +746,17 @@ const make = Effect.gen(function* () {
         projectHarness.declaredServerIds.has(serverId) || disabledByProject;
       const blockedReason = policyDenialReason(serverConfigEntry);
       const effectiveEnabled =
-        serverConfigEntry.enabled && !overriddenByProject && blockedReason === null;
+        serverConfigEntry.enabled &&
+        !serverConfigEntry.pendingApproval &&
+        !overriddenByProject &&
+        blockedReason === null;
       resolved.push({
         id: serverId,
         scope: "user",
         config: serverConfigEntry,
         configDigest: computeConfirmationDigest(serverConfigEntry),
         effectiveEnabled,
-        trusted: true,
+        trusted: serverConfigEntry.pendingApproval !== true,
         needsTrustConfirmation: false,
         trustReason: null,
         requiresSecretAccess: configContainsSecretPlaceholder(serverConfigEntry),
@@ -1005,7 +1037,11 @@ const make = Effect.gen(function* () {
           schemaVersion: 1,
           mcpServers: {
             ...current.mcpServers,
-            [id]: { ...existing, enabled },
+            [id]: {
+              ...existing,
+              enabled,
+              ...(enabled && existing.pendingApproval ? { pendingApproval: false } : {}),
+            },
           },
         });
       }),
@@ -1224,6 +1260,7 @@ const make = Effect.gen(function* () {
     computeConfirmationDigest,
     loadUserConfig,
     resolveWorkspace,
+    registerPluginServers,
     upsertUserServer,
     importUserServers,
     removeUserServer,

@@ -57,6 +57,8 @@ import * as HarnessApprovalAuditStore from "./HarnessApprovalAuditStore.ts";
 
 const HARNESS_TOOL_SEARCH_NAME = "harness_tool_search";
 export const HARNESS_PROPOSE_PLAN_NAME = "propose_plan";
+import { managementTools } from "./harnessManagement.ts";
+
 export const HARNESS_SKILL_SEARCH_NAME = "harness_skill_search";
 export const HARNESS_SKILL_LOAD_NAME = "harness_skill_load";
 export const HARNESS_RULE_READ_NAME = "harness_rule_read";
@@ -621,8 +623,7 @@ const HARNESS_WRITE_SKILL_DEF: GatewayExposedTool = {
   exposedName: HARNESS_WRITE_SKILL_NAME,
   serverId: null,
   upstreamName: HARNESS_WRITE_SKILL_NAME,
-  description:
-    "Create or update a portable SKILL.md under ~/.t3/harness/skills/<id>/SKILL.md (available in Creator Mode).",
+  description: "Create or update a portable SKILL.md in the T3 personal skill library.",
   inputSchema: {
     type: "object",
     properties: {
@@ -641,8 +642,7 @@ const HARNESS_CREATE_MODE_DEF: GatewayExposedTool = {
   exposedName: HARNESS_CREATE_MODE_NAME,
   serverId: null,
   upstreamName: HARNESS_CREATE_MODE_NAME,
-  description:
-    "Create or update a declarative portable mode under ~/.t3/harness/modes/<id>.md (available in Creator Mode).",
+  description: "Create a new declarative mode in the T3 personal mode library.",
   inputSchema: {
     type: "object",
     properties: {
@@ -685,7 +685,7 @@ const HARNESS_PLUGIN_PACK_DEF: GatewayExposedTool = {
   serverId: null,
   upstreamName: HARNESS_PLUGIN_PACK_NAME,
   description:
-    "Create or refresh t3-plugin.json for a plugin under ~/.t3/harness/plugins/<id> and compute its SHA-256 content digest for owner trust review (available in Creator Mode).",
+    "Create or refresh t3-plugin.json for a plugin in the T3 plugin library and compute its SHA-256 content digest for owner trust review.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1690,7 +1690,19 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         HARNESS_WORKFLOW_VALIDATE_DEF,
       );
     }
-    if (context.includeCreatorTools) {
+    if (context.includeLibraryTools || context.includeCreatorTools) {
+      listed.push(
+        ...managementTools.filter(
+          (tool) =>
+            tool.readOnly ||
+            ((tool.exposedName !== "harness_install_plugin" || store.managedPolicyAllowsPlugins) &&
+              checkHarnessRuntimeToolCeiling({
+                ...context,
+                toolName: tool.exposedName,
+                readOnly: false,
+              }) === null),
+        ),
+      );
       const canWriteCreator =
         checkHarnessRuntimeToolCeiling({
           toolName: HARNESS_WRITE_SKILL_NAME,
@@ -1705,7 +1717,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       if (!context.includeLibraryTools) {
         listed.push(HARNESS_WORKFLOW_VALIDATE_DEF);
       }
-      if (canWriteCreator && store.managedPolicyAllowsPlugins) {
+      if (canWriteCreator && context.includeCreatorTools && store.managedPolicyAllowsPlugins) {
         listed.push(HARNESS_PLUGIN_PACK_DEF);
       }
     }

@@ -16,6 +16,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -41,6 +42,9 @@ import * as HarnessMcpOAuthNotice from "./HarnessMcpOAuthNotice.ts";
 import { isMcpServerAllowedByMode } from "./HarnessProjector.ts";
 import { scrubHarnessLogText } from "./HarnessSecrets.ts";
 import * as McpGateway from "./McpGateway.ts";
+import { managementTools, callManagementTool } from "./harnessManagement.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as HarnessStore from "./HarnessStore.ts";
 import * as PluginHost from "./PluginHost.ts";
 
 const decodeSkillId = Schema.decodeUnknownOption(HarnessSkillId);
@@ -110,6 +114,9 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
   readonly oauthNotice: Option.Option<HarnessMcpOAuthNotice.HarnessMcpOAuthNotice["Service"]>;
   readonly approvalBroker: Option.Option<HarnessApprovalBroker.HarnessApprovalBroker["Service"]>;
   readonly hooksService: Option.Option<HarnessHooksService.HarnessHooksService["Service"]>;
+  readonly path: Path.Path;
+  readonly store: Option.Option<HarnessStore.HarnessStore["Service"]>;
+  readonly instances: Option.Option<ProviderInstanceRegistry.ProviderInstanceRegistry["Service"]>;
   readonly pluginHost: Option.Option<PluginHost.PluginHost["Service"]>;
   readonly projections: ProjectionStore.ProjectionStoreV2["Service"];
   readonly projects: ProjectStore.ProjectStoreV2["Service"];
@@ -265,16 +272,9 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
         }).pipe(Effect.orElseSucceed(() => null))
       : null;
     const includeLibraryTools =
-      snapshot.managedPolicyAllowsHarness &&
-      supportsMcpTools &&
-      librarySnapshot !== null &&
-      (librarySnapshot.skills.some((skill) => skill.effectiveEnabled) ||
-        librarySnapshot.rules.some((rule) => rule.effectiveEnabled) ||
-        (librarySnapshot.userAgentsMd.exists &&
-          librarySnapshot.userAgentsMd.body.trim().length > 0));
+      snapshot.managedPolicyAllowsHarness && supportsMcpTools && librarySnapshot !== null;
     const includeCreatorTools =
-      snapshot.managedPolicyAllowsHarness &&
-      supportsMcpTools &&
+      includeLibraryTools &&
       effectiveInteractionMode !== "plan" &&
       activeMode?.readonly !== true &&
       (activeMode?.id ?? activeRun?.harnessMode?.id ?? shell.modeId) === "creator";
@@ -578,6 +578,40 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
         readOnly,
       });
 
+    const management = managementTools.find((tool) => tool.exposedName === toolName);
+    if (management) {
+      const denied = McpGateway.checkHarnessRuntimeToolCeiling({
+        ...context,
+        toolName,
+        readOnly: management.readOnly,
+        isBuiltInReadOnly: management.readOnly,
+      });
+      const result = yield* (
+        denied || !context.includeLibraryTools || Option.isNone(libraryStore)
+          ? Effect.fail(
+              new HarnessError({
+                code: "policy_denied",
+                detail: denied ?? "Harness tool unavailable in this session.",
+              }),
+            )
+          : callManagementTool(toolName, toolArgs, context.workspaceRoot, libraryStore.value, {
+              path: deps.path,
+              store: deps.store,
+              instances: deps.instances,
+              hooks: hooksService,
+              plugins: pluginHost,
+            })
+      ).pipe(Effect.result);
+      yield* emitPostToolHook(Result.isFailure(result));
+      return jsonRpcSuccess(
+        rpc.id,
+        Result.isFailure(result)
+          ? { isError: true, content: [{ type: "text", text: result.failure.detail }] }
+          : { content: [{ type: "text", text: JSON.stringify(result.success) }] },
+        sessionId,
+      );
+    }
+
     if (toolName === McpGateway.HARNESS_WRITE_SKILL_NAME) {
       const ceilingErr = checkRuntimeCeiling(false);
       if (ceilingErr !== null) {
@@ -588,14 +622,14 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
           sessionId,
         );
       }
-      if (!state.context.includeCreatorTools || Option.isNone(libraryStore)) {
+      if (!state.context.includeLibraryTools || Option.isNone(libraryStore)) {
         yield* emitPostToolHook(true);
         return jsonRpcSuccess(
           rpc.id,
           {
             isError: true,
             content: [
-              { type: "text", text: "harness_write_skill is only available in Creator mode." },
+              { type: "text", text: "harness_write_skill is unavailable in this session." },
             ],
           },
           sessionId,
@@ -650,7 +684,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
           content: [
             {
               type: "text",
-              text: `Saved portable skill "${idOpt.value}" under ~/.t3/harness/skills/${idOpt.value}/SKILL.md.`,
+              text: `Saved portable skill "${idOpt.value}" at ${saved.success.skills.find((skill) => skill.scope === "user" && skill.id === idOpt.value)?.sourcePath}.`,
             },
           ],
         },
@@ -668,14 +702,14 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
           sessionId,
         );
       }
-      if (!state.context.includeCreatorTools || Option.isNone(libraryStore)) {
+      if (!state.context.includeLibraryTools || Option.isNone(libraryStore)) {
         yield* emitPostToolHook(true);
         return jsonRpcSuccess(
           rpc.id,
           {
             isError: true,
             content: [
-              { type: "text", text: "harness_create_mode is only available in Creator mode." },
+              { type: "text", text: "harness_create_mode is unavailable in this session." },
             ],
           },
           sessionId,
@@ -753,7 +787,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
           content: [
             {
               type: "text",
-              text: `Saved declarative mode "${idOpt.value}" under ~/.t3/harness/modes/${idOpt.value}.md.`,
+              text: `Saved declarative mode "${idOpt.value}" at ${saved.success.modes.find((mode) => mode.id === idOpt.value)?.sourcePath}.`,
             },
           ],
         },
@@ -777,7 +811,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
           rpc.id,
           {
             isError: true,
-            content: [{ type: "text", text: "plugin_pack is only available in Creator mode." }],
+            content: [{ type: "text", text: "plugin_pack is unavailable in this session." }],
           },
           sessionId,
         );
@@ -1033,7 +1067,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
           content: [
             {
               type: "text",
-              text: `# Skill: ${skill.name} (${skill.scope})\nSource: ${skill.sourcePath}\n\n${skill.body.trim()}${companionNote}`,
+              text: `# Skill: ${skill.name} (${skill.scope})\nSource: ${skill.sourcePath}\n\n${skill.body.trim()}${companionNote}${skill.companionTruncated ? "\nCompanion file listing is incomplete." : ""}`,
             },
           ],
         },
@@ -1503,6 +1537,9 @@ export const layer = Layer.unwrap(
       registry,
       gateway,
       appCapture,
+      instances: yield* Effect.serviceOption(ProviderInstanceRegistry.ProviderInstanceRegistry),
+      path: yield* Path.Path,
+      store: yield* Effect.serviceOption(HarnessStore.HarnessStore),
       libraryStore,
       memoryStore,
       oauthNotice,

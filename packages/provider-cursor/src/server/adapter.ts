@@ -187,6 +187,7 @@ export const CursorProviderCapabilitiesV2 = {
     skillMount: "none",
     systemContextMutableMidSession: false,
     maxSystemContextBytes: null,
+    readsProjectAgentsMd: true,
     nativeToolHooks: false,
     nativeAllowAlways: false,
     planReadOnlyEnforcement: "native",

@@ -67,16 +67,6 @@ const SAFE_READ_FLAGS =
   (NodeFS.constants.O_NONBLOCK ?? 0);
 const PENDING_PULL_BASES_FILE = "t3-harness-pull-bases.json";
 
-const ALLOWED_SKILL_EXTENSIONS = new Set([
-  ".md",
-  ".mdx",
-  ".txt",
-  ".json",
-  ".yaml",
-  ".yml",
-  ".toml",
-]);
-
 const ALLOWLIST_DIRS = ["rules", "commands", "modes", "memory", "skills"] as const;
 
 const SECRET_RULES: ReadonlyArray<{ readonly name: string; readonly pattern: RegExp }> = [
@@ -93,7 +83,7 @@ const SECRET_RULES: ReadonlyArray<{ readonly name: string; readonly pattern: Reg
 ];
 
 /**
- * Only non-executable declarative harness content may sync across machines.
+ * Skill files may retain execute bits. Other portable files are declarative.
  * Local trust ledgers (`plugins-state.json`, `approval-rules.json`, `project-trust.json`),
  * executable configs (`harness.json`, `hooks.json`, `plugins/**`), and secrets never sync.
  */
@@ -118,9 +108,12 @@ function isAllowlistedSyncPath(rawRelPath: string): boolean {
   }
   if (segments.length >= 3 && segments[0] === "skills") {
     if (segments.includes("node_modules")) return false;
-    const file = segments[segments.length - 1] ?? "";
-    const ext = NodePath.extname(file).toLowerCase();
-    return ALLOWED_SKILL_EXTENSIONS.has(ext);
+    return segments.every(
+      (part) =>
+        !/[<>:"|?*\u0000-\u001f\u007f]/u.test(part) &&
+        !/[. ]$/u.test(part) &&
+        !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(part),
+    );
   }
   return false;
 }
@@ -162,9 +155,9 @@ function inspectBundle(bundle: HarnessSyncBundle): ReadonlyArray<HarnessSyncSecr
   let bytes = 0;
   if (bundle.files.length > MAX_SYNC_BUNDLE_FILES)
     return [safetyFinding(".", "unscannable-bundle-size")];
-  for (const { path, text } of bundle.files) {
+  for (const { path, text, executable } of bundle.files) {
     const key = path.toLowerCase();
-    if (!isBundlePath(path) || seen.has(key)) {
+    if ((executable && !path.startsWith("skills/")) || !isBundlePath(path) || seen.has(key)) {
       return [safetyFinding(".", "disallowed-bundle-path")];
     }
     seen.add(key);
@@ -290,6 +283,7 @@ interface ScannedFileSnapshot {
   readonly content: Buffer;
   readonly text: string;
   readonly blobSha: string;
+  readonly executable?: boolean;
 }
 
 interface HarnessAllowlistSnapshot {
@@ -373,6 +367,7 @@ async function snapshotAllowlistedHarnessFiles(
             relPath,
             content: buffer,
             text,
+            executable: relPath.startsWith("skills/") && (stat.mode & 0o111) !== 0,
             blobSha: gitBlobHash(buffer),
           });
         }
@@ -432,9 +427,13 @@ async function snapshotAllowlistedHarnessFiles(
       return;
     }
     for (const entry of entries) {
-      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-      const fullPath = NodePath.join(dirPath, entry.name);
       const relPath = `${relPrefix}/${entry.name}`;
+      if (entry.name.startsWith(".") || entry.name === "node_modules") {
+        if (relPrefix.startsWith("skills/") && options?.acceptsPath?.(relPath) !== false)
+          findings.push(safetyFinding(relPath, "disallowed-package-path"));
+        continue;
+      }
+      const fullPath = NodePath.join(dirPath, entry.name);
       if (entry.isSymbolicLink()) {
         findings.push({
           path: relPath,
@@ -452,6 +451,8 @@ async function snapshotAllowlistedHarnessFiles(
       }
       if (entry.isFile() && isAllowlistedSyncPath(relPath)) {
         await readAllowlistedFile(relPath, fullPath);
+      } else if (relPrefix.startsWith("skills/") && options?.acceptsPath?.(relPath) !== false) {
+        findings.push(safetyFinding(relPath, "disallowed-package-path"));
       }
     }
   };
@@ -485,6 +486,8 @@ function makeGitRunner(allowLocalRemote: boolean) {
     "protocol.ssh.allow=always",
     "-c",
     "core.hooksPath=/dev/null",
+    "-c",
+    "core.fileMode=true",
   ];
   return (
     cwd: string,
@@ -546,6 +549,14 @@ async function readGitTree(
   return entries;
 }
 
+function fileIdentity(sha: string, executable: boolean | undefined) {
+  return executable ? `x:${sha}` : sha;
+}
+
+function treeIdentity(entry: GitTreeEntry) {
+  return fileIdentity(entry.sha, entry.path.startsWith("skills/") && entry.mode === "100755");
+}
+
 function isRegularSyncEntry(entry: GitTreeEntry): boolean {
   return (
     entry.type === "blob" &&
@@ -571,7 +582,11 @@ async function readLocalBlobSha(root: string, target: string): Promise<string | 
       if (content.includes(0) || content.byteLength > MAX_SYNC_FILE_BYTES) {
         throw new Error("Local file is binary or too large to compare.");
       }
-      return gitBlobHash(content);
+      return fileIdentity(
+        gitBlobHash(content),
+        NodePath.relative(root, target).split(NodePath.sep)[0] === "skills" &&
+          (stat.mode & 0o111) !== 0,
+      );
     } finally {
       await handle.close();
     }
@@ -597,7 +612,7 @@ async function readPendingPullBases(
   for (const [path, base] of Object.entries(parsed)) {
     if (
       (!isAllowlistedSyncPath(path) && path !== PORTABLE_MCP_FILE) ||
-      (base !== null && (typeof base !== "string" || !/^[0-9a-f]{40}$/u.test(base)))
+      (base !== null && (typeof base !== "string" || !/^(?:x:)?[0-9a-f]{40}$/u.test(base)))
     ) {
       throw new Error("Invalid pending harness sync conflict.");
     }
@@ -626,7 +641,7 @@ function computeTreeDigest(
   for (const relPath of sortedPaths) {
     const file = files.get(relPath);
     if (!file) continue;
-    hash.update(`${relPath}\0${file.blobSha}\n`);
+    hash.update(`${relPath}\0${fileIdentity(file.blobSha, file.executable)}\n`);
   }
   return hash.digest("hex");
 }
@@ -665,7 +680,11 @@ function computeDiffAgainstHead(
         additions: NonNegativeInt.make(0),
         deletions: NonNegativeInt.make(1),
       });
-    } else if (headEntry && localFile && headEntry.sha !== localFile.blobSha) {
+    } else if (
+      headEntry &&
+      localFile &&
+      treeIdentity(headEntry) !== fileIdentity(localFile.blobSha, localFile.executable)
+    ) {
       const lineCount = localFile.text.length === 0 ? 0 : localFile.text.split(/\r?\n/u).length;
       diffFiles.push({
         path: relPath,
@@ -1068,7 +1087,7 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
           });
         const target = yield* readSnapshot();
         findings.push(...target.findings);
-        const source = new Map(bundle.files.map(({ path, text }) => [path, text]));
+        const source = new Map(bundle.files.map((file) => [file.path, file]));
         const files: Array<HarnessSyncDiffFile> = [];
         const paths = [...new Set([...source.keys(), ...target.files.keys()])].toSorted();
         const seen = new Set<string>();
@@ -1085,8 +1104,12 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
           }
           seen.add(key);
           const before = target.files.get(path)?.text;
-          const after = source.get(path);
-          if (before === after) continue;
+          const after = source.get(path)?.text;
+          if (
+            before === after &&
+            !!source.get(path)?.executable === !!target.files.get(path)?.executable
+          )
+            continue;
           const diff = diffLines(before ?? "", after ?? "", {
             timeout: Math.max(1, deadline - performance.now()),
             maxEditLength: 20_000,
@@ -1355,6 +1378,7 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
             files: [...snapshot.files.values()].map((file) => ({
               path: file.relPath,
               text: file.text,
+              ...(file.executable ? { executable: true } : {}),
             })),
             ...(portable === undefined ? {} : { portableMcpServers: portable.catalog }),
           };
@@ -1414,11 +1438,14 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
               );
               const root = harnessDir();
               const appliedPaths: Array<string> = [];
-              const write = (path: string, text: string | undefined) => {
+              const write = (
+                path: string,
+                item: { text: string; executable?: boolean } | undefined,
+              ) => {
                 const file = NodePath.join(root, path);
-                return text === undefined
+                return item === undefined
                   ? safeRemoveFile(root, file)
-                  : safeWriteFileAtomic(root, file, text);
+                  : safeWriteFileAtomic(root, file, item.text, item.executable ? 0o755 : 0o600);
               };
               return yield* Effect.uninterruptible(
                 Effect.gen(function* () {
@@ -1426,7 +1453,10 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                     try: async () => {
                       for (const path of selectedPaths) {
                         const current = await readLocalBlobSha(root, NodePath.join(root, path));
-                        if (current !== (target.files.get(path)?.blobSha ?? null))
+                        const prior = target.files.get(path);
+                        if (
+                          current !== (prior ? fileIdentity(prior.blobSha, prior.executable) : null)
+                        )
                           throw stalePreview();
                         await write(path, source.get(path));
                         appliedPaths.push(path);
@@ -1458,9 +1488,12 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                             current ===
                             (replacement === undefined
                               ? null
-                              : gitBlobHash(Buffer.from(replacement)))
+                              : fileIdentity(
+                                  gitBlobHash(Buffer.from(replacement.text)),
+                                  replacement.executable,
+                                ))
                           ) {
-                            await write(path, target.files.get(path)?.text).catch(() => undefined);
+                            await write(path, target.files.get(path)).catch(() => undefined);
                           }
                         }
                       }),
@@ -1666,6 +1699,7 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                       repoDir,
                       NodePath.join(repoDir, file.relPath),
                       file.text,
+                      file.executable ? 0o755 : 0o600,
                     );
                   }
 
@@ -1768,7 +1802,7 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                   const beforeAllowlisted = new Map(
                     beforeEntries
                       .filter(isRegularSyncEntry)
-                      .map((entry) => [entry.path, entry.sha]),
+                      .map((entry) => [entry.path, treeIdentity(entry)]),
                   );
                   const gitDir = NodePath.join(repoDir, ".git");
                   const pendingPath = NodePath.join(gitDir, PENDING_PULL_BASES_FILE);
@@ -1782,7 +1816,7 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                   const fetchedAllowlisted = new Map(
                     fetchedEntries
                       .filter(isRegularSyncEntry)
-                      .map((entry) => [entry.path, entry.sha]),
+                      .map((entry) => [entry.path, treeIdentity(entry)]),
                   );
 
                   // Keep the original per-file bases across fast-forwards, conflicts, and interrupted pulls.
@@ -1833,7 +1867,7 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                     }
                     const entry = afterEntries.get(path);
                     if (entry !== undefined && !isRegularSyncEntry(entry)) continue;
-                    const remote = entry?.sha ?? null;
+                    const remote = entry ? treeIdentity(entry) : null;
                     if (remote === base) {
                       pendingBases.delete(path);
                       continue;
@@ -1881,7 +1915,12 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                         skippedFiles.add(path);
                         continue;
                       }
-                      await safeWriteFileAtomic(hDir, target, text);
+                      await safeWriteFileAtomic(
+                        hDir,
+                        target,
+                        text,
+                        path.startsWith("skills/") && entry.mode === "100755" ? 0o755 : 0o600,
+                      );
                     }
                     updatedFiles.push(path);
                     pendingBases.delete(path);

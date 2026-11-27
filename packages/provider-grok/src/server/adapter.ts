@@ -92,6 +92,7 @@ const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
 
 const GrokProviderCapabilitiesV2 = {
   ...AcpProviderCapabilitiesV2,
+  harness: { ...AcpProviderCapabilitiesV2.harness, readsProjectAgentsMd: true },
   sessions: {
     ...AcpProviderCapabilitiesV2.sessions,
     supportsModelSwitchInSession: true,

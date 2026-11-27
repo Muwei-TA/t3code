@@ -227,6 +227,7 @@ const OpenCode2ProviderCapabilities = {
     skillMount: "none",
     systemContextMutableMidSession: true,
     maxSystemContextBytes: null,
+    readsProjectAgentsMd: true,
     nativeToolHooks: false,
     nativeAllowAlways: false,
     planReadOnlyEnforcement: "native",

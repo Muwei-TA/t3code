@@ -203,9 +203,9 @@ describe("HarnessContextService", () => {
           const store = yield* HarnessStore.HarnessStore;
           const contextService = yield* HarnessContextService.HarnessContextService;
 
-          // With zero MCP servers, Codex default mode has gateway inactive.
+          // The library inspection tool is available before the first asset is installed.
           const emptyCodex = yield* contextService.getThreadContextManifest(codexThreadId);
-          expect(emptyCodex.harnessGatewayActive).toBe(false);
+          expect(emptyCodex.harnessGatewayActive).toBe(true);
           expect(emptyCodex.planModeSource).toBe("native");
           expect(emptyCodex.planModeReadOnlyEnforcement).toBe("native");
           expect(emptyCodex.degradedItems).toEqual([]);
