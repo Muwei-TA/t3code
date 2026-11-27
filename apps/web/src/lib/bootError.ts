@@ -1,7 +1,7 @@
 import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
 
-const FALLBACK_TRIAGE_COMMAND = "npx t3 triage";
+const FALLBACK_TRIAGE_COMMAND = `npx ${LIGHTNING_BRAND.cliCommand} triage`;
 const DOWNLOAD_URL = LIGHTNING_BRAND.downloadUrl;
 const ISSUE_URL = `${LIGHTNING_BRAND.repositoryUrl}/issues/new`;
 const LAST_FAILURE_KEY = "t3code:boot-failed-at";
@@ -30,7 +30,9 @@ export async function resolveTriageCommand(bridge: DesktopBridge | undefined) {
     const state = await bridge?.cliCommand.getState();
     // Windows reports onPath from its PATH entry alone; only an existing launcher proves it runs.
     if (state?.launcherPath) {
-      return state.onPath ? "t3 triage" : `${launcherCommand(state.launcherPath)} triage`;
+      return state.onPath
+        ? `${LIGHTNING_BRAND.cliCommand} triage`
+        : `${launcherCommand(state.launcherPath)} triage`;
     }
   } catch (error) {
     console.warn("Could not read the desktop CLI state.", error);
@@ -236,7 +238,7 @@ function mountUpdateButton(
           : undefined;
     run?.then(
       (result) => render(result.state),
-      (error: unknown) => console.warn("Could not update T3 Code.", error),
+      (error: unknown) => console.warn(`Could not update ${LIGHTNING_BRAND.baseName}.`, error),
     );
   });
   // A pushed state is newer than the initial read, so the read must not overwrite it.
@@ -256,7 +258,7 @@ function mountUpdateButton(
 }
 
 export function showBootError(error: unknown) {
-  console.error("T3 Code failed to start.", error);
+  console.error(`${LIGHTNING_BRAND.baseName} failed to start.`, error);
   const bootShell = document.getElementById("boot-shell");
   if (!bootShell) return;
 

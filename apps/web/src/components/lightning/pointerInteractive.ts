@@ -69,7 +69,7 @@ function listen() {
 
   function paint() {
     frame = 0;
-    if (!target?.isConnected || document.hidden) {
+    if (reduced.matches || !target?.isConnected || document.hidden) {
       reset();
       return;
     }
@@ -140,8 +140,13 @@ function listen() {
   }
 
   function follow(event: PointerEvent, hit = event.target) {
-    if (event.pointerType === "touch" || !(hit instanceof Element) || document.hidden) {
-      reset();
+    if (
+      reduced.matches ||
+      event.pointerType === "touch" ||
+      !(hit instanceof Element) ||
+      document.hidden
+    ) {
+      if (active.size > 0 || frame || target) reset();
       return;
     }
     if (hit !== target && !hit.closest(region)) {
@@ -172,8 +177,10 @@ function listen() {
     () => {
       const hit = target;
       reset();
-      target = hit;
-      if (hit) frame = requestAnimationFrame(paint);
+      if (!reduced.matches && hit) {
+        target = hit;
+        frame = requestAnimationFrame(paint);
+      }
     },
     options,
   );

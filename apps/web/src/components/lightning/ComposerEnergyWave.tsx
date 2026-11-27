@@ -64,13 +64,24 @@ export function ComposerEnergyWave({
     const host = root.closest<HTMLElement>('[data-slot="composer-host"]');
 
     const stopPointerSurface = registerPointerSurface(host);
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
 
     let typingTimer: number | undefined;
     let strikeFrame = 0;
     let sendTimer: number | undefined;
 
+    const clearMotionState = () => {
+      window.clearTimeout(typingTimer);
+      window.cancelAnimationFrame(strikeFrame);
+      strikeFrame = 0;
+      window.clearTimeout(sendTimer);
+      setTypingActive(false);
+      setSendBurst(false);
+    };
+
     const focusEditor = (event: Event) => {
       if (
+        reduced.matches ||
         !(event.target instanceof Element) ||
         !event.target.closest('input, textarea, [contenteditable="true"]')
       )
@@ -82,12 +93,16 @@ export function ComposerEnergyWave({
     };
 
     const triggerTyping = (event: Event) => {
-      if (!focusEditor(event) || strikeFrame) return;
+      if (reduced.matches || !focusEditor(event) || strikeFrame) return;
       // A physical keystroke can emit both keydown and input for the same edit.
       strikeFrame = window.requestAnimationFrame(() => {
         strikeFrame = 0;
         const crest = crestRef.current;
-        if (!crest || root.style.getPropertyValue("--visible-animation-state") !== "running")
+        if (
+          reduced.matches ||
+          !crest ||
+          root.style.getPropertyValue("--visible-animation-state") !== "running"
+        )
           return;
         for (const pulse of crest.getAnimations({ subtree: true })) pulse.currentTime = 0;
         window.dispatchEvent(new Event("lightning:composer-typing"));
@@ -95,12 +110,17 @@ export function ComposerEnergyWave({
     };
 
     const triggerSendBurst = () => {
+      if (reduced.matches) return;
       window.cancelAnimationFrame(strikeFrame);
       strikeFrame = 0;
       setTypingActive(false);
       setSendBurst(true);
       window.clearTimeout(sendTimer);
       sendTimer = window.setTimeout(() => setSendBurst(false), 800);
+    };
+
+    const onReducedChange = () => {
+      if (reduced.matches) clearMotionState();
     };
 
     const onFocusOut = (event: FocusEvent) => {
@@ -123,6 +143,7 @@ export function ComposerEnergyWave({
     form?.addEventListener("focusout", onFocusOut);
     form?.addEventListener("focusin", focusEditor);
     window.addEventListener("lightning:composer-send", triggerSendBurst);
+    reduced.addEventListener("change", onReducedChange);
 
     return () => {
       stopPointerSurface?.();
@@ -134,6 +155,7 @@ export function ComposerEnergyWave({
       form?.removeEventListener("focusout", onFocusOut);
       form?.removeEventListener("focusin", focusEditor);
       window.removeEventListener("lightning:composer-send", triggerSendBurst);
+      reduced.removeEventListener("change", onReducedChange);
       host?.removeAttribute("data-lightning-composer-state");
     };
   }, [shell]);

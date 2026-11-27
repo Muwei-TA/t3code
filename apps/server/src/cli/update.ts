@@ -1,3 +1,4 @@
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   CLI_RELEASE_BASE_URL_ENV,
@@ -212,13 +213,17 @@ export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(functio
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const environment = yield* HostProcess.Environment;
+  const windowsShimName = `${LIGHTNING_BRAND.cliCommand}.cmd`;
   const candidates = [
+    ...(environment["LIGHTNING_CODE_INSTALL_BIN_DIR"]
+      ? [environment["LIGHTNING_CODE_INSTALL_BIN_DIR"]]
+      : []),
     ...(environment["T3CODE_INSTALL_BIN_DIR"] ? [environment["T3CODE_INSTALL_BIN_DIR"]] : []),
     ...(environment["PATH"] ?? environment["Path"] ?? "").split(";"),
   ]
     .filter((entry) => entry.trim().length > 0)
     .map((directory) => ({
-      shimPath: path.join(directory, "t3.cmd"),
+      shimPath: path.join(directory, windowsShimName),
       parseTarget: windowsShimTarget,
     }));
   if (versionsDir !== undefined) {
@@ -226,7 +231,10 @@ export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(functio
       .readFileString(path.join(path.dirname(versionsDir), "launchers"))
       .pipe(Effect.orElseSucceed(() => ""));
     for (const shimPath of recorded.split(/\r?\n/)) {
-      if (path.isAbsolute(shimPath) && path.basename(shimPath).toLowerCase() === "t3.cmd") {
+      if (
+        path.isAbsolute(shimPath) &&
+        path.basename(shimPath).toLowerCase() === windowsShimName.toLowerCase()
+      ) {
         candidates.push({ shimPath, parseTarget: generatedWindowsShimTarget });
       }
     }

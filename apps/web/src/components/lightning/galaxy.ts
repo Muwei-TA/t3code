@@ -219,12 +219,15 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
   let prevPx = 0;
   let prevPy = 0;
   let pointerSpeed = 0;
+  let lastPointerMoveAt = 0;
   let scatterBurst = 0;
   let scatterX = 0;
   let scatterY = 0;
   let rafId = 0;
   let lastTime = 0;
   let elapsed = 0;
+
+  const isInteractiveCapable = () => hoverMedia.matches && !reducedMedia.matches;
 
   const readPalette = () => {
     const style = getComputedStyle(host);
@@ -296,7 +299,21 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
     }
   };
 
+  const clearBackingStore = () => {
+    width = 0;
+    height = 0;
+    stars = [];
+    if (canvas.width !== 0 || canvas.height !== 0) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  };
+
   const resize = () => {
+    if (!isInteractiveCapable()) {
+      clearBackingStore();
+      return;
+    }
     const rect = host.getBoundingClientRect();
     const nextW = Math.max(1, Math.round(rect.width));
     const nextH = Math.max(1, Math.round(rect.height));
@@ -321,21 +338,34 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
   };
 
   const isRunnable = () =>
-    hoverMedia.matches &&
-    !reducedMedia.matches &&
+    isInteractiveCapable() &&
     !document.hidden &&
     host.style.getPropertyValue("--visible-animation-state") !== "paused";
+
+  const STATIONARY_SETTLE_MS = 1800;
 
   const step = (now: number) => {
     if (!isRunnable()) {
       rafId = 0;
       return;
     }
+    if (!width || !height) {
+      resize();
+      if (!width || !height) {
+        rafId = 0;
+        return;
+      }
+    }
     const dt = lastTime === 0 ? 0.016 : Math.min(0.05, (now - lastTime) / 1000);
     lastTime = now;
     elapsed += dt;
     pointerSpeed *= Math.pow(0.08, dt);
     scatterBurst = Math.max(0, scatterBurst - dt * 2.4);
+    const stillMs = lastPointerMoveAt > 0 ? Math.max(0, now - lastPointerMoveAt) : 0;
+    const swirlFactor =
+      pointerActive && stillMs > 1200
+        ? Math.max(0, 1 - (stillMs - 1200) / (STATIONARY_SETTLE_MS - 1200))
+        : 1;
 
     ctx.clearRect(0, 0, width, height);
     const gatherRadius = 225;
@@ -356,7 +386,7 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
         if (distSq < gatherRadiusSq && distSq > 0.01) {
           const dist = Math.sqrt(distSq);
           proximity = 1 - dist / gatherRadius;
-          s.orbitAngle += s.orbitSpeed * dt;
+          s.orbitAngle += s.orbitSpeed * dt * swirlFactor;
 
           if (fastSweep) {
             // Fast cursor sweep fans stars outward like a luminous stardust wake before reconverging.
@@ -371,8 +401,8 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
             fx += (targetX - s.x) * pull;
             fy += (targetY - s.y) * pull;
             // Subtle tangential swirl around the pointer.
-            fx += (-dy / dist) * 24 * proximity;
-            fy += (dx / dist) * 24 * proximity;
+            fx += (-dy / dist) * 24 * proximity * swirlFactor;
+            fy += (dx / dist) * 24 * proximity * swirlFactor;
           }
           if (proximity > 0.32) gathered.push(s);
         }
@@ -455,6 +485,12 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
       return;
     }
 
+    if (pointerActive && scatterBurst <= 0.01 && stillMs >= STATIONARY_SETTLE_MS) {
+      // Keep the gathered constellation halo frozen on screen and sleep RAF until cursor moves again.
+      rafId = 0;
+      return;
+    }
+
     rafId = window.requestAnimationFrame(step);
   };
 
@@ -499,6 +535,7 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
     px = nx;
     py = ny;
     pointerActive = true;
+    lastPointerMoveAt = performance.now();
     ensureLoop();
   };
 
@@ -525,6 +562,7 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
     scatterX = event.clientX - rect.left;
     scatterY = event.clientY - rect.top;
     scatterBurst = 1;
+    lastPointerMoveAt = performance.now();
     ensureLoop();
   };
 
@@ -533,10 +571,21 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
     scatterX = width * 0.5;
     scatterY = height * 0.52;
     scatterBurst = 1.15;
+    lastPointerMoveAt = performance.now();
     ensureLoop();
   };
 
   const onThemeOrModeChange = () => {
+    if (!isInteractiveCapable()) {
+      stopLoop();
+      pointerActive = false;
+      clearBackingStore();
+      return;
+    }
+    if (!width || !height) {
+      resize();
+      return;
+    }
     readPalette();
     if (!isRunnable()) {
       stopLoop();

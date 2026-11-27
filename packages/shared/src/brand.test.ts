@@ -18,10 +18,11 @@ describe("LIGHTNING_BRAND", () => {
 });
 
 describe("normalizeBrandCopy", () => {
-  it("rewrites user-facing T3 Code mentions across English and CJK strings", () => {
+  it("rewrites user-facing T3 Code mentions across English, German compounds, and CJK strings", () => {
     expect(normalizeBrandCopy("T3 Code home")).toBe("Lightning Code home");
     expect(normalizeBrandCopy("欢迎使用 T3 Code (Beta)")).toBe("欢迎使用 Lightning Code (Beta)");
     expect(normalizeBrandCopy("T3 Code を開く")).toBe("Lightning Code を開く");
+    expect(normalizeBrandCopy("T3-Code-Server verbinden")).toBe("Lightning-Code-Server verbinden");
   });
 
   it("preserves technical identifiers and compatibility contracts", () => {

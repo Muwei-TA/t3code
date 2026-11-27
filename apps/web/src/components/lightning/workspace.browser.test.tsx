@@ -103,7 +103,7 @@ it("lights adjacent card edges from one point and tilts only the hovered card", 
   expect(badge.style.getPropertyValue("--tilt-x")).toBe("");
 });
 
-it("tracks the composer rim and magnet and retains the rim under reduced motion", async () => {
+it("tracks the composer rim and magnet and stays dormant under reduced motion", async () => {
   const commits = vi.fn();
   await using screen = await render(
     <WorkspaceShellProvider>
@@ -135,13 +135,25 @@ it("tracks the composer rim and magnet and retains the rim under reduced motion"
     });
     await vi.waitFor(() => expect(button.style.getPropertyValue("--mag-x")).toBe(""));
     expect(getComputedStyle(button).translate).toBe("none");
-    await vi.waitFor(() => expect(host.dataset.lightningPointer).toBe("capsule"));
-    expect(getComputedStyle(host, "::after").backgroundImage).toContain("radial-gradient");
+    expect(host.style.getPropertyValue("--lx")).toBe("");
+    expect(host.dataset.lightningPointer).toBeUndefined();
+    {
+      using reducedFrame = vi.spyOn(window, "requestAnimationFrame");
+      movePointer(button);
+      expect(reducedFrame).not.toHaveBeenCalled();
+    }
+    await session.send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: "no-preference" }],
+    });
     await session.send("Emulation.setTouchEmulationEnabled", { enabled: true });
-    await vi.waitFor(() => expect(host.style.getPropertyValue("--lx")).toBe(""));
-    using frame = vi.spyOn(window, "requestAnimationFrame");
-    movePointer(button);
-    expect(frame).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(document.documentElement.hasAttribute("data-lightning-pointer-enabled")).toBe(false),
+    );
+    {
+      using frame = vi.spyOn(window, "requestAnimationFrame");
+      movePointer(button);
+      expect(frame).not.toHaveBeenCalled();
+    }
     await session.send("Emulation.setTouchEmulationEnabled", { enabled: false });
     await vi.waitFor(() =>
       expect(document.documentElement.hasAttribute("data-lightning-pointer-enabled")).toBe(true),
@@ -268,6 +280,7 @@ it("pauses offscreen telemetry and respects reduced motion", async () => {
     expect(getComputedStyle(waveBand).animationName).toBe("none");
     expect(getComputedStyle(rim, "::before").animationName).toBe("none");
     expect(getComputedStyle(orbit).animationName).toBe("none");
+    await vi.waitFor(() => expect(swarm.width).toBe(0));
     movePointer(sky.parentElement!);
     expect(getComputedStyle(sky.querySelector(".lightning-zenith-beam")!).transform).toBe("none");
     expect(getComputedStyle(sky.querySelector(".lightning-horizon-arc")!).transform).toBe("none");

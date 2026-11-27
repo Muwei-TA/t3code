@@ -63,7 +63,7 @@ export interface BrandCopyRewriteOptions {
 }
 
 const UPSTREAM_LICENSE_PATTERN = /\bT3 Tools Inc\.?\b|MIT License|Copyright \(c\)/i;
-const PRODUCT_NAME_PATTERN = /\bT3 Code\b/g;
+const PRODUCT_NAME_PATTERN = /\bT3([\s-])Code\b/g;
 
 /**
  * Deterministically rewrites user-facing upstream brand copy ("T3 Code" -> "Lightning Code")
@@ -72,13 +72,15 @@ const PRODUCT_NAME_PATTERN = /\bT3 Code\b/g;
  * stay zero-diff for low-cost upstream merges.
  */
 export function normalizeBrandCopy(text: string, options: BrandCopyRewriteOptions = {}): string {
-  if (!text.includes("T3 Code")) {
+  if (!text.includes("T3 Code") && !text.includes("T3-Code")) {
     return text;
   }
   if (options.preserveUpstreamLicenseContext !== false && UPSTREAM_LICENSE_PATTERN.test(text)) {
     return text;
   }
-  return text.replace(PRODUCT_NAME_PATTERN, LIGHTNING_BRAND.baseName);
+  return text.replace(PRODUCT_NAME_PATTERN, (_, separator: string) =>
+    separator === "-" ? `${LIGHTNING_BRAND.shortName}-Code` : LIGHTNING_BRAND.baseName,
+  );
 }
 
 /**

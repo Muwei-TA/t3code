@@ -237,7 +237,7 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
       const root = yield* fs.makeTempDirectoryScoped();
       const baseDir = path.join(root, "home");
       const runtimeDir = path.join(baseDir, "runtime");
-      const launcher = path.join(root, "custom bin", "t3.cmd");
+      const launcher = path.join(root, "custom bin", "lightning.cmd");
       const launchedAs = path.join(runtimeDir, "versions", "1.0.0", "t3.exe");
       const targetEntryPath = path.join(runtimeDir, "versions", "2.0.0", "t3.exe");
       yield* fs.makeDirectory(runtimeDir, { recursive: true });
@@ -331,7 +331,7 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
     { name: "no launcher records", recorded: undefined },
     { name: "an empty launcher record", recorded: "" },
     { name: "whole launcher records", recorded: "/opt/t3\n" },
-    { name: "Windows launcher records", recorded: "C:\\t3.cmd\r\n" },
+    { name: "Windows launcher records", recorded: "C:\\lightning.cmd\r\n" },
     // An interrupted append cut this record short.
     { name: "an unterminated launcher record", recorded: "/opt/t" },
     // Another process's append is cut short after t3 update reads the records.

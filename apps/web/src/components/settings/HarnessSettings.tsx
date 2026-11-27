@@ -971,7 +971,7 @@ export function EnvironmentHarnessMcpSection({
             <T>
               Configure MCP servers once in{" "}
               <code>
-                <Var>{snapshot?.configPath ?? "~/.t3/harness/harness.json"}</Var>
+                <Var>{snapshot?.configPath ?? "~/.lightning-code/harness/harness.json"}</Var>
               </code>{" "}
               and reuse them across every provider through the isolated <code>/mcp/harness</code>{" "}
               gateway. Use <code>{"${secret:NAME}"}</code> or{" "}
@@ -1056,6 +1056,7 @@ export function EnvironmentHarnessMcpSection({
             <McpServerEditorForm
               environmentId={environmentId}
               workspaceRoot={workspaceRoot}
+              configPath={snapshot?.configPath}
               initial={editorState.mode === "edit" ? editorState.server : undefined}
               allowStdio={canRunStdio && (snapshot?.managedPolicyAllowsStdio ?? true)}
               onCancel={() => setEditorState(null)}
@@ -1300,6 +1301,7 @@ function renderStateBadge(server: HarnessMcpServerView, gt: ReturnType<typeof us
 function McpServerEditorForm({
   environmentId,
   workspaceRoot,
+  configPath,
   initial,
   allowStdio,
   onCancel,
@@ -1308,6 +1310,7 @@ function McpServerEditorForm({
 }: {
   readonly environmentId: EnvironmentId;
   readonly workspaceRoot: string | undefined;
+  readonly configPath: string | undefined;
   readonly initial: HarnessMcpServerView | undefined;
   readonly allowStdio: boolean;
   readonly onCancel: () => void;
@@ -1482,10 +1485,22 @@ function McpServerEditorForm({
       <DialogHeader>
         <DialogTitle>{initial ? gt("Edit MCP server") : gt("Add portable MCP server")}</DialogTitle>
         <DialogDescription>
-          <T>
-            Saved to your portable <code>~/.t3/harness/harness.json</code> and available to every
-            provider.
-          </T>
+          {configPath ? (
+            <T>
+              Configure MCP servers once in{" "}
+              <code>
+                <Var>{configPath}</Var>
+              </code>{" "}
+              and reuse them across every provider through the isolated <code>/mcp/harness</code>{" "}
+              gateway. Use <code>{"${secret:NAME}"}</code> or{" "}
+              <code>{"${secret:provider:ref}"}</code> for credentials.
+            </T>
+          ) : (
+            <T>
+              Saved to your portable <code>~/.t3/harness/harness.json</code> and available to every
+              provider.
+            </T>
+          )}
         </DialogDescription>
       </DialogHeader>
       <DialogPanel>

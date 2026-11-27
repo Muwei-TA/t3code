@@ -386,7 +386,7 @@ fi
 first_t3="$(command -v lightning 2>/dev/null | tr -s / || true)"
 case "$first_t3" in "" | "${bin_dir}/lightning") first_t3= ;; esac
 if [ -n "$first_t3" ]; then
-  printf '  Another lightning at %s runs first, so run %s%s/t3%s to use this one.\n\n' "$first_t3" "$bold" "$bin_dir" "$reset"
+  printf '  Another lightning at %s runs first, so run %s%s/lightning%s to use this one.\n\n' "$first_t3" "$bold" "$bin_dir" "$reset"
 else
   case ":${PATH}:" in
     *":${bin_dir}:"* | *":${bin_dir}/:"*) printf '  Run %slightning%s to use Lightning Code here, or %slightning up%s to use it from your other devices.\n\n' "$bold" "$reset" "$bold" "$reset" ;;
