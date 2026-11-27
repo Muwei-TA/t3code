@@ -1,5 +1,5 @@
 import { LightningShell } from "../lightning/shell";
-import { LedMatrixIndicator } from "../lightning/LedMatrixIndicator";
+import { LightningThinkingPill } from "../lightning/LightningThinkingPill";
 import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
 import { WorkLogButton, WorkLogList, WorkLogRow } from "./WorkLog";
 import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
@@ -367,17 +367,21 @@ export function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
   ) : (
     <T>Working...</T>
   );
+  const lightningShell = use(LightningShell) === "lightning";
   return (
-    <div className="border-b border-border/60 pb-2 pt-1">
-      <div className="flex h-6 min-w-0 items-baseline gap-2 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
-        {use(LightningShell) === "lightning" ? <LedMatrixIndicator /> : null}
-        <span
-          ref={shimmer ? observeVisibleAnimation : undefined}
-          className="relative shrink-0 overflow-hidden whitespace-nowrap"
-        >
-          {label}
-          {shimmer ? <ActivityShimmerOverlay>{label}</ActivityShimmerOverlay> : null}
-        </span>
+    <div className={cn("pb-2 pt-1", !lightningShell && "border-b border-border/60")}>
+      <div className="flex min-h-6 min-w-0 items-center gap-2 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
+        {lightningShell ? (
+          <LightningThinkingPill label={label} />
+        ) : (
+          <span
+            ref={shimmer ? observeVisibleAnimation : undefined}
+            className="relative shrink-0 overflow-hidden whitespace-nowrap"
+          >
+            {label}
+            {shimmer ? <ActivityShimmerOverlay>{label}</ActivityShimmerOverlay> : null}
+          </span>
+        )}
         {backgroundWorktreeSetup ? (
           <BackgroundWorktreeSetupChip snapshot={backgroundWorktreeSetup} />
         ) : null}
@@ -468,9 +472,7 @@ export function ThinkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind:
       }
       iconName="brain"
       iconNode={
-        led ? (
-          <LedMatrixIndicator />
-        ) : providerStarting === null ? undefined : (
+        led || providerStarting === null ? undefined : (
           <ProviderStartingIcon
             environmentId={ctx.activeThreadEnvironmentId ?? null}
             instanceId={providerStarting.instanceId}
@@ -519,13 +521,13 @@ function LiveActivityRow({
 }) {
   const animated = active && !failed;
   const showShimmer = animated && shimmer;
+  if (capsule) {
+    return <LightningThinkingPill label={label} compact />;
+  }
   return (
     <div
       ref={animated ? observeVisibleAnimation : undefined}
-      className={cn(
-        "relative min-h-6 w-fit max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed",
-        capsule && "rounded-full border border-foreground/10 bg-card px-2",
-      )}
+      className="relative min-h-6 w-fit max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed"
     >
       <LiveActivityContent
         label={label}
@@ -726,7 +728,6 @@ export function LiveWorkEntryTimelineRow({
           )
         }
         capsule={led}
-        iconNode={led ? <LedMatrixIndicator /> : undefined}
         iconName={workEntryIconName(row.entry)}
         toolIcon={row.entry.toolIcon ?? row.entry.toolSource?.icon}
         failed={failed}

@@ -1,32 +1,334 @@
-[data-lightning-hero] {
-  background-image:
-    radial-gradient(
-      ellipse 27% 75% at 50% -15%,
-      color-mix(in srgb, var(--foreground) 8%, transparent),
-      transparent
-    ),
-    radial-gradient(
-      circle,
-      color-mix(in srgb, var(--foreground) 6%, transparent) 1px,
-      transparent 1px
-    );
-  background-size:
-    auto,
-    20px 20px;
+/* Lightning Code visual system — Obsidian Hardware, Cosmic Vortex, Prismatic Energy Wave & 7x7 Amber LED Pill */
+
+/* ============================================================================
+ * 1. Cosmic Vortex & Volumetric Zenith Backdrop (Krea Agent + Design+Code 2026)
+ * ============================================================================ */
+
+.lightning-cosmic-backdrop {
+  z-index: 0;
+  background-color: var(--background);
 }
 
-html[data-theme-id="lightning"] [data-ui-shell="lightning"] {
-  --app-theme-sidebar: var(--app-theme-chrome);
-  @variant dark {
-    --card: #111115;
+.lightning-zenith-beam {
+  position: absolute;
+  inset: -12% 0 auto 0;
+  height: 78%;
+  background:
+    radial-gradient(
+      ellipse 18% 68% at 50% 0%,
+      rgb(226 232 255 / 16%) 0%,
+      rgb(129 140 248 / 12%) 28%,
+      rgb(56 189 248 / 5%) 54%,
+      transparent 78%
+    ),
+    radial-gradient(
+      ellipse 56% 52% at 50% -4%,
+      rgb(99 102 241 / 14%) 0%,
+      rgb(30 41 59 / 8%) 48%,
+      transparent 76%
+    );
+  @variant light {
+    background:
+      radial-gradient(
+        ellipse 22% 65% at 50% 0%,
+        rgb(59 130 246 / 11%) 0%,
+        rgb(99 102 241 / 6%) 38%,
+        transparent 75%
+      ),
+      radial-gradient(ellipse 60% 50% at 50% -6%, rgb(148 163 184 / 12%) 0%, transparent 74%);
   }
 }
-html[data-theme-id="lightning"] [data-ui-shell="lightning"] [data-chat-composer-main-surface] {
-  border-radius: 1.35rem;
-  background: var(--app-theme-surface);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foreground) 9%, transparent);
+
+.lightning-dot-grid {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--foreground) 11%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 24px 24px;
+  mask-image: radial-gradient(ellipse 78% 72% at 50% 45%, black 18%, transparent 86%);
+  opacity: 0.55;
+  @variant light {
+    opacity: 0.38;
+  }
+}
+
+.lightning-vortex-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  color: rgb(255 255 255 / 92%);
+  opacity: 0.9;
+  @variant light {
+    color: rgb(30 41 59 / 58%);
+    opacity: 0.36;
+  }
+}
+
+.lightning-horizon-arc {
+  position: absolute;
+  left: -12%;
+  right: -12%;
+  bottom: -240px;
+  height: 320px;
+  border-radius: 50%;
+  border-top: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent);
+  background: radial-gradient(
+    ellipse 60% 100% at 50% 0%,
+    rgb(99 102 241 / 11%) 0%,
+    rgb(56 189 248 / 4%) 32%,
+    transparent 70%
+  );
+  @variant light {
+    border-top-color: rgb(15 23 42 / 9%);
+    background: radial-gradient(
+      ellipse 60% 100% at 50% 0%,
+      rgb(59 130 246 / 6%) 0%,
+      transparent 70%
+    );
+  }
+}
+
+/* ============================================================================
+ * 2. Hero Typography, Emblem & Floating Double-Bevel Command Capsule
+ * ============================================================================ */
+
+.lightning-hero-emblem {
+  color: #f8fafc;
+  background: linear-gradient(180deg, rgb(255 255 255 / 12%) 0%, rgb(255 255 255 / 3%) 100%);
+  border: 1px solid rgb(255 255 255 / 14%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 24%),
+    0 14px 36px -10px rgb(0 0 0 / 85%),
+    0 0 28px -6px rgb(129 140 248 / 38%);
+  @variant light {
+    color: #0f1117;
+    background: linear-gradient(180deg, #ffffff 0%, #f1f4fa 100%);
+    border-color: rgb(15 23 42 / 12%);
+    box-shadow:
+      inset 0 1px 0 #ffffff,
+      0 12px 28px -10px rgb(15 23 42 / 14%),
+      0 0 24px -8px rgb(59 130 246 / 22%);
+  }
+}
+
+.lightning-eyebrow-pill {
+  background: rgb(255 255 255 / 3.5%);
+  border: 1px solid rgb(255 255 255 / 9%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%);
+  @variant light {
+    background: rgb(255 255 255 / 82%);
+    border-color: rgb(15 23 42 / 10%);
+    box-shadow:
+      inset 0 1px 0 #ffffff,
+      0 4px 12px -4px rgb(15 23 42 / 8%);
+  }
+}
+
+.lightning-hero-title {
+  background: linear-gradient(180deg, #ffffff 0%, #e4e4ec 58%, #9d9db0 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  @variant light {
+    background: linear-gradient(180deg, #0b0d13 0%, #272c3a 75%, #4a5163 100%);
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+  }
+}
+
+.lightning-hero-capsule-moat {
+  padding: 5px;
+  border-radius: 1.85rem;
+  background: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 11%) 0%,
+    rgb(255 255 255 / 2.5%) 42%,
+    rgb(255 255 255 / 7%) 100%
+  );
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 8%),
+    0 28px 72px -18px rgb(0 0 0 / 92%),
+    0 0 64px -24px rgb(99 102 241 / 32%);
+  @variant light {
+    background: linear-gradient(180deg, rgb(15 23 42 / 5%) 0%, rgb(15 23 42 / 2.5%) 100%);
+    box-shadow:
+      0 0 0 1px rgb(15 23 42 / 7%),
+      0 22px 48px -18px rgb(15 23 42 / 15%);
+  }
+}
+
+.lightning-hero-capsule {
+  border-radius: 1.5rem;
+  background: linear-gradient(180deg, #101016 0%, #09090d 100%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 15%),
+    inset 0 0 0 1px rgb(255 255 255 / 9%);
+  @variant light {
+    background: linear-gradient(180deg, #ffffff 0%, #fafbfe 100%);
+    box-shadow:
+      inset 0 1px 0 #ffffff,
+      inset 0 0 0 1px rgb(15 23 42 / 10%);
+  }
+}
+
+.lightning-hero-capsule-glow {
+  position: absolute;
+  pointer-events: none;
+  inset: auto 10% 0 10%;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(34 211 238 / 55%) 22%,
+    rgb(139 92 246 / 65%) 48%,
+    rgb(236 72 153 / 60%) 70%,
+    rgb(251 191 36 / 55%) 86%,
+    transparent 100%
+  );
+  opacity: 0.72;
+  @variant light {
+    opacity: 0.45;
+  }
+}
+
+.lightning-hardware-card {
+  background: linear-gradient(180deg, rgb(255 255 255 / 4.5%) 0%, rgb(255 255 255 / 1.5%) 100%);
+  border: 1px solid rgb(255 255 255 / 8%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 8%),
+    0 12px 30px -14px rgb(0 0 0 / 70%);
+  @variant light {
+    background: linear-gradient(180deg, #ffffff 0%, #f6f8fc 100%);
+    border-color: rgb(15 23 42 / 9%);
+    box-shadow:
+      inset 0 1px 0 #ffffff,
+      0 10px 24px -14px rgb(15 23 42 / 12%);
+  }
+}
+
+.lightning-hardware-card:hover {
+  border-color: rgb(255 255 255 / 16%);
+  background: linear-gradient(180deg, rgb(255 255 255 / 7%) 0%, rgb(255 255 255 / 2.5%) 100%);
+  @variant light {
+    border-color: rgb(15 23 42 / 18%);
+    background: #ffffff;
+  }
+}
+
+.lightning-brand-chip {
+  background: linear-gradient(180deg, rgb(255 255 255 / 14%) 0%, rgb(255 255 255 / 5%) 100%);
+  border: 1px solid rgb(255 255 255 / 14%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 18%);
+  @variant light {
+    background: linear-gradient(180deg, #181a22 0%, #0b0d12 100%);
+    border-color: rgb(15 23 42 / 18%);
+    color: #ffffff;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 20%);
+  }
+}
+
+.lightning-status-led {
+  background: #34d399;
+  box-shadow: 0 0 8px rgb(52 211 153 / 72%);
+  @variant light {
+    background: #10b981;
+    box-shadow: 0 0 6px rgb(16 185 129 / 45%);
+  }
+}
+
+/* ============================================================================
+ * 3. Scoped Workspace Surfaces & Krea Double-Bevel Composer
+ * ============================================================================ */
+
+html[data-theme-id="lightning"] [data-ui-shell="lightning"] {
+  --app-theme-sidebar: #060609;
+  @variant light {
+    --app-theme-sidebar: #f1f3f8;
+  }
   @variant dark {
-    background: #09090c;
+    --card: #0e0e13;
+  }
+}
+
+/* Subtle top ambient atmospheric wash on active workspace canvas */
+html[data-theme-id="lightning"]
+  [data-ui-shell="lightning"]
+  [data-chat-workspace-drop-target="true"] {
+  background-image: radial-gradient(
+    ellipse 52% 28% at 50% -6%,
+    rgb(99 102 241 / 9%) 0%,
+    rgb(56 189 248 / 3%) 45%,
+    transparent 78%
+  );
+  @variant light {
+    background-image: radial-gradient(
+      ellipse 52% 24% at 50% -6%,
+      rgb(59 130 246 / 5%) 0%,
+      transparent 75%
+    );
+  }
+}
+
+/* Draft Hero Headline upgrade inside Lightning shell */
+html[data-theme-id="lightning"] [data-ui-shell="lightning"] [data-lightning-draft-hero] h1 {
+  font-size: clamp(1.85rem, 3.2vw, 2.75rem);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  @variant dark {
+    background: linear-gradient(180deg, #ffffff 0%, #e4e4ec 62%, #a1a1b5 100%);
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+  }
+}
+
+/* Krea Agent Double-Bevel Machined Obsidian Glass Composer */
+html[data-theme-id="lightning"] [data-ui-shell="lightning"] [data-slot="composer-shell"]::before {
+  border-radius: 1.75rem;
+}
+
+html[data-theme-id="lightning"] [data-ui-shell="lightning"] [data-slot="composer-host"] {
+  padding: 4px;
+  border-radius: 1.75rem;
+  background: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 10%) 0%,
+    rgb(255 255 255 / 2.5%) 44%,
+    rgb(255 255 255 / 6.5%) 100%
+  );
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 8%),
+    0 24px 60px -18px rgb(0 0 0 / 88%);
+  @variant light {
+    background: linear-gradient(180deg, rgb(15 23 42 / 5%) 0%, rgb(15 23 42 / 2.5%) 100%);
+    box-shadow:
+      0 0 0 1px rgb(15 23 42 / 7%),
+      0 18px 42px -18px rgb(15 23 42 / 14%);
+  }
+}
+
+html[data-theme-id="lightning"] [data-ui-shell="lightning"] [data-slot="composer-host"]::after {
+  display: none;
+}
+
+html[data-theme-id="lightning"] [data-ui-shell="lightning"] [data-chat-composer-main-surface] {
+  border-radius: 1.45rem;
+  background: linear-gradient(180deg, #101016 0%, #09090d 100%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 14%),
+    inset 0 0 0 1px rgb(255 255 255 / 9%);
+  transition: box-shadow 180ms ease;
+  @variant light {
+    background: linear-gradient(180deg, #ffffff 0%, #fafbfe 100%);
+    box-shadow:
+      inset 0 1px 0 #ffffff,
+      inset 0 0 0 1px rgb(15 23 42 / 10%);
   }
 }
 
@@ -34,58 +336,397 @@ html[data-theme-id="lightning"]
   [data-ui-shell="lightning"]
   [data-chat-composer-main-surface]:focus-within {
   box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--foreground) 16%, transparent),
-    0 0 0 1px var(--ring),
-    0 0 0 3px color-mix(in srgb, var(--ring) 12%, transparent);
+    inset 0 1px 0 rgb(255 255 255 / 22%),
+    inset 0 0 0 1px rgb(255 255 255 / 20%),
+    0 0 34px -8px rgb(129 140 248 / 32%),
+    0 0 18px -6px rgb(56 189 248 / 22%);
+  @variant light {
+    box-shadow:
+      inset 0 1px 0 #ffffff,
+      inset 0 0 0 1px rgb(37 99 235 / 32%),
+      0 0 0 3px rgb(37 99 235 / 10%);
+  }
+}
+
+html[data-theme-id="lightning"]
+  [data-ui-shell="lightning"]
+  [data-chat-composer-stack]:has([data-lightning-draft-hero])
+  [data-slot="composer-context-strip"] {
+  background: transparent;
+  backdrop-filter: none;
+}
+
+/* Machined Hardware Inspector Card & Workspace Chrome */
+html[data-theme-id="lightning"] [data-ui-shell="lightning"] [data-thread-details-card] {
+  @variant dark {
+    background: linear-gradient(180deg, rgb(255 255 255 / 4.2%) 0%, rgb(255 255 255 / 1.2%) 100%);
+    border-color: rgb(255 255 255 / 8%);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 8%),
+      0 18px 40px -20px rgb(0 0 0 / 82%);
+  }
+}
+
+html[data-theme-id="lightning"]
+  [data-ui-shell="lightning"]
+  [data-sidebar="menu-button"][data-active="true"] {
+  @variant dark {
+    background: linear-gradient(180deg, rgb(255 255 255 / 8%) 0%, rgb(255 255 255 / 3%) 100%);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 10%),
+      inset 0 0 0 1px rgb(255 255 255 / 6%);
+  }
+}
+
+/* ============================================================================
+ * 4. Reference #1 (godly-648): Prismatic Dot-Matrix Spectral Energy Wave
+ * ============================================================================ */
+
+.lightning-energy-wave-bloom {
+  position: absolute;
+  inset: auto 4% -12px 4%;
+  height: 44px;
+  border-radius: 9999px;
+  filter: blur(16px);
+  opacity: 0.42;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(34 211 238 / 78%) 18%,
+    rgb(99 102 241 / 82%) 42%,
+    rgb(236 72 153 / 82%) 68%,
+    rgb(249 115 22 / 78%) 86%,
+    transparent 100%
+  );
+  transform-origin: center bottom;
+  animation: lightning-bloom-pulse 2.2s ease-in-out infinite alternate;
+  animation-play-state: var(--visible-animation-state, paused);
+  @variant light {
+    opacity: 0.24;
+  }
+}
+
+.lightning-energy-wave-bloom[data-mode="running"] {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(34 211 238 / 74%) 20%,
+    rgb(59 130 246 / 80%) 44%,
+    rgb(139 92 246 / 80%) 66%,
+    rgb(236 72 153 / 72%) 84%,
+    transparent 100%
+  );
 }
 
 .lightning-energy-wave {
-  pointer-events: none;
   position: absolute;
-  z-index: 2;
-  bottom: 1px;
-  left: 24%;
-  right: 24%;
-  height: 7px;
-  background: radial-gradient(circle at 1px 1px, #f59e0b 1px, transparent 1.25px) 0 0 / 4px 3px;
-  clip-path: polygon(
-    0 100%,
-    12% 70%,
-    22% 82%,
-    31% 30%,
-    38% 65%,
-    50% 0,
-    60% 75%,
-    70% 35%,
-    81% 80%,
-    90% 65%,
-    100% 100%
-  );
+  inset: auto 0 0 0;
+  width: 100%;
+  height: 36px;
+  display: block;
   transform-origin: center bottom;
-  animation: lightning-wave 1.2s steps(6) infinite alternate;
+  transform: scaleY(var(--lightning-wave-amp, 1));
+  filter: drop-shadow(0 0 6px rgb(168 85 247 / 45%));
+  @variant light {
+    opacity: 0.88;
+    filter: drop-shadow(0 0 4px rgb(99 102 241 / 24%));
+  }
+}
+
+.lightning-wave-band {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+}
+
+.lightning-wave-band-back {
+  animation: lightning-wave-back 1.7s ease-in-out infinite alternate;
+}
+
+.lightning-wave-band-mid {
+  animation: lightning-wave-mid 1.35s ease-in-out infinite alternate;
+}
+
+.lightning-wave-band-front {
+  animation: lightning-wave-front 1.05s ease-in-out infinite alternate;
+}
+
+.lightning-wave-band-back,
+.lightning-wave-band-mid,
+.lightning-wave-band-front {
+  animation-play-state: var(--visible-animation-state, paused);
+}
+
+.lightning-wave-spark {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: lightning-spark-rise 1.6s ease-in-out infinite;
+  animation-play-state: var(--visible-animation-state, paused);
+}
+
+@keyframes lightning-bloom-pulse {
+  0% {
+    opacity: 0.34;
+    transform: scaleX(0.94) scaleY(0.88);
+  }
+  100% {
+    opacity: 0.56;
+    transform: scaleX(1.03) scaleY(1.1);
+  }
+}
+
+@keyframes lightning-wave-back {
+  0% {
+    transform: translateX(-16px) scaleY(0.76);
+  }
+  50% {
+    transform: translateX(10px) scaleY(1.12);
+  }
+  100% {
+    transform: translateX(-6px) scaleY(0.86);
+  }
+}
+
+@keyframes lightning-wave-mid {
+  0% {
+    transform: translateX(14px) scaleY(0.84);
+  }
+  50% {
+    transform: translateX(-12px) scaleY(1.14);
+  }
+  100% {
+    transform: translateX(8px) scaleY(0.78);
+  }
+}
+
+@keyframes lightning-wave-front {
+  0% {
+    transform: translateX(-8px) scaleY(0.9);
+  }
+  50% {
+    transform: translateX(9px) scaleY(1.08);
+  }
+  100% {
+    transform: translateX(-4px) scaleY(0.82);
+  }
+}
+
+@keyframes lightning-spark-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.7);
+  }
+  35% {
+    opacity: 0.95;
+    transform: translateY(-2px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-11px) scale(0.55);
+  }
+}
+
+/* ============================================================================
+ * 5. Reference #2 (godly-655): Hardware Obsidian Thinking Pill + 7x7 Amber LED
+ * ============================================================================ */
+
+.lightning-thinking-pill {
+  background:
+    radial-gradient(circle at 22px 50%, rgb(255 150 24 / 20%) 0%, transparent 56%),
+    linear-gradient(180deg, #14141a 0%, #07070a 100%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 16%),
+    inset 0 -1px 0 rgb(0 0 0 / 75%),
+    0 0 0 1px rgb(255 255 255 / 13%),
+    0 10px 26px -8px rgb(0 0 0 / 84%),
+    0 0 20px -10px rgb(255 155 26 / 32%);
+  @variant light {
+    background:
+      radial-gradient(circle at 22px 50%, rgb(255 150 24 / 22%) 0%, transparent 56%),
+      linear-gradient(180deg, #1b1d24 0%, #0f1015 100%);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 16%),
+      0 0 0 1px rgb(15 23 42 / 16%),
+      0 8px 20px -8px rgb(15 23 42 / 28%);
+  }
+}
+
+.lightning-led-housing::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgb(255 155 26 / 28%) 0%, transparent 72%);
+  pointer-events: none;
+}
+
+.lightning-led-svg {
+  filter: drop-shadow(0 0 3.2px rgb(255 155 26 / 75%));
+}
+
+.lightning-led-frame {
+  opacity: 0;
+  animation: lightning-led-step 1.8s steps(1, end) infinite;
   animation-play-state: var(--visible-animation-state, paused);
 }
 
 .lightning-led-pattern {
-  animation: lightning-led 1.8s steps(6) infinite;
+  will-change: opacity;
+}
+
+.lightning-led-frame-primary {
+  opacity: 1;
+}
+
+.lightning-led-socket {
+  fill: #ff8a00;
+  opacity: 0.16;
+}
+
+.lightning-led-dim {
+  fill: #d96200;
+  opacity: 0.72;
+}
+
+.lightning-led-mid {
+  fill: #ff9b1a;
+}
+
+.lightning-led-hot {
+  fill: #fff3c4;
+}
+
+.lightning-mask-white {
+  fill: #ffffff;
+  stop-color: #ffffff;
+}
+
+.lightning-star-blue {
+  fill: #93c5fd;
+  @variant light {
+    fill: #3b82f6;
+  }
+}
+
+.lightning-star-violet {
+  fill: #c4b5fd;
+  @variant light {
+    fill: #6366f1;
+  }
+}
+
+.lightning-spec-cyan {
+  stop-color: #22d3ee;
+}
+
+.lightning-spec-blue {
+  stop-color: #3b82f6;
+}
+
+.lightning-spec-indigo {
+  stop-color: #6366f1;
+}
+
+.lightning-spec-violet {
+  stop-color: #8b5cf6;
+}
+
+.lightning-spec-pink {
+  stop-color: #ec4899;
+}
+
+.lightning-spec-orange {
+  stop-color: #f97316;
+}
+
+.lightning-spec-amber {
+  stop-color: #f59e0b;
+}
+
+.lightning-spec-gold {
+  stop-color: #facc15;
+}
+
+.lightning-spark-cyan {
+  fill: #22d3ee;
+}
+
+.lightning-spark-blue {
+  fill: #60a5fa;
+}
+
+.lightning-spark-violet {
+  fill: #c084fc;
+}
+
+.lightning-spark-pink {
+  fill: #f472b6;
+}
+
+.lightning-spark-amber {
+  fill: #fbbf24;
+}
+
+.lightning-thinking-text {
+  background-image: linear-gradient(
+    105deg,
+    #9ca3af 0%,
+    #a1a1aa 32%,
+    #fff4d6 48%,
+    #ffb44c 55%,
+    #a1a1aa 70%,
+    #9ca3af 100%
+  );
+  background-size: 240% 100%;
+  background-position: 100% 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: lightning-thinking-shimmer 2.4s ease-in-out infinite;
   animation-play-state: var(--visible-animation-state, paused);
 }
 
-@keyframes lightning-wave {
-  to {
-    transform: scaleY(0.3) scaleX(0.88);
+@keyframes lightning-led-step {
+  0%,
+  16.65% {
+    opacity: 1;
+  }
+  16.66%,
+  100% {
+    opacity: 0;
   }
 }
 
-@keyframes lightning-led {
-  to {
-    transform: translateY(-18px);
+@keyframes lightning-thinking-shimmer {
+  0% {
+    background-position: 115% 0;
+  }
+  100% {
+    background-position: -15% 0;
   }
 }
+
+/* ============================================================================
+ * 6. Accessibility — Reduced Motion
+ * ============================================================================ */
 
 @media (prefers-reduced-motion: reduce) {
-  .lightning-led-pattern,
-  .lightning-energy-wave {
+  .lightning-energy-wave-bloom,
+  .lightning-wave-band,
+  .lightning-wave-spark,
+  .lightning-led-frame,
+  .lightning-thinking-text {
     animation: none;
+  }
+
+  .lightning-led-frame {
+    opacity: 0;
+  }
+
+  .lightning-led-frame-primary {
+    opacity: 1;
+  }
+
+  .lightning-thinking-text {
+    background-position: 50% 0;
   }
 }
