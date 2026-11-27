@@ -2,7 +2,6 @@ import { installPermissionUpdateNotice } from "./features/connection/permissionU
 import { installComposerAttachmentUploads } from "./state/composer-attachment-uploads";
 import { installThreadOutboxDelivery } from "./state/threadOutboxDelivery";
 import * as Linking from "expo-linking";
-import Constants from "expo-constants";
 import * as SplashScreen from "expo-splash-screen";
 import { requireNativeModule } from "expo";
 import { useLocale } from "gt-react-native";
@@ -58,6 +57,7 @@ import { environmentThreadShells, threadEnvironment } from "./state/threads";
 import { environmentShell, shellCachesReadAtom } from "./state/shell";
 import { OverlayPortalHost } from "./components/ui/OverlayPortal";
 import { shouldHandleAppLink, restoreDraftLinkState } from "./lib/appLinking";
+import { hostedThreadLinkOrigin } from "./lib/hostedThreadLinkOrigin";
 import { hasCloudPublicConfig } from "./features/cloud/publicConfig";
 import { takeScheduledTaskNewLink } from "./features/settings/scheduled-task-editor-state";
 import {
@@ -138,12 +138,11 @@ function getAppStateFromPath(path: string, options: Parameters<typeof getStateFr
   );
 }
 
-const hostedThreadLinkOrigin: unknown = Constants.expoConfig?.extra?.hostedThreadLinkOrigin;
 const appLinking = {
   prefixes: [
     Linking.createURL("/"),
     ...Object.values(MOBILE_APP_IDENTITIES).map(({ scheme }) => `${scheme}://`),
-    ...(typeof hostedThreadLinkOrigin === "string" ? [hostedThreadLinkOrigin] : []),
+    ...(hostedThreadLinkOrigin ? [hostedThreadLinkOrigin] : []),
   ],
   config: { initialRouteName: "Home" },
   filter: (url: string) => shouldHandleAppLink(url, hasCloudPublicConfig()),

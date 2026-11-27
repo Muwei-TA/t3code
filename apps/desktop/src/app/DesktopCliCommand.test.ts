@@ -276,6 +276,20 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
       expect(Option.isNone(yield* fs.readLink(legacy).pipe(Effect.option))).toBe(true);
       expect(yield* fs.readFileString(foreign)).toBe("#!/bin/sh\n");
 
+      const otherLauncher = path.join(home, ".other-lightning-home", "bin", "lightning");
+      yield* fs.makeDirectory(path.dirname(otherLauncher), { recursive: true });
+      yield* fs.writeFileString(otherLauncher, `#!/bin/sh\n# ${DesktopCliShim.MARKER}\n`, {
+        mode: 0o755,
+      });
+      yield* fs.remove(foreign);
+      yield* fs.symlink(otherLauncher, foreign);
+      yield* fs.symlink(launcher, legacy);
+      yield* command.installOnFirstLaunch;
+      expect((yield* command.state).installedPath).toBe(legacy);
+      expect((yield* command.uninstall).installedPath).toBeNull();
+      expect(yield* fs.readLink(foreign)).toBe(otherLauncher);
+      expect(Option.isNone(yield* fs.readLink(legacy).pipe(Effect.option))).toBe(true);
+
       yield* fs.writeFileString(launcher, "#!/bin/sh\n");
       yield* fs.symlink(launcher, legacy);
       yield* command.installOnFirstLaunch;

@@ -128,29 +128,6 @@ export const resolveServerInstallation = Effect.gen(function* () {
   return { kind: "npm-global", prefix } satisfies ServerInstallation;
 }).pipe(Effect.orElseSucceed(() => null));
 
-/** The original package spec is unavailable at startup; infer its channel from the version. */
-function suggestedPackageSpec(version: string): string {
-  const channel = /^[^-+]+-(nightly|preview)\./.exec(version)?.[1];
-  return channel === undefined ? "t3" : `t3@${channel}`;
-}
-
-function formatCliCommand(input: {
-  readonly subcommand: string;
-  readonly entryPath: string;
-  readonly version: string;
-}): string {
-  const runner = detectCliRunner(input.entryPath);
-  if (runner === null) {
-    return `${LIGHTNING_BRAND.cliCommand} ${input.subcommand}`;
-  }
-  return `${runner} ${suggestedPackageSpec(input.version)} ${input.subcommand}`;
-}
-
-export const resolveCliCommand = (subcommand: string) =>
-  Effect.map(resolveEntryPath, (entryPath) =>
-    formatCliCommand({ subcommand, entryPath, version: packageJson.version }),
-  );
-
 const shellWord = (value: string) =>
   /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
 
@@ -163,6 +140,17 @@ const powershellWord = (value: string) =>
 
 export const hostShellWord = (platform: NodeJS.Platform, value: string) =>
   platform === "win32" ? powershellWord(value) : shellWord(value);
+
+export const resolveCliCommand = Effect.fn("invocation.resolveCliCommand")(function* (
+  subcommand: string,
+) {
+  const entryPath = yield* resolveEntryPath;
+  if (detectCliRunner(entryPath) === null) return `${LIGHTNING_BRAND.cliCommand} ${subcommand}`;
+  const platform = yield* HostProcess.Platform;
+  const node = hostShellWord(platform, yield* HostProcess.ExecutablePath);
+  const invoke = platform === "win32" ? `& ${node}` : node;
+  return `${invoke} ${hostShellWord(platform, entryPath)} ${subcommand}`;
+});
 
 /** Script installs have no single launcher; desktop shims and standalone binaries do. */
 const resolveInstallLauncher = Effect.gen(function* () {
@@ -177,7 +165,7 @@ const resolveInstallLauncher = Effect.gen(function* () {
 });
 
 /**
- * Uses this install's `t3` on PATH, the originating runner, or its absolute launcher path.
+ * Uses this install's command on PATH or its absolute executable or cached entry point.
  * Arguments are quoted for POSIX shells or PowerShell on Windows.
  */
 export const resolveHostCliCommand = Effect.fn("invocation.resolveHostCliCommand")(function* (
@@ -190,7 +178,7 @@ export const resolveHostCliCommand = Effect.fn("invocation.resolveHostCliCommand
     [prefix.trimEnd(), ...args.map((arg) => hostShellWord(platform, arg))].join(" ");
   const command = yield* resolveCliCommand(subcommand);
   if (command !== `${LIGHTNING_BRAND.cliCommand} ${subcommand}`)
-    return { command: withArgs(command), launcher: false };
+    return { command: withArgs(command), launcher: true };
   const onPath = yield* resolveCommandPath(LIGHTNING_BRAND.cliCommand);
   if (onPath !== null) {
     const shim = (yield* HostProcess.Environment).LIGHTNING_CODE_CLI_PATH?.trim();
@@ -231,9 +219,8 @@ export const resolveHostCliHint = (
 
 /**
  * `sudo` resets PATH on most distributions, which drops a user-installed Node
- * (nvm, fnm, a tarball) and with it `npx` or a global `t3`, so the command
- * carries PATH through unless Node is on root's PATH too. An absolute launcher
- * needs neither.
+ * (nvm, fnm, a tarball) and its global commands. An absolute launcher uses
+ * its own Node path.
  */
 export const resolveRootCliCommand = Effect.fn("invocation.resolveRootCliCommand")(function* (
   subcommand: string,

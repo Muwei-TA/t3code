@@ -35,7 +35,6 @@ import {
   prunePinnedRuntimes,
   recordPinnedRuntimeLauncher,
   resolveLauncherPath,
-  windowsShimTarget,
   writePosixLauncher,
 } from "../cloud/pinnedRuntime.ts";
 import {
@@ -190,10 +189,16 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
   if (platform === "win32") {
     const shimPath = yield* findWindowsShim(input.launchedAs, versionsDir);
     if (shimPath === undefined) return Option.none<string>();
-    const current = yield* fs.readFileString(shimPath).pipe(Effect.option);
-    const quoted = Option.isSome(current) ? windowsShimTarget(current.value) : undefined;
-    if (quoted === undefined || !ownsTarget(quoted)) return Option.none<string>();
     yield* remember(shimPath);
+    const current = yield* fs.readFileString(shimPath).pipe(Effect.option);
+    const target = Option.isSome(current) ? generatedWindowsShimTarget(current.value) : undefined;
+    if (
+      target === undefined ||
+      !ownsTarget(target) ||
+      path.resolve(target).toLowerCase() !== path.resolve(input.launchedAs).toLowerCase()
+    ) {
+      return Option.none<string>();
+    }
     yield* fs.writeFileString(shimPath, `@echo off\r\n"${input.targetEntryPath}" %*`).pipe(
       Effect.mapError(
         () =>
@@ -241,10 +246,7 @@ export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(functio
     ...(environment["PATH"] ?? environment["Path"] ?? "").split(";"),
   ]
     .filter((entry) => entry.trim().length > 0)
-    .map((directory) => ({
-      shimPath: path.join(directory, windowsShimName),
-      parseTarget: windowsShimTarget,
-    }));
+    .map((directory) => path.join(directory, windowsShimName));
   if (versionsDir !== undefined) {
     const recorded = yield* fs
       .readFileString(path.join(path.dirname(versionsDir), "launchers"))
@@ -254,14 +256,14 @@ export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(functio
         path.isAbsolute(shimPath) &&
         path.basename(shimPath).toLowerCase() === windowsShimName.toLowerCase()
       ) {
-        candidates.push({ shimPath, parseTarget: generatedWindowsShimTarget });
+        candidates.push(shimPath);
       }
     }
   }
-  for (const { shimPath, parseTarget } of candidates) {
+  for (const shimPath of candidates) {
     const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
     if (Option.isNone(contents)) continue;
-    const target = parseTarget(contents.value);
+    const target = generatedWindowsShimTarget(contents.value);
     if (
       target !== undefined &&
       path.resolve(target).toLowerCase() === path.resolve(executablePath).toLowerCase()

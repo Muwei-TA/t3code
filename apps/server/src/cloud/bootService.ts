@@ -668,8 +668,8 @@ type BootServiceProblem = typeof BootServiceProblem.Type;
 export function formatBootServiceProblem(
   problem: BootServiceProblem,
   commands: { readonly install: string; readonly restart: string } = {
-    install: "t3 service install",
-    restart: "t3 service restart",
+    install: `${LIGHTNING_BRAND.cliCommand} service install`,
+    restart: `${LIGHTNING_BRAND.cliCommand} service restart`,
   },
 ): string {
   switch (problem) {

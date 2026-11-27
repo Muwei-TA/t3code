@@ -429,7 +429,7 @@ export const make = Effect.gen(function* () {
       return yield* state;
     }
     for (const directory of commandLocations) {
-      yield* removeOwnedLink(path.join(directory, LIGHTNING_BRAND.cliCommand));
+      yield* removeOwnedLink(path.join(directory, LIGHTNING_BRAND.cliCommand), launcher);
     }
     yield* removeLegacyLinks(legacyCommandLinks);
     return yield* state;

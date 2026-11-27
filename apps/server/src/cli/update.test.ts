@@ -407,6 +407,29 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
     return { root, oldExe, newExe, launcher, launchersFile: path.join(root, "runtime/launchers") };
   });
 
+  it.effect("updates generated Windows shims and preserves customized wrappers", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped();
+      const launchedAs = path.join(baseDir, "runtime/versions/1.0.0/t3.exe");
+      const targetEntryPath = path.join(baseDir, "runtime/versions/2.0.0/t3.exe");
+      const shim = path.join(baseDir, "lightning.cmd");
+      const custom = `@echo off\r\nset PROJECT_HOME=work\r\n"${launchedAs}" %*`;
+      const repoint = repointLauncher({ launchedAs, baseDir, targetEntryPath }).pipe(
+        Effect.provideService(HostProcess.Environment, { PATH: baseDir }),
+      );
+      yield* fs.writeFileString(shim, custom);
+      assert.isTrue(Option.isNone(yield* repoint));
+      assert.equal(yield* fs.readFileString(shim), custom);
+
+      yield* fs.makeDirectory(path.join(baseDir, "runtime"));
+      yield* fs.writeFileString(shim, `@echo off\r\n"${launchedAs}" %*`);
+      assert.equal(Option.getOrUndefined(yield* repoint), shim);
+      assert.equal(yield* fs.readFileString(shim), `@echo off\r\n"${targetEntryPath}" %*`);
+    }).pipe(Effect.provideService(HostProcess.Platform, "win32")),
+  );
+
   it.effect("records a relative launcher path as absolute", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
