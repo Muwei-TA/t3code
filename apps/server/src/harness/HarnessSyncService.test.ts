@@ -895,7 +895,16 @@ describe("HarnessSyncService", () => {
         // Adding a 513th empty file must skip the entire package before reading blobs.
         yield* fs.writeFileString(path.join(skillDir, "b", "overflow.md"), "");
         yield* push;
+        const spawnSpy = vi.spyOn(NodeChildProcess, "spawn");
+        const execFileSpy = vi.spyOn(NodeChildProcess, "execFile");
+        spawnSpy.mockClear();
+        execFileSpy.mockClear();
         const oversized = yield* sync.pull();
+        const blobCalls = [...spawnSpy.mock.calls, ...execFileSpy.mock.calls].filter((call) => {
+          const args = Array.isArray(call[1]) ? call[1] : [];
+          return args.includes("cat-file") && args.includes("blob");
+        });
+        expect(blobCalls).toHaveLength(0);
         expect(oversized.skippedFiles).toContain("skills/bulk/b/overflow.md");
         expect(yield* fs.exists(path.join(localSkill, "b", "overflow.md"))).toBe(false);
       }).pipe(Effect.provide(makeTestLayer(root, paths)));

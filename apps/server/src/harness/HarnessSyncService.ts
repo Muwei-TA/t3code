@@ -1950,9 +1950,12 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                     if (skill) {
                       const projectedNames = new Set<string>(previous?.keys() ?? []);
                       for (const path of paths) {
+                        const base = pendingBases.get(path)!;
                         if (isLockedPath(path)) continue;
                         const entry = afterEntries.get(path);
                         if (entry !== undefined && !isRegularSyncEntry(entry)) continue;
+                        const remote = entry ? treeIdentity(entry) : null;
+                        if (remote === base) continue;
                         const relName = path.slice(group.length + 1);
                         if (entry === undefined) projectedNames.delete(relName);
                         else projectedNames.add(relName);
