@@ -593,38 +593,44 @@ const make = Effect.gen(function* () {
           detail: `Import item "${displayKey}" changed since preview. Rescan and review before importing.`,
         });
       }
-      const existing = yield* existingContentFor(currentSnapshot, candidate.kind, candidate.id);
-      if (existing !== null && input.overwriteExisting !== true) {
-        skippedKeys.push(displayKey);
-        continue;
-      }
-      if (req.expectedExistingDigest !== undefined) {
-        const actualExisting =
-          existing !== null ? existingDigestFor(candidate.kind, candidate.id, existing) : null;
-        if (actualExisting !== req.expectedExistingDigest) {
-          return yield* new HarnessError({
-            code: "invalid_config",
-            detail: `Existing target for "${displayKey}" changed since preview. Rescan and review before importing.`,
-          });
-        }
-      }
       const payload = candidate.applyPayload;
       const wsOpt = input.workspaceRoot !== undefined ? { workspaceRoot: input.workspaceRoot } : {};
-      if (payload.kind === "agents_md") {
-        yield* library.saveUserAgentsMd({ body: payload.body, ...wsOpt });
-      } else if (payload.kind === "skill") {
-        if (existing !== null && !req.expectedExistingDigest)
-          return yield* new HarnessError({
+      const review = (existing: string | null) => {
+        if (existing !== null && input.overwriteExisting !== true) return false;
+        if (req.expectedExistingDigest !== undefined) {
+          const digest =
+            existing === null ? null : existingDigestFor(candidate.kind, candidate.id, existing);
+          if (digest !== req.expectedExistingDigest)
+            return new HarnessError({
+              code: "invalid_config",
+              detail: `Existing target for "${displayKey}" changed since preview. Rescan and review before importing.`,
+            });
+        }
+        if (payload.kind === "skill" && existing !== null && !req.expectedExistingDigest)
+          return new HarnessError({
             code: "invalid_config",
             detail: "Review the existing skill package before replacing it.",
           });
-        yield* library.installSkillPackage({
-          ...(existing !== null ? { expectedTargetDigest: existing } : {}),
-          id: payload.id,
-          scope: "user",
-          files: payload.files,
-          ...wsOpt,
-        });
+        return true;
+      };
+      if (payload.kind === "skill") {
+        const imported = yield* library.importSkillPackage(
+          { id: payload.id, scope: "user", files: payload.files, ...wsOpt },
+          review,
+        );
+        (imported ? importedKeys : skippedKeys).push(displayKey);
+        continue;
+      }
+      const decision = review(
+        yield* existingContentFor(currentSnapshot, candidate.kind, candidate.id),
+      );
+      if (typeof decision !== "boolean") return yield* decision;
+      if (!decision) {
+        skippedKeys.push(displayKey);
+        continue;
+      }
+      if (payload.kind === "agents_md") {
+        yield* library.saveUserAgentsMd({ body: payload.body, ...wsOpt });
       } else if (payload.kind === "rule") {
         yield* library.upsertUserRule({
           id: payload.id,

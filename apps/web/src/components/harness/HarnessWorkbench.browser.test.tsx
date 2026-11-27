@@ -17,7 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import { SidebarProvider } from "../ui/sidebar";
 import { redirectLegacyHarness } from "./harnessNavigation";
 import { HarnessWorkbench } from "./HarnessWorkbench";
@@ -26,7 +26,19 @@ const environmentId = EnvironmentId.make("test-server");
 const fixture = Schema.decodeSync(HarnessLibrarySnapshot)({
   harnessDir: "/harness",
   workspaceRoot: "/repo",
-  rules: [],
+  rules: Array.from({ length: 8 }, (_, index) => ({
+    id: `rule-${index}`,
+    scope: "user",
+    apply: "always",
+    globs: [],
+    enabled: true,
+    effectiveEnabled: true,
+    overriddenByProject: false,
+    sourcePath: `/harness/rules/rule-${index}.md`,
+    contentDigest: "1",
+    bytes: 4,
+    body: "Rule",
+  })),
   modes: [],
   commands: [],
   invalidEntries: [],
@@ -160,6 +172,9 @@ const memory = Schema.decodeSync(HarnessMemorySnapshot)({
     },
   ],
 });
+const libraryQuery = vi.fn((): Atom.Atom<AsyncResult.AsyncResult<HarnessLibrarySnapshot>> =>
+  success(fixture),
+);
 const success = <A,>(data: A) => Atom.make(AsyncResult.success(data));
 vi.mock(import("../settings/SettingsScopeContext"), async (original) => ({
   ...(await original()),
@@ -188,7 +203,7 @@ vi.mock(import("../../state/harness"), async (original) => {
         permissionAtom: () => Atom.make(true),
       },
       listMcpQuery: () => success(mcp),
-      libraryQuery: () => success(fixture),
+      libraryQuery: () => libraryQuery(),
       pluginsQuery: () => success(plugins),
       memoryQuery: () => success(memory),
       hooksQuery: () => success(proposals),
@@ -229,6 +244,9 @@ vi.mock(import("../../state/harness"), async (original) => {
 });
 
 it("reads the selected package member in project scope and approves a pending hook", async () => {
+  const library = Promise.withResolvers<HarnessLibrarySnapshot>();
+  const pending = Atom.make(Effect.promise(() => library.promise));
+  libraryQuery.mockReturnValue(pending);
   const root = createRootRoute();
   const chat = createRoute({ getParentRoute: () => root, id: "_chat" });
   const harness = createRoute({
@@ -254,7 +272,22 @@ it("reads the selected package member in project scope and approves a pending ho
     </SidebarProvider>,
     { router: false },
   ); // Workbench tabs navigate inside the named Harness route.
+  await expect.element(screen.getByRole("link", { name: "Context & Roles" })).toBeVisible();
+  expect(router.state.location.hash).toBe("harness-memory");
+  expect(screen.container.querySelector("#harness-memory")).toBeNull();
+  await act(() => library.resolve(fixture));
   await expect.element(screen.getByRole("button", { name: "Delete Layout note" })).toBeVisible();
+  await vi.waitFor(() => {
+    const heading = screen
+      .getByRole("heading", { name: "Portable Memory" })
+      .element()
+      .getBoundingClientRect();
+    const panel = screen.container
+      .querySelector("[data-settings-page-scroll]")!
+      .getBoundingClientRect();
+    expect(heading.top).toBeGreaterThanOrEqual(Math.max(0, panel.top));
+    expect(heading.bottom).toBeLessThanOrEqual(Math.min(window.innerHeight, panel.bottom));
+  });
   await expect.poll(() => router.state.location.hash).toBe("");
   expect(router.state.location.search).toMatchObject({ tab: "context", machine: "test-server" });
   await screen.getByRole("link", { name: "Tools (MCP)" }).click();

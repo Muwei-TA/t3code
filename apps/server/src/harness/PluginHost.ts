@@ -629,7 +629,7 @@ async function parsePluginDirectory(
   const contentDigest = sha256Hex(
     JSON.stringify({
       version: 2,
-      files: files.map((file) => [file.relPath, file.executeBits !== 0, sha256Hex(file.content)]),
+      files: files.map((file) => [file.relPath, file.executeBits, sha256Hex(file.content)]),
     }),
   );
 

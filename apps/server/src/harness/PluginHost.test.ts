@@ -243,7 +243,7 @@ describe("PluginHost", () => {
             Promise.all(
               expectedFiles.map(async (name) => [
                 name,
-                name === "check.sh",
+                (await NodeFSP.stat(path.join(srcNative, name))).mode & 0o111,
                 NodeCrypto.createHash("sha256")
                   .update(await NodeFSP.readFile(path.join(srcNative, name)))
                   .digest("hex"),
@@ -343,6 +343,23 @@ describe("PluginHost", () => {
           // Re-enable -> active again
           yield* host.setEnabled({ id: HarnessPluginId.make("acme-audit"), enabled: true });
           expect((yield* hooks.list()).hooks).toHaveLength(1);
+
+          const script = path.join(installed.pluginsDir, "acme-audit", "check.sh");
+          yield* fs.chmod(script, 0o700);
+          const changed = (yield* host.list()).plugins.find((p) => p.id === "acme-audit")!;
+          expect(changed).toMatchObject({ active: false, trustStatus: "digest_changed" });
+          expect(
+            (yield* host
+              .trust({
+                id: changed.id,
+                expectedDigest: TrimmedNonEmptyString.make(plugin!.contentDigest),
+              })
+              .pipe(Effect.flip)).code,
+          ).toBe("untrusted");
+          yield* host.trust({
+            id: changed.id,
+            expectedDigest: TrimmedNonEmptyString.make(changed.contentDigest),
+          });
 
           // 5. Tampering with a file on disk flips trustStatus to digest_changed and auto-deactivates
           yield* Effect.promise(() =>

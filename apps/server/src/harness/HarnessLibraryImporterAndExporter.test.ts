@@ -480,6 +480,15 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
           expect(cursorRuleContent).toContain("globs:");
           expect(cursorRuleContent).toContain("Never use any.");
 
+          yield* lib.upsertUserRule({
+            id: HarnessRuleId.make("t3-personal-agents"),
+            apply: "always",
+            body: "Colliding rule",
+          });
+          const conflict = yield* exporter.preview({ target: "cursor" }).pipe(Effect.flip);
+          expect(conflict.code).toBe("invalid_config");
+          expect(conflict.detail).toContain("t3-personal-agents.mdc");
+
           const linkedHome = path.join(homeDir, ".claude");
           yield* fs.rename(linkedHome, path.join(homeDir, "linked-claude"));
           yield* fs.symlink(path.join(homeDir, "linked-claude"), linkedHome);

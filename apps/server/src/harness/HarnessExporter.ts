@@ -292,6 +292,7 @@ const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const homeDir = yield* HostProcess.HomeDirectory;
+  const platform = yield* HostProcess.Platform;
   const store = yield* HarnessStore.HarnessStore;
   const library = yield* HarnessLibraryStore.HarnessLibraryStore;
   const writeLock = yield* Semaphore.make(1);
@@ -634,6 +635,21 @@ const make = Effect.gen(function* () {
           );
         }
       }
+    }
+
+    const destinations = new Set<string>();
+    for (const file of files) {
+      const absolute = path.resolve(file.targetPath);
+      const destination =
+        platform === "darwin" || platform === "win32"
+          ? absolute.normalize("NFC").toLowerCase()
+          : absolute;
+      if (destinations.has(destination))
+        return yield* new HarnessError({
+          code: "invalid_config",
+          detail: `Multiple export entries target the same path: ${file.targetPath}.`,
+        });
+      destinations.add(destination);
     }
 
     const planDigest = computeExportPlanDigest(hmacKey, input.target, files);

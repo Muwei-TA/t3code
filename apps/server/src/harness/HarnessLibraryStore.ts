@@ -53,13 +53,16 @@ import {
   listPackageFiles,
   loadPackage,
   readPackageFile,
+  packageDigest,
   replacePackage,
+  withSkillWrites,
 } from "./skillPackage.ts";
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 const MAX_READ_BYTES = 262_144;
 const MAX_COMPANION_FILES = 64;
 
+const isHarnessError = Schema.is(HarnessError);
 const decodeSkillId = Schema.decodeUnknownOption(HarnessSkillId);
 const decodeRuleId = Schema.decodeUnknownOption(HarnessRuleId);
 const decodeCommandId = Schema.decodeUnknownOption(HarnessCommandId);
@@ -356,6 +359,10 @@ export class HarnessLibraryStore extends Context.Service<
     readonly installSkillPackage: (
       input: HarnessInstallSkillPackageInput,
     ) => Effect.Effect<HarnessLibrarySnapshot, HarnessError>;
+    readonly importSkillPackage: (
+      input: HarnessInstallSkillPackageInput,
+      review: (existingDigest: string | null) => boolean | HarnessError,
+    ) => Effect.Effect<boolean, HarnessError>;
     readonly upsertUserSkill: (
       input: HarnessSkillUpsertInput,
     ) => Effect.Effect<HarnessLibrarySnapshot, HarnessError>;
@@ -1187,32 +1194,56 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const writeSkillPackage = Effect.fn("HarnessLibraryStore.writeSkillPackage")(function* (
+    input: HarnessInstallSkillPackageInput,
+    review?: (existingDigest: string | null) => boolean | HarnessError,
+  ) {
+    const { root, dir } = yield* packageLocation(input);
+    return yield* withLibraryWrite(
+      withSkillWrites(
+        root,
+        [dir],
+        Effect.tryPromise({
+          try: async () => {
+            if ((input.sourceDir !== undefined) === (input.files !== undefined))
+              throw new Error("Specify exactly one of sourceDir and files.");
+            if (input.sourceDir && !path.isAbsolute(input.sourceDir))
+              throw new Error("sourceDir must be absolute.");
+            const files = input.files ?? (await loadPackage(input.sourceDir!));
+            let expected = input.expectedTargetDigest;
+            if (review) {
+              const exists = await NodeFSP.lstat(dir).catch((error) => {
+                if (error instanceof Error && "code" in error && error.code === "ENOENT")
+                  return null;
+                throw error;
+              });
+              expected = exists ? packageDigest(await loadPackage(dir, root)) : undefined;
+              const decision = review(expected ?? null);
+              if (typeof decision !== "boolean") throw decision;
+              if (!decision) return false;
+            }
+            await replacePackage(root, dir, files, expected, (raw) => {
+              const parsed = parseMarkdownFrontmatter(raw);
+              if (
+                parsed.malformed ||
+                !parsed.frontmatter ||
+                typeof parsed.frontmatter.name !== "string" ||
+                !parsed.frontmatter.name.trim()
+              )
+                throw new Error("SKILL.md requires valid YAML frontmatter and a non-empty name.");
+            });
+            return true;
+          },
+          catch: (error) => (isHarnessError(error) ? error : packageError(error)),
+        }),
+      ),
+    );
+  });
+
   const installSkillPackage: HarnessLibraryStore["Service"]["installSkillPackage"] = Effect.fn(
     "HarnessLibraryStore.installSkillPackage",
   )(function* (input) {
-    const { root, dir } = yield* packageLocation(input);
-    yield* withLibraryWrite(
-      Effect.tryPromise({
-        try: async () => {
-          if ((input.sourceDir !== undefined) === (input.files !== undefined))
-            throw new Error("Specify exactly one of sourceDir and files.");
-          if (input.sourceDir && !path.isAbsolute(input.sourceDir))
-            throw new Error("sourceDir must be absolute.");
-          const files = input.files ?? (await loadPackage(input.sourceDir!));
-          await replacePackage(root, dir, files, input.expectedTargetDigest, (raw) => {
-            const parsed = parseMarkdownFrontmatter(raw);
-            if (
-              parsed.malformed ||
-              !parsed.frontmatter ||
-              typeof parsed.frontmatter.name !== "string" ||
-              !parsed.frontmatter.name.trim()
-            )
-              throw new Error("SKILL.md requires valid YAML frontmatter and a non-empty name.");
-          });
-        },
-        catch: packageError,
-      }),
-    );
+    yield* writeSkillPackage(input);
     return yield* getSnapshot(input.workspaceRoot);
   });
 
@@ -1230,14 +1261,21 @@ const make = Effect.gen(function* () {
       enabled: input.enabled,
       body: input.body,
     });
-    yield* withLibraryWrite(writeFileAtomic(skillPath, content));
-    if (input.enabled !== undefined) {
-      yield* store.setLibraryItemDisabled({
-        kind: "skill",
-        id: input.id,
-        disabled: !input.enabled,
-      });
-    }
+    yield* withLibraryWrite(
+      withSkillWrites(
+        harnessDir,
+        [path.dirname(skillPath)],
+        Effect.gen(function* () {
+          yield* writeFileAtomic(skillPath, content);
+          if (input.enabled !== undefined)
+            yield* store.setLibraryItemDisabled({
+              kind: "skill",
+              id: input.id,
+              disabled: !input.enabled,
+            });
+        }),
+      ),
+    );
     return yield* getSnapshot(input.workspaceRoot);
   });
 
@@ -1247,9 +1285,18 @@ const make = Effect.gen(function* () {
     yield* assertPolicyAllows();
     const skillDir = path.join(harnessDir, "skills", id);
     yield* withLibraryWrite(
-      removeLibraryEntry(skillDir, `Portable skill "${id}"`, { recursive: true }),
+      withSkillWrites(
+        harnessDir,
+        [skillDir],
+        removeLibraryEntry(skillDir, `Portable skill "${id}"`, { recursive: true }).pipe(
+          Effect.andThen(
+            store
+              .setLibraryItemDisabled({ kind: "skill", id, disabled: false })
+              .pipe(Effect.ignore),
+          ),
+        ),
+      ),
     );
-    yield* store.setLibraryItemDisabled({ kind: "skill", id, disabled: false }).pipe(Effect.ignore);
     return yield* getSnapshot(workspaceRoot);
   });
 
@@ -1805,6 +1852,7 @@ const make = Effect.gen(function* () {
     saveUserAgentsMd,
     readSkillFile,
     installSkillPackage,
+    importSkillPackage: writeSkillPackage,
     upsertUserSkill,
     removeUserSkill,
     setSkillEnabled,

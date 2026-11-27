@@ -73,6 +73,23 @@ function HarnessDelivery({
   );
 }
 
+function HarnessContextMemory({
+  environmentId,
+  workspaceRoot,
+}: {
+  environmentId: EnvironmentId;
+  workspaceRoot: string | undefined;
+}) {
+  const library = useAtomValue(
+    harnessEnvironment.libraryQuery({
+      environmentId,
+      input: workspaceRoot ? { workspaceRoot } : {},
+    }),
+  );
+  // The settings anchor is consumed on mount, after the panels above it have their final height.
+  return library._tag === "Initial" ? null : <HarnessMemoryTab environmentId={environmentId} />;
+}
+
 function HarnessContent({ tab }: { tab: HarnessDomain | "sync" }) {
   const gt = useGT();
   const { scope, environment } = useSettingsScope();
@@ -152,7 +169,7 @@ function HarnessContent({ tab }: { tab: HarnessDomain | "sync" }) {
               {library("rules")}
               {library("modes")}
               {library("commands")}
-              <HarnessMemoryTab environmentId={environmentId} />
+              <HarnessContextMemory {...props} />
             </>
           )}
         </>

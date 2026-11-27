@@ -28,6 +28,7 @@ import {
   PositiveInt,
 } from "@t3tools/contracts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { stableStringify } from "@t3tools/shared/relaySigning";
 import { diffLines } from "diff";
 import * as Context from "effect/Context";
@@ -44,7 +45,12 @@ import {
   PORTABLE_MCP_FILE,
   readPortableMcpCatalog,
 } from "./HarnessPortableMcpCatalog.ts";
-import { loadPackage, MAX_PACKAGE_BYTES, packageDigest, readPackageFile } from "./skillPackage.ts";
+import {
+  acquireSkillWrites,
+  MAX_PACKAGE_BYTES,
+  readPackageSnapshot,
+  withSkillWrites,
+} from "./skillPackage.ts";
 import { resolveSecretRecord } from "./HarnessSecrets.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 import * as McpGateway from "./McpGateway.ts";
@@ -565,63 +571,72 @@ async function readLocalBlobSha(root: string, target: string): Promise<string | 
   }
 }
 
+function skillGroup(path: string) {
+  return /^(skills\/[^/]+)(?:\/|$)/u.exec(path)?.[1];
+}
+
 interface PullChange {
   readonly path: string;
   readonly content: Buffer | null;
   readonly mode: number;
-  readonly local: string | null;
 }
 
-async function publishPullChanges(
-  harnessDir: string,
-  group: string | undefined,
+async function publishSkillChanges(
+  root: string,
+  group: string,
+  previous: Awaited<ReturnType<typeof readPackageSnapshot>> | null,
   changes: readonly PullChange[],
+  permissionMask: number,
 ) {
-  const writeChanges = async (root: string) => {
-    for (const change of changes) {
-      const path = NodePath.join(root, group ? NodePath.relative(group, change.path) : change.path);
-      if (change.content === null) await safeRemoveFile(root, path);
-      else await safeWriteFileAtomic(root, path, change.content, change.mode);
-    }
-  };
-  if (!group) return writeChanges(harnessDir);
-  const target = NodePath.join(harnessDir, group);
-  const previous = await loadPackage(target, harnessDir).catch((error: unknown) => {
-    if (isMissing(error)) return null;
-    throw error;
-  });
-  const identities = new Map(
-    previous?.map((file) => [
-      file.relativePath,
-      fileIdentity(gitBlobHash(Buffer.from(file.content, "base64")), file.executable),
-    ]),
-  );
+  const target = NodePath.join(root, group);
+  const final = new Map<string, { bytes: Buffer; mode: number }>(previous);
   for (const change of changes) {
-    if (
-      (identities.get(NodePath.relative(group, change.path).split(NodePath.sep).join("/")) ??
-        null) !== change.local
-    )
-      throw new Error("Local skill changed during pull.");
+    const name = change.path.slice(group.length + 1);
+    if (change.content === null) final.delete(name);
+    else final.set(name, { bytes: change.content, mode: change.mode });
   }
+  if (final.size > 512) throw new Error("Too many skill files.");
+  const findings: HarnessSyncSecretFinding[] = [];
+  let total = 0;
+  for (const [name, { bytes }] of final) {
+    const path = group + "/" + name;
+    total += bytes.length;
+    scanBufferForSecrets(".", Buffer.from(path), findings);
+    scanBufferForSecrets(path, bytes, findings);
+    if (!isBundlePath(path) || total > MAX_PACKAGE_BYTES || findings.length)
+      throw new Error("Final skill package contains an unsafe file.");
+  }
+
+  const verifySnapshot = async (
+    directory: string,
+    expected: ReadonlyMap<string, { bytes: Buffer; mode: number }>,
+  ) => {
+    const files = await readPackageSnapshot(directory, root);
+    if (
+      files.size !== expected.size ||
+      [...expected].some(([name, file]) => {
+        const current = files.get(name);
+        if (!current || !current.bytes.equals(file.bytes)) return true;
+        return (current.mode & permissionMask) !== (file.mode & permissionMask);
+      })
+    )
+      throw new Error("Skill package changed during pull.");
+  };
+
   await replaceDirectory(
-    harnessDir,
+    root,
     target,
     previous === null,
     async (staged) => {
-      for (const file of previous ?? []) {
-        const local = await readPackageFile(target, file.relativePath, harnessDir);
-        const copy = NodePath.join(staged, file.relativePath);
-        await safeWriteFileAtomic(staged, copy, local.bytes, local.mode);
+      for (const [name, file] of final) {
+        const destination = NodePath.join(staged, name);
+        await NodeFSP.mkdir(NodePath.dirname(destination), { recursive: true });
+        await NodeFSP.writeFile(destination, file.bytes, { flag: "wx", mode: 0o600 });
+        await NodeFSP.chmod(destination, file.mode);
       }
-      await writeChanges(staged);
-      await loadPackage(staged);
+      await verifySnapshot(staged, final);
     },
-    previous === null
-      ? undefined
-      : async (backup) => {
-          if (packageDigest(await loadPackage(backup, harnessDir)) !== packageDigest(previous))
-            throw new Error("Local skill changed during pull.");
-        },
+    previous === null ? undefined : (backup) => verifySnapshot(backup, previous),
   );
 }
 
@@ -776,6 +791,8 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
       const secretStore = yield* ServerSecretStore.ServerSecretStore;
       const secretResolver = yield* SecretResolver.SecretResolver;
       const gateway = yield* Effect.serviceOption(McpGateway.McpGateway);
+      // Windows chmod only changes writability.
+      const permissionMask = (yield* HostProcess.Platform) === "win32" ? 0o200 : 0o777;
       const mutex = Semaphore.makeUnsafe(1);
       const previewKey = NodeCrypto.randomBytes(32);
 
@@ -1446,7 +1463,19 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
           return inspected.result;
         }),
         applyReceive: Effect.fn("HarnessSyncService.applyReceive")(function* (input) {
-          return yield* mutex.withPermits(1)(
+          if (!(yield* readPolicy())) return yield* syncDenied();
+          const root = harnessDir();
+          const lockPaths = input.selectedPaths ?? [
+            ...input.bundle.files.map((file) => file.path),
+            ...(input.deleteRemovedFiles ? (yield* readSnapshot()).files.keys() : []),
+          ];
+          const groups = new Set(lockPaths.filter(isBundlePath).map(skillGroup));
+          const directories = [...groups].flatMap((group) =>
+            group ? [NodePath.join(root, group)] : [],
+          );
+          return yield* withSkillWrites(
+            root,
+            directories,
             Effect.gen(function* () {
               const { result, source, target, mcp } = yield* inspectReceive(input.bundle);
               if (!result.canApply || result.previewDigest !== input.expectedPreviewDigest)
@@ -1465,7 +1494,13 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
               const selectedPaths = selected.filter(
                 (path) => available.get(path) !== "deleted" || input.deleteRemovedFiles === true,
               );
-              const root = harnessDir();
+              if (
+                selectedPaths.some((path) => {
+                  const group = skillGroup(path);
+                  return group !== undefined && !groups.has(group);
+                })
+              )
+                return yield* stalePreview();
               const appliedPaths: Array<string> = [];
               const write = (
                 path: string,
@@ -1476,70 +1511,63 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                   ? safeRemoveFile(root, file)
                   : safeWriteFileAtomic(root, file, item.text, item.executable ? 0o755 : 0o600);
               };
-              return yield* Effect.uninterruptible(
-                Effect.gen(function* () {
-                  const writeFiles = Effect.tryPromise({
-                    try: async () => {
-                      for (const path of selectedPaths) {
-                        const current = await readLocalBlobSha(root, NodePath.join(root, path));
-                        const prior = target.files.get(path);
-                        if (
-                          current !== (prior ? fileIdentity(prior.blobSha, prior.executable) : null)
-                        )
-                          throw stalePreview();
-                        await write(path, source.get(path));
-                        appliedPaths.push(path);
-                      }
-                    },
-                    catch: (error) =>
-                      isHarnessError(error)
-                        ? error
-                        : new HarnessError({
-                            code: "io_error",
-                            detail: "Could not apply the selected portable harness files.",
-                          }),
-                  });
-                  const importedDisabledMcpIds = yield* writeFiles.pipe(
-                    Effect.andThen(
-                      input.includeMcpServers === true
-                        ? applyPortableCatalog(mcp.entries)
-                        : Effect.succeed([]),
-                    ),
-                    Effect.onError(() =>
-                      Effect.promise(async () => {
-                        for (const path of appliedPaths.toReversed()) {
-                          const replacement = source.get(path);
-                          const current = await readLocalBlobSha(
-                            root,
-                            NodePath.join(root, path),
-                          ).catch(() => undefined);
-                          if (
-                            current ===
-                            (replacement === undefined
-                              ? null
-                              : fileIdentity(
-                                  gitBlobHash(Buffer.from(replacement.text)),
-                                  replacement.executable,
-                                ))
-                          ) {
-                            await write(path, target.files.get(path)).catch(() => undefined);
-                          }
-                        }
+
+              const writeFiles = Effect.tryPromise({
+                try: async () => {
+                  for (const path of selectedPaths) {
+                    const current = await readLocalBlobSha(root, NodePath.join(root, path));
+                    const prior = target.files.get(path);
+                    if (current !== (prior ? fileIdentity(prior.blobSha, prior.executable) : null))
+                      throw stalePreview();
+                    await write(path, source.get(path));
+                    appliedPaths.push(path);
+                  }
+                },
+                catch: (error) =>
+                  isHarnessError(error)
+                    ? error
+                    : new HarnessError({
+                        code: "io_error",
+                        detail: "Could not apply the selected portable harness files.",
                       }),
-                    ),
-                  );
-                  return {
-                    appliedPaths,
-                    importedDisabledMcpIds,
-                    missingSecretRefs:
-                      input.includeMcpServers === true ? result.missingSecretRefs : [],
-                    summary: `Applied ${appliedPaths.length} portable file change(s) and ${input.includeMcpServers === true ? mcp.entries.length : 0} MCP server change(s).`,
-                  };
-                }),
+              });
+              const importedDisabledMcpIds = yield* writeFiles.pipe(
+                Effect.andThen(
+                  input.includeMcpServers === true
+                    ? applyPortableCatalog(mcp.entries)
+                    : Effect.succeed([]),
+                ),
+                Effect.onError(() =>
+                  Effect.promise(async () => {
+                    for (const path of appliedPaths.toReversed()) {
+                      const replacement = source.get(path);
+                      const current = await readLocalBlobSha(root, NodePath.join(root, path)).catch(
+                        () => undefined,
+                      );
+                      if (
+                        current ===
+                        (replacement === undefined
+                          ? null
+                          : fileIdentity(
+                              gitBlobHash(Buffer.from(replacement.text)),
+                              replacement.executable,
+                            ))
+                      ) {
+                        await write(path, target.files.get(path)).catch(() => undefined);
+                      }
+                    }
+                  }),
+                ),
               );
+              return {
+                appliedPaths,
+                importedDisabledMcpIds,
+                missingSecretRefs: input.includeMcpServers === true ? result.missingSecretRefs : [],
+                summary: `Applied ${appliedPaths.length} portable file change(s) and ${input.includeMcpServers === true ? mcp.entries.length : 0} MCP server change(s).`,
+              };
             }),
           );
-        }),
+        }, mutex.withPermits(1)),
         configureRemote: Effect.fn("HarnessSyncService.configureRemote")(function* (input) {
           const allowed = yield* readPolicy();
           if (!allowed) {
@@ -1887,7 +1915,6 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                   const conflicts: Array<HarnessSyncPullConflict> = [];
                   await NodeFSP.mkdir(hDir, { recursive: true });
 
-                  const skillGroup = (path: string) => /^(skills\/[^/]+)(?:\/|$)/u.exec(path)?.[1];
                   const rejected = new Set(
                     [...skippedFiles].map(skillGroup).filter((group) => group !== undefined),
                   );
@@ -1898,8 +1925,26 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                     paths.push(path);
                     groups.set(group, paths);
                   }
-                  for (const [group, paths] of groups) {
+                  const skipGroup = (group: string, paths: string[]) => {
+                    rejected.add(group);
+                    for (const path of paths) skippedFiles.add(path);
+                  };
+                  const applyGroup = async (group: string, paths: string[]) => {
                     const skill = skillGroup(group) !== undefined;
+                    let previous: Awaited<ReturnType<typeof readPackageSnapshot>> | null = null;
+                    if (skill) {
+                      const dir = NodePath.join(hDir, group);
+                      try {
+                        const exists = await NodeFSP.lstat(dir).catch((error) => {
+                          if (isMissing(error)) return null;
+                          throw error;
+                        });
+                        if (exists) previous = await readPackageSnapshot(dir, hDir);
+                      } catch {
+                        skipGroup(group, paths);
+                        return;
+                      }
+                    }
                     const changes: PullChange[] = [];
                     let packageBytes = 0;
                     for (const path of paths) {
@@ -1921,7 +1966,20 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                       const target = NodePath.join(hDir, path);
                       let local: string | null;
                       try {
-                        local = await readLocalBlobSha(hDir, target);
+                        if (skill) {
+                          const file = previous?.get(path.slice(group.length + 1));
+                          if (
+                            file &&
+                            (file.bytes.length > MAX_SYNC_FILE_BYTES ||
+                              syncText(file.bytes) === null)
+                          ) {
+                            skippedFiles.add(path);
+                            continue;
+                          }
+                          local = file
+                            ? fileIdentity(gitBlobHash(file.bytes), file.executable)
+                            : null;
+                        } else local = await readLocalBlobSha(hDir, target);
                       } catch {
                         skippedFiles.add(path);
                         continue;
@@ -1965,7 +2023,6 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                       }
                       changes.push({
                         path,
-                        local,
                         content,
                         mode: skill && entry?.mode === "100755" ? 0o755 : 0o600,
                       });
@@ -1977,22 +2034,45 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                         (input?.force !== true &&
                           conflicts.some((conflict) => skillGroup(conflict.path) === group)))
                     ) {
-                      rejected.add(group);
-                      for (const path of paths) skippedFiles.add(path);
-                      continue;
+                      skipGroup(group, paths);
+                      return;
                     }
-                    if (!changes.length) continue;
+                    if (!changes.length) return;
                     try {
-                      await publishPullChanges(hDir, skill ? group : undefined, changes);
+                      if (skill)
+                        await publishSkillChanges(hDir, group, previous, changes, permissionMask);
+                      else
+                        for (const change of changes) {
+                          const target = NodePath.join(hDir, change.path);
+                          if (change.content === null) await safeRemoveFile(hDir, target);
+                          else await safeWriteFileAtomic(hDir, target, change.content, change.mode);
+                        }
                     } catch (error) {
                       if (!skill) throw error;
-                      rejected.add(group);
-                      for (const path of paths) skippedFiles.add(path);
-                      continue;
+                      skipGroup(group, paths);
+                      return;
                     }
                     for (const change of changes) {
                       updatedFiles.push(change.path);
                       pendingBases.delete(change.path);
+                    }
+                  };
+                  for (const [group, paths] of groups) {
+                    if (!skillGroup(group)) {
+                      await applyGroup(group, paths);
+                      continue;
+                    }
+                    const release = await acquireSkillWrites(hDir, [
+                      NodePath.join(hDir, group),
+                    ]).catch(() => null);
+                    if (!release) {
+                      skipGroup(group, paths);
+                      continue;
+                    }
+                    try {
+                      await applyGroup(group, paths);
+                    } finally {
+                      release();
                     }
                   }
                   const entry = afterEntries.get(PORTABLE_MCP_FILE);

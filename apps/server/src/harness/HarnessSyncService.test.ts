@@ -8,6 +8,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   HarnessMcpServerId,
   HarnessRuleId,
+  HarnessSkillId,
   TrimmedNonEmptyString,
   type ManagedPolicyDocument,
 } from "@t3tools/contracts";
@@ -23,6 +24,8 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
+import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
+import { packageDigest } from "./skillPackage.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 import * as HarnessSyncService from "./HarnessSyncService.ts";
 
@@ -371,6 +374,65 @@ describe("HarnessSyncService", () => {
           ).toHaveLength(1);
         }).pipe(Effect.provide(srcLayer));
       }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("serializes a package install and a cross-environment apply for the same skill", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+      const source = path.join(root, "source");
+      const sourcePaths = yield* ServerConfig.deriveServerPaths(source, undefined);
+      const target = path.join(root, "target");
+      const targetPaths = yield* ServerConfig.deriveServerPaths(target, undefined);
+      const dir = path.join(sourcePaths.harnessDir, "skills", "tool");
+      yield* fs.makeDirectory(dir, { recursive: true });
+      const manifest = { relativePath: "SKILL.md", content: "---\nname: Tool\n---\nBody" };
+      yield* fs.writeFileString(path.join(dir, "SKILL.md"), manifest.content);
+      yield* fs.writeFileString(path.join(dir, "notes"), "from sync");
+      const { bundle } = yield* Effect.gen(function* () {
+        return yield* (yield* HarnessSyncService.HarnessSyncService).exportBundle({});
+      }).pipe(Effect.provide(makeTestLayer(source, sourcePaths)));
+      const syncLayer = makeTestLayer(target, targetPaths);
+      yield* Effect.gen(function* () {
+        const lib = yield* HarnessLibraryStore.HarnessLibraryStore;
+        const sync = yield* HarnessSyncService.HarnessSyncService;
+        const location = { scope: "user" as const, id: HarnessSkillId.make("tool") };
+        yield* lib.installSkillPackage({ ...location, files: [manifest] });
+        const preview = yield* sync.previewReceive({ bundle: bundle! });
+        const [install, receive] = yield* Effect.all(
+          [
+            Effect.result(
+              lib.installSkillPackage({
+                ...location,
+                expectedTargetDigest: packageDigest([manifest]),
+                files: [manifest, { relativePath: "notes", content: "from install" }],
+              }),
+            ),
+            Effect.result(
+              sync.applyReceive({ bundle: bundle!, expectedPreviewDigest: preview.previewDigest! }),
+            ),
+          ],
+          { concurrency: "unbounded" },
+        );
+        expect(Result.isSuccess(install)).toBe(Result.isFailure(receive));
+        const rejected = Result.isFailure(install)
+          ? install.failure
+          : Result.isFailure(receive)
+            ? receive.failure
+            : undefined;
+        expect(rejected).toMatchObject({
+          code: "invalid_config",
+          detail: expect.stringContaining("changed since preview"),
+        });
+        expect((yield* lib.readSkillFile({ ...location, relativePath: "notes" })).content).toBe(
+          Result.isSuccess(install) ? "from install" : "from sync",
+        );
+        expect(yield* fs.readDirectory(path.join(targetPaths.harnessDir, "skills"))).toEqual([
+          "tool",
+        ]);
+      }).pipe(Effect.provide(HarnessLibraryStore.layer.pipe(Layer.provideMerge(syncLayer))));
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("keeps organization-locked rules out of bundles and Git pull", () =>
@@ -732,6 +794,61 @@ describe("HarnessSyncService", () => {
           expect((yield* sync.pull()).conflicts).toBeUndefined();
         }).pipe(Effect.provide(makeTestLayer(baseDir, paths)));
       }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("pulls both file/directory transitions without losing local package members", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const paths = yield* ServerConfig.deriveServerPaths(root, undefined);
+      const remote = path.join(root, "remote.git");
+      const clone = path.join(root, "clone");
+      yield* Effect.promise(() => execGit(root, ["init", "--bare", "-b", "main", remote]));
+      yield* Effect.promise(() => execGit(root, ["clone", remote, clone]));
+      const skill = "skills/example";
+      const member = path.join(clone, skill, "notes");
+      yield* fs.makeDirectory(path.dirname(member), { recursive: true });
+      const push = Effect.promise(async () => {
+        await execGit(clone, ["add", "-A"]);
+        await commit(clone, "Update package");
+        await execGit(clone, ["push", "origin", "main"]);
+      });
+      yield* fs.writeFileString(member, "single");
+      yield* push;
+      yield* Effect.gen(function* () {
+        const sync = yield* HarnessSyncService.HarnessSyncService;
+        yield* sync.configureRemote({ remoteUrl: TrimmedNonEmptyString.make(remote) });
+        yield* sync.pull();
+        const local = path.join(paths.harnessDir, skill);
+        yield* fs.writeFileString(path.join(local, "keep"), "local");
+        for (const directory of [true, false]) {
+          yield* fs.remove(member, { recursive: true });
+          if (directory) yield* fs.makeDirectory(member);
+          const name = directory ? "notes/nested" : "notes";
+          yield* fs.writeFileString(path.join(clone, skill, name), name);
+          yield* push;
+          const result = yield* sync.pull();
+          expect(result.skippedFiles).toBeUndefined();
+          expect(result.conflicts).toBeUndefined();
+          expect(result.updatedFiles.toSorted()).toEqual([
+            skill + "/notes",
+            skill + "/notes/nested",
+          ]);
+          expect(yield* fs.readFileString(path.join(local, name))).toBe(name);
+          expect(yield* fs.readFileString(path.join(local, "keep"))).toBe("local");
+        }
+        yield* fs.writeFile(path.join(local, "keep"), Uint8Array.of(0xff));
+        yield* fs.writeFileString(member, "next");
+        yield* push;
+        const blocked = yield* sync.pull();
+        expect(blocked.skippedFiles).toContain(skill + "/notes");
+        expect(yield* fs.readFileString(path.join(local, "notes"))).toBe("notes");
+        yield* fs.writeFileString(path.join(local, "keep"), "local");
+        expect((yield* sync.pull()).updatedFiles).toEqual([skill + "/notes"]);
+        expect(yield* fs.readFileString(path.join(local, "notes"))).toBe("next");
+      }).pipe(Effect.provide(makeTestLayer(root, paths)));
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("uses the pushed resolution as the base for the next pull", () =>

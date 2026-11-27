@@ -2,12 +2,60 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import { NonNegativeInt, type HarnessPackageFile, type HarnessSkillFile } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import {
+  HarnessError,
+  NonNegativeInt,
+  type HarnessPackageFile,
+  type HarnessSkillFile,
+} from "@t3tools/contracts";
 import { assertContainedNoSymlinks, readContainedFile, replaceDirectory } from "./safeFileOps.ts";
 
 const MAX_FILE_BYTES = 1024 * 1024;
 export const MAX_PACKAGE_BYTES = 8 * MAX_FILE_BYTES;
 const MAX_FILES = 512;
+
+const skillWrites = new Map<string, Promise<void>>();
+
+// Reserve all keys together, including directories temporarily absent during replacement.
+export async function acquireSkillWrites(root: string, directories: readonly string[]) {
+  const keys = new Set<string>();
+  for (const dir of directories) {
+    const { resolvedTarget: parent } = await assertContainedNoSymlinks(
+      root,
+      NodePath.dirname(dir),
+      { createRoot: true },
+    );
+    keys.add(NodePath.join(parent, NodePath.basename(dir)).normalize("NFC").toLowerCase());
+  }
+  const previous = [...keys].map((key) => skillWrites.get(key));
+  const next = Promise.withResolvers<void>();
+  for (const key of keys) skillWrites.set(key, next.promise);
+  await Promise.all(previous);
+  return () => {
+    for (const key of keys) if (skillWrites.get(key) === next.promise) skillWrites.delete(key);
+    next.resolve();
+  };
+}
+
+export function withSkillWrites<A, E, R>(
+  root: string,
+  directories: readonly string[],
+  use: Effect.Effect<A, E, R>,
+) {
+  return Effect.acquireUseRelease(
+    Effect.tryPromise({
+      try: () => acquireSkillWrites(root, directories),
+      catch: () =>
+        new HarnessError({
+          code: "invalid_config",
+          detail: "Could not resolve the skill directory.",
+        }),
+    }),
+    () => Effect.uninterruptible(use),
+    (release) => Effect.sync(release),
+  );
+}
 
 function validatePackagePath(relativePath: string) {
   if (
@@ -75,27 +123,32 @@ export async function listPackageFiles(root: string, limit = MAX_FILES, containm
   return { files, truncated: false };
 }
 
-export async function loadPackage(root: string, containmentRoot = root) {
+export async function readPackageSnapshot(root: string, containmentRoot = root) {
   const listing = await listPackageFiles(root, MAX_FILES, containmentRoot);
   if (
     listing.truncated ||
     listing.files.reduce((n, file) => n + file.sizeBytes, 0) > MAX_PACKAGE_BYTES
   )
     throw new Error("Package exceeds size or entry limits.");
-  const files: HarnessPackageFile[] = [];
+  const files = new Map<string, Awaited<ReturnType<typeof readPackageFile>>>();
   let total = 0;
   for (const { relativePath } of listing.files) {
     const file = await readPackageFile(root, relativePath, containmentRoot);
     total += file.bytes.length;
     if (total > MAX_PACKAGE_BYTES) throw new Error("Package exceeds size limit.");
-    files.push({
-      relativePath,
-      encoding: "base64",
-      content: file.bytes.toString("base64"),
-      executable: file.executable,
-    });
+    files.set(relativePath, file);
   }
   return files;
+}
+
+export async function loadPackage(root: string, containmentRoot = root) {
+  const files = await readPackageSnapshot(root, containmentRoot);
+  return [...files].map(([relativePath, file]) => ({
+    relativePath,
+    encoding: "base64" as const,
+    content: file.bytes.toString("base64"),
+    executable: file.executable,
+  }));
 }
 
 function decodePackageFile(file: HarnessPackageFile) {
