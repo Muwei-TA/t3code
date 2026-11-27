@@ -7,12 +7,14 @@ import {
   formatHostedThreadLink,
   formatThreadLink,
   guessThreadLinkRef,
+  hasThreadLinks,
   hostedThreadLink,
   parseThreadLinkHref,
   threadLinkCandidates,
   threadLinkRefs,
 } from "./threadLinks.ts";
 import { relabelThreadLinks } from "./threadLinksCopy.ts";
+import { threadLinkContextReferences } from "./composerContextReferences.ts";
 
 const ref = (environmentId: string, threadId = "chat-1") => ({
   environmentId: EnvironmentId.make(environmentId),
@@ -214,6 +216,23 @@ describe("thread links", () => {
 });
 
 describe("hosted thread links", () => {
+  it("round-trips pasted links from the configured hosted app without trusting other origins", () => {
+    const origin = "https://lightning.example";
+    const thread = ref("there", "a:b");
+    const href = hostedThreadLink(thread, origin);
+    const text = `[A chat](${href})`;
+
+    expect(hasThreadLinks(text, origin)).toBe(true);
+    expect(parseThreadLinkHref(href, origin)).toEqual(thread);
+    expect(parseThreadLinkHref(href, "https://another.example")).toBeNull();
+    expect(threadLinkRefs(text, local, origin)).toEqual([thread]);
+    expect(
+      threadLinkRefs(`\`${href}\` https://another.example/threads/there/a%3Ab`, local, origin),
+    ).toEqual([]);
+    expect(
+      threadLinkContextReferences(text, [], () => "A chat", undefined, origin).records,
+    ).toMatchObject([{ ...thread, title: "A chat" }]);
+  });
   it("escapes every id character a sentence or path could claim, and reads it back", () => {
     const thread = ref("env.1", "thread:delegated/mcp%3A1.");
     const link = hostedThreadLink(thread);

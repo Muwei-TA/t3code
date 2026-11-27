@@ -307,7 +307,8 @@ export function ServerUpdateAction({
   const gt = useGT();
   const messages = useMessages();
   const isDesktopAppUpdate = selfUpdate === "desktop-managed";
-  const serverVersion = useServerConfigs().get(environmentId)?.environment.serverVersion;
+  const server = useServerConfigs().get(environmentId)?.environment;
+  const serverVersion = server?.serverVersion;
   const sessionStateAtom = environmentSession.sessionStateAtom(environmentId);
   const canUpdate = useAtomValue(sessionStateAtom, canUpdateServer);
   const updatesDenial = managedUpdatesDenial(useManagedPolicy(environmentId), messages);
@@ -395,7 +396,9 @@ export function ServerUpdateAction({
   }
 
   const manualCommand =
-    selfUpdate === null ? manualServerUpdateCommand(targetVersion, installation) : null;
+    selfUpdate === null
+      ? manualServerUpdateCommand(targetVersion, installation, server?.platform.os)
+      : null;
   const actionLabel =
     manualCommand !== null
       ? gt("Copy update command")

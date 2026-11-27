@@ -1,3 +1,4 @@
+import { configuredHostedAppUrl } from "~/hostedPairing";
 import { ComposerContextId } from "@t3tools/contracts";
 import type {
   ComposerContextClipboardFragment,
@@ -37,6 +38,8 @@ export function readPastedComposerContext(
     pastedText,
     decodedFragment?.records ?? [],
     threadTitle,
+    undefined,
+    configuredHostedAppUrl(),
   );
   const source =
     decodedFragment?.source ??
@@ -90,7 +93,11 @@ export function importPastedComposerText(
       : occurrence.source;
   });
   // A thread the import refused, on a machine this agent cannot read, stays the link it was.
-  return threadLinkContextReferences(text, fragment?.records ?? [], threadTitle, (record) =>
-    nextId(record.contextId),
+  return threadLinkContextReferences(
+    text,
+    fragment?.records ?? [],
+    threadTitle,
+    (record) => nextId(record.contextId),
+    configuredHostedAppUrl(),
   ).text;
 }

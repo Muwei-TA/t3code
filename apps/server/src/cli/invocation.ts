@@ -20,7 +20,7 @@ const PINNED_RUNTIME_ENTRY = /^(.*)\/runtime\/versions\/[^/]+\/t3$/;
 
 export type CliRunner = "npx" | "pnpm dlx" | "bunx";
 
-/** Detection is best-effort; callers must fail closed to a plain `t3` command. */
+/** Detection is best-effort; callers fall back to the installed command. */
 export function detectCliRunner(entryPath: string): CliRunner | null {
   const path = entryPath.replaceAll("\\", "/");
   if (path.includes("/_npx/")) {
@@ -33,7 +33,7 @@ export function detectCliRunner(entryPath: string): CliRunner | null {
   ) {
     return "pnpm dlx";
   }
-  if (path.includes("/.bun/install/cache/") || path.includes("/bunx-")) {
+  if (path.includes("/.bun/install/cache/") || /\/bunx-[^/]+\/node_modules\//.test(path)) {
     return "bunx";
   }
   return null;
@@ -75,6 +75,20 @@ export const resolveServerInstallation = Effect.gen(function* () {
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const entry = yield* fs.realPath(yield* resolveEntryPath);
+  const runner = detectCliRunner(entry);
+  if (runner !== null && (yield* HostProcess.IsExecutable)) {
+    const executable = yield* HostProcess.ExecutablePath;
+    const runtime = PINNED_RUNTIME_ENTRY.exec(
+      executable.replaceAll("\\", "/").replace(/\.exe$/i, ""),
+    );
+    if (runtime) {
+      return {
+        kind: "t3-launcher",
+        launcher: executable,
+        baseDir: path.normalize(runtime[1] || "/"),
+      } satisfies ServerInstallation;
+    }
+  }
   const runtime = PINNED_RUNTIME_ENTRY.exec(entry);
   if (runtime) {
     const launchedAs = yield* resolveLauncherPath;
@@ -103,7 +117,6 @@ export const resolveServerInstallation = Effect.gen(function* () {
   }
   const match = /^(.*)\/lib\/node_modules\/t3\/(?:dist\/bin\.mjs|bin\/t3\.mjs)$/.exec(entry);
   if (!match) {
-    const runner = detectCliRunner(entry);
     return runner === null
       ? null
       : ({ kind: runner === "pnpm dlx" ? "pnpm-dlx" : runner } satisfies ServerInstallation);
@@ -149,6 +162,7 @@ export const resolveCliCommand = Effect.fn("invocation.resolveCliCommand")(funct
   const platform = yield* HostProcess.Platform;
   const node = hostShellWord(platform, yield* HostProcess.ExecutablePath);
   const invoke = platform === "win32" ? `& ${node}` : node;
+  if (yield* HostProcess.IsExecutable) return `${invoke} ${subcommand}`;
   return `${invoke} ${hostShellWord(platform, entryPath)} ${subcommand}`;
 });
 

@@ -1318,7 +1318,9 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   const liveMarkdown = useLiveThreadLinkLabels(
     props.markdown,
     props.environmentId,
-    useLinkedEnvironments(hasThreadLinks(props.markdown) ? props.environmentId : null),
+    useLinkedEnvironments(
+      hasThreadLinks(props.markdown, hostedThreadLinkOrigin) ? props.environmentId : null,
+    ),
   );
   const [quoteSelection, setQuoteSelection] = useState<{
     markdown: string;
@@ -2829,7 +2831,9 @@ function UserMessageContent(props: UserMessageContentProps) {
   const liveText = useLiveThreadLinkLabels(
     props.text,
     props.environmentId,
-    useLinkedEnvironments(hasThreadLinks(props.text) ? props.environmentId : null),
+    useLinkedEnvironments(
+      hasThreadLinks(props.text, hostedThreadLinkOrigin) ? props.environmentId : null,
+    ),
   );
   const threadIcons = useThreadChipIcons(props.environmentId, liveText, props.context?.records);
   const text = replaceComposerContextReferences(liveText, (ref) => {
@@ -3314,7 +3318,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     });
   };
   const resolveLinkedThread = (href: string) => {
-    const link = parseThreadLinkHref(href);
+    const link = parseThreadLinkHref(href, hostedThreadLinkOrigin);
     if (!link) return null;
     const resolved = resolveThreadLink(
       (atom) => appAtomRegistry.get(atom),
@@ -3459,7 +3463,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       );
       return;
     }
-    if (parseThreadLinkHref(href)) {
+    if (parseThreadLinkHref(href, hostedThreadLinkOrigin)) {
       const target = resolveLinkedThread(href);
       if (target) openThreadLink(target);
       return;

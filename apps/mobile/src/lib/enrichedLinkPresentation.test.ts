@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import type { ComposerContextId, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
   enrichedLinkVariantPattern,
@@ -12,7 +12,19 @@ import {
   threadChipTargets,
 } from "./enrichedLinkPresentation";
 
+vi.mock("./hostedThreadLinkOrigin", () => ({
+  hostedThreadLinkOrigin: "https://lightning.example",
+}));
+
 describe("Enriched link presentation", () => {
+  it("recognizes a thread copied from the configured Lightning host", () => {
+    expect(
+      enrichedThreadLinkPresentation("https://lightning.example/threads/demo/thread"),
+    ).toBeDefined();
+    expect(
+      enrichedThreadLinkPresentation("https://another.example/threads/demo/thread"),
+    ).toBeUndefined();
+  });
   it("recognizes file-shaped code without turning commands or URLs into links", () => {
     for (const path of [
       "src/app.tsx",

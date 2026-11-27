@@ -900,7 +900,7 @@ process.exit(0);
       }),
   );
 
-  it.effect("waits without exiting and restarts once the other owner releases the T3 home", () =>
+  it.effect("waits for the other owner to release the data directory", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -933,7 +933,8 @@ process.exit(0);
       yield* Effect.acquireRelease(
         Effect.sync(() =>
           vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-            if (String(chunk).includes("owns this T3 home")) refused.resolve();
+            if (String(chunk).includes("This service starts again once it stops."))
+              refused.resolve();
             return true;
           }),
         ),
@@ -1024,7 +1025,8 @@ process.exit(0);
         yield* Effect.acquireRelease(
           Effect.sync(() =>
             vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-              if (String(chunk).includes("owns this T3 home")) refused.resolve();
+              if (String(chunk).includes("This service starts again once it stops."))
+                refused.resolve();
               return true;
             }),
           ),
@@ -1099,7 +1101,8 @@ process.exit(0);
       yield* Effect.acquireRelease(
         Effect.sync(() =>
           vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-            if (String(chunk).includes("owns this T3 home")) refused.resolve();
+            if (String(chunk).includes("This service starts again once it stops."))
+              refused.resolve();
             return true;
           }),
         ),
@@ -1126,7 +1129,7 @@ process.exit(0);
     }),
   );
 
-  it.effect("treats the T3 home as owned while the lock or a pre-lock server holds it", () =>
+  it.effect("treats the data directory as owned while the lock or a pre-lock server holds it", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;

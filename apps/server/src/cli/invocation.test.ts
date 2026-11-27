@@ -215,7 +215,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
           `{"name":"t3","version":"${packageJson.version}","bin":{"lightning":"./bin/t3.mjs"}}`,
         );
         const launchedBy = entry.endsWith("t3.mjs");
-        const installation = yield* resolveServerInstallation.pipe(
+        const withLaunch = [
           Effect.provideService(HostProcess.Arguments, [launchedBy ? executable : "node", entry]),
           Effect.provideService(HostProcess.ExecutablePath, executable),
           Effect.provideService(HostProcess.IsExecutable, launchedBy),
@@ -223,8 +223,17 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
             HostProcess.Environment,
             launchedBy ? { T3CODE_NPM_LAUNCHER_PATH: entry } : {},
           ),
+        ] as const;
+        const installation = yield* resolveServerInstallation.pipe(...withLaunch);
+        expect(installation).toEqual(
+          launchedBy
+            ? { kind: "t3-launcher", launcher: executable, baseDir: path.join(root, ".t3") }
+            : { kind },
         );
-        expect(installation).toEqual({ kind });
+        if (launchedBy) {
+          const command = yield* resolveHostCliCommand("pair").pipe(...withLaunch);
+          expect(command).toEqual({ command: `${executable} pair`, launcher: true });
+        }
       }
     }),
   );

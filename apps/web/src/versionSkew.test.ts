@@ -39,8 +39,19 @@ describe("versionSkew", () => {
   it("uses the Lightning CLI when there is no installed launcher path", () => {
     expect(manualServerUpdateCommand("0.0.45")).toBe("lightning update 0.0.45");
     expect(manualServerUpdateCommand("0.0.45", { kind: "npm-global", prefix: "/opt/node" })).toBe(
-      "lightning update 0.0.45",
+      "'/opt/node/bin/lightning' update 0.0.45",
     );
+    expect(
+      manualServerUpdateCommand(
+        "0.0.45",
+        {
+          kind: "t3-launcher",
+          launcher: "C:\\Program Files\\Lightning\\t3.exe",
+          baseDir: "C:\\Data",
+        },
+        "windows",
+      ),
+    ).toBe("& 'C:\\Program Files\\Lightning\\t3.exe' update --base-dir 'C:\\Data' 0.0.45");
   });
   beforeEach(() => {
     branding.APP_VERSION = "0.0.34";

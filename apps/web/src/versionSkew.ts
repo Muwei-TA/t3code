@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  ExecutionEnvironmentPlatformOs,
   ServerConfig,
   ServerInstallation,
   ServerSelfUpdateCapability,
@@ -105,11 +106,20 @@ export function supportsDesktopAppUpdate(
 export function manualServerUpdateCommand(
   targetVersion: string,
   installation?: ServerInstallation,
+  os?: ExecutionEnvironmentPlatformOs,
 ): string {
-  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const windows = os === "windows";
+  const quote = (value: string) =>
+    windows
+      ? `'${value.replace(/['\u2018\u2019\u201A\u201B]/g, "$&$&")}'`
+      : `'${value.replaceAll("'", "'\\''")}'`;
   if (installation?.kind === "t3-launcher") {
     // An inherited T3CODE_HOME would otherwise send the update to a home the launcher is not in.
-    return `${quote(installation.launcher)} update --base-dir ${quote(installation.baseDir)} ${targetVersion}`;
+    return `${windows ? "& " : ""}${quote(installation.launcher)} update --base-dir ${quote(installation.baseDir)} ${targetVersion}`;
+  }
+  if (installation?.kind === "npm-global") {
+    const launcher = `${installation.prefix.replace(/\/+$/, "")}/bin/${LIGHTNING_BRAND.cliCommand}`;
+    return `${quote(launcher)} update ${targetVersion}`;
   }
   return `${LIGHTNING_BRAND.cliCommand} update ${targetVersion}`;
 }

@@ -556,7 +556,7 @@ if ! t3_runtime_ready; then
     elif command -v wget >/dev/null 2>&1; then wget -q --timeout=30 --tries=1 "$1" -O "$2"
     else printf 'Remote host needs curl or wget to download %s.\\n' "$T3_ARCHIVE" >&2; exit 1
     fi || {
-      printf 'Could not download ${REMOTE_CLI_BIN} %s from %s. If this host cannot reach it, install ${REMOTE_CLI_BIN} %s from ${CLI_RELEASES_PAGE_URL} (LIGHTNING_CODE_VERSION=%s; ${CLI_RELEASE_BASE_URL_ENV} selects a mirror).\\n' "$T3_ARCHIVE_VERSION" "$1" "$T3_ARCHIVE_VERSION" "$T3_ARCHIVE_VERSION" >&2
+      printf 'Could not download ${REMOTE_CLI_BIN} %s from %s. If this host cannot reach it, install ${REMOTE_CLI_BIN} %s from ${CLI_RELEASES_PAGE_URL} (T3CODE_VERSION=%s; ${CLI_RELEASE_BASE_URL_ENV} selects a mirror).\\n' "$T3_ARCHIVE_VERSION" "$1" "$T3_ARCHIVE_VERSION" "$T3_ARCHIVE_VERSION" >&2
       exit 1
     }
   }

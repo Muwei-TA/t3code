@@ -1,6 +1,7 @@
 import { requireOptionalNativeModule } from "expo";
 
 import { m, type MessageResolver } from "../i18n/messages";
+import { mobileAppScheme } from "../lib/hostedThreadLinkOrigin";
 import {
   agentActivityWidgetTimeline,
   type AgentActivityWidgetSource,
@@ -30,5 +31,10 @@ async function updateTimeline(
 ) {
   if (!requireOptionalNativeModule("ExpoWidgets")) return;
   const { default: widget } = await import("./AgentActivityWidget");
-  widget.updateTimeline(agentActivityWidgetTimeline(source, publishedAt, resolve));
+  widget.updateTimeline(
+    agentActivityWidgetTimeline(source, publishedAt, resolve).map((entry) => ({
+      ...entry,
+      props: { ...entry.props, urlScheme: mobileAppScheme },
+    })),
+  );
 }

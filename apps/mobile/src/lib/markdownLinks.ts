@@ -1,3 +1,4 @@
+import { hostedThreadLinkOrigin } from "./hostedThreadLinkOrigin";
 import { fileBasename } from "@t3tools/shared/path";
 import { fileLinkLabel } from "@t3tools/shared/fileLinks";
 import {
@@ -281,7 +282,8 @@ export function resolveMarkdownLinkPresentation(href: string): MarkdownLinkPrese
   return {
     kind: "link",
     href:
-      /^(?:mailto|tel):/i.test(normalized) || parseThreadLinkHref(normalized) !== null
+      /^(?:mailto|tel):/i.test(normalized) ||
+      parseThreadLinkHref(normalized, hostedThreadLinkOrigin) !== null
         ? normalized
         : null,
   };
