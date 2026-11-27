@@ -73,6 +73,8 @@ export const ServerInstallation = Schema.Union([
     kind: Schema.Literal("npm-global"),
     prefix: InstalledPath,
     packageName: Schema.optionalKey(TrimmedNonEmptyString),
+    // Older clients use this flag when choosing how to relaunch a legacy npm install.
+    legacyPackage: Schema.optionalKey(Schema.Literal(true)),
   }),
   // A launcher (script, or a legacy symlink) into a downloaded runtime, as the install script and `t3 update` leave.
   Schema.Struct({

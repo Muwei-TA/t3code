@@ -111,7 +111,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         );
         expect(descriptor.capabilities.serverInstallation).toEqual(
           mode === "web"
-            ? { kind: "npm-global", prefix: canonicalPrefix, packageName: "t3" }
+            ? {
+                kind: "npm-global",
+                prefix: canonicalPrefix,
+                packageName: "t3",
+                legacyPackage: true,
+              }
             : undefined,
         );
         expect(descriptor.capabilities.serverSelfUpdate).toBe(

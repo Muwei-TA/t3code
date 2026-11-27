@@ -249,7 +249,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped();
+      const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
       const prefix = path.join(root, "bunx-tools");
       const packageRoot = path.join(prefix, "lib/node_modules", CLI_NPM_PACKAGE_NAME);
       const entry = path.join(packageRoot, "dist/bin.mjs");
@@ -290,7 +290,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped();
+        const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
         const prefix = path.join(root, "bunx-tools");
         const packageRoot = path.join(prefix, "lib/node_modules", name);
         const launcher = path.join(packageRoot, "bin/t3.mjs");
@@ -319,6 +319,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
               kind: "npm-global",
               prefix,
               packageName: name,
+              ...(name === "t3" ? { legacyPackage: true } : {}),
             },
           ],
         ] as const) {
@@ -382,6 +383,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%${rela
           kind: "npm-global",
           prefix,
           packageName: name,
+          ...(name === "t3" ? { legacyPackage: true } : {}),
         });
         yield* fs.writeFileString(wrapper, shim.replace("bin\\t3.mjs", "bin\\another.mjs"));
         expect(yield* resolve).toBeNull();

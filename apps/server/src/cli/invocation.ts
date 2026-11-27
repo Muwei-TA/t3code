@@ -204,6 +204,7 @@ export const resolveServerInstallation = Effect.gen(function* () {
     kind: "npm-global",
     prefix,
     packageName: manifest.name,
+    ...(manifest.name === "t3" ? { legacyPackage: true } : {}),
   } satisfies ServerInstallation;
 }).pipe(Effect.orElseSucceed(() => null));
 
