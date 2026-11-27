@@ -239,8 +239,18 @@ it("pauses offscreen telemetry and respects reduced motion", async () => {
     );
     await vi.waitFor(() => expect(getComputedStyle(orbit).animationPlayState).toBe("running"));
     const sky = orbit.closest("[data-lightning-cosmic-backdrop]")!;
+    const swarm = sky.querySelector<HTMLCanvasElement>(".lightning-orbit-swarm")!;
+    expect(swarm.width).toBeGreaterThan(0);
     movePointer(sky.parentElement!);
     await vi.waitFor(() => expect(sky.hasAttribute("data-orbit-focus")).toBe(true));
+    sky.parentElement!.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        clientX: 96,
+        clientY: 96,
+        pointerType: "mouse",
+      }),
+    );
     document.documentElement.dispatchEvent(new PointerEvent("pointerleave"));
     expect(sky.hasAttribute("data-orbit-focus")).toBe(false);
     screen.container.hidden = true;

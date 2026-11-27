@@ -1,7 +1,7 @@
 import { use, useEffect, useRef } from "react";
 import { observeResize } from "~/lib/observeResize";
 import { observeVisibleAnimation } from "~/lib/visibleAnimation";
-import { paintOrbit, releaseWarp } from "./galaxy";
+import { attachStarSwarm, paintOrbit, releaseWarp } from "./galaxy";
 import { registerPointerSurface } from "./pointerInteractive";
 import { LightningShell } from "./shell";
 
@@ -10,6 +10,7 @@ export function LightningCosmicBackdrop({ variant = "hero" }: { variant?: "hero"
   const hostRef = useRef<HTMLDivElement>(null);
   const discRef = useRef<HTMLCanvasElement>(null);
   const coreRef = useRef<HTMLCanvasElement>(null);
+  const swarmRef = useRef<HTMLCanvasElement>(null);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- paints the orbital textures and connects compositor motion to pointer, theme and composer events
   useEffect(() => {
@@ -17,7 +18,8 @@ export function LightningCosmicBackdrop({ variant = "hero" }: { variant?: "hero"
     const host = hostRef.current;
     const disc = discRef.current;
     const core = coreRef.current;
-    if (!host || !disc || !core) return;
+    const swarm = swarmRef.current;
+    if (!host || !disc || !core || !swarm) return;
     const stopVisibility = observeVisibleAnimation(host);
     let tone = "";
     const paint = () => {
@@ -58,6 +60,7 @@ export function LightningCosmicBackdrop({ variant = "hero" }: { variant?: "hero"
 
     const moving = () => host.style.getPropertyValue("--visible-animation-state") === "running";
     const stopPointerSurface = registerPointerSurface(host);
+    const stopStarSwarm = attachStarSwarm(host, swarm);
     let coast: number | undefined;
     const onTyping = () => {
       if (!moving()) return;
@@ -78,6 +81,7 @@ export function LightningCosmicBackdrop({ variant = "hero" }: { variant?: "hero"
     window.addEventListener("lightning:composer-typing", onTyping);
     window.addEventListener("lightning:composer-send", onSend);
     return () => {
+      stopStarSwarm();
       stopPointerSurface?.();
       window.clearTimeout(coast);
       theme.disconnect();
@@ -103,6 +107,7 @@ export function LightningCosmicBackdrop({ variant = "hero" }: { variant?: "hero"
         <canvas ref={discRef} className="lightning-orbit-disc" />
         <canvas ref={coreRef} className="lightning-orbit-core" />
       </div>
+      <canvas ref={swarmRef} className="lightning-orbit-swarm" />
       <div className="lightning-orbit-focus" />
     </div>
   );
