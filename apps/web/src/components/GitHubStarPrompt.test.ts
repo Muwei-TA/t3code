@@ -15,6 +15,8 @@ const { add, update, openExternal, commands, starred, page } = vi.hoisted(() => 
     events: new EventTarget(),
   },
 }));
+const { cloudEnabled } = vi.hoisted(() => ({ cloudEnabled: vi.fn(() => true) }));
+vi.mock("../cloud/publicConfig", () => ({ hasCloudPublicConfig: cloudEnabled }));
 vi.mock("./ui/toast", () => ({ toastManager: { add, update, close: vi.fn() } }));
 vi.mock("../localApi", () => ({ readLocalApi: () => ({ shell: { openExternal } }) }));
 vi.mock("../rpc/atomRegistry", () => ({ appAtomRegistry: {} }));
@@ -82,6 +84,14 @@ const click = (props: unknown) => (props as { onClick: () => unknown }).onClick(
 
 describe("recordPromptSent", () => {
   vi.useFakeTimers();
+
+  it("skips counting and prompting on an unconfigured installation", async () => {
+    const store = setup({ sent: 5 });
+    cloudEnabled.mockReturnValueOnce(false);
+    await (await startSession()).send();
+    expect(store.get("t3code:github-star-prompt:sent")).toBe("5");
+    expect(add).not.toHaveBeenCalled();
+  });
 
   it("asks only after the focused page is idle", async () => {
     setup({ sent: 5 });
@@ -178,7 +188,7 @@ describe("recordPromptSent", () => {
     await (await startSession()).send();
     click(add.mock.lastCall?.[0].actionProps);
     await vi.advanceTimersByTimeAsync(0);
-    expect(openExternal).toHaveBeenCalledWith("https://github.com/pingdotgg/t3code");
+    expect(openExternal).toHaveBeenCalledWith("https://github.com/Muwei-TA/t3code");
     expect(update.mock.lastCall?.[1]).not.toMatchObject({
       actionProps: { children: "Open GitHub" },
     });

@@ -3053,7 +3053,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
     <SidebarFolderDrop>
-      <SidebarChromeHeader isElectron={isElectron} />
+      <SidebarChromeHeader
+        isElectron={isElectron}
+        environmentId={
+          routeThreadRef?.environmentId ?? routeDraftThread?.environmentId ?? primaryEnvironmentId
+        }
+      />
       <SidebarContent
         ref={sidebarContentRef}
         className="min-h-full"

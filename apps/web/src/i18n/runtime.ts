@@ -1,3 +1,4 @@
+import { normalizeTranslationCatalog } from "@t3tools/shared/brand";
 import { getTranslationsSnapshot } from "gt-react";
 
 import {
@@ -6,7 +7,12 @@ import {
   updateClientSettings,
 } from "../hooks/useSettings";
 import { initializeI18n } from "./initializeI18n";
-import { DEFAULT_LOCALE, resolveWebLocaleSelection } from "./locales";
+import {
+  DEFAULT_LOCALE,
+  GT_ENGLISH_LOCALE,
+  gtCatalogLocale,
+  resolveWebLocaleSelection,
+} from "./locales";
 import { setActiveLocale } from "./messages";
 
 type LocaleTranslations = Awaited<ReturnType<typeof getTranslationsSnapshot>>;
@@ -17,7 +23,7 @@ export interface I18nSnapshot {
   readonly translations: LocaleTranslations;
 }
 
-const loadedTranslations: LocaleTranslations = { [DEFAULT_LOCALE]: {} };
+const loadedTranslations: LocaleTranslations = {};
 const pendingLoads = new Map<string, Promise<void>>();
 const listeners = new Set<() => void>();
 let snapshot: I18nSnapshot = {
@@ -36,11 +42,11 @@ function loadLocale(locale: string): Promise<void> {
   if (!load) {
     // GT resolves a failed load to an empty catalog. Leave it uncached: English renders now
     // and the next request retries.
-    load = getTranslationsSnapshot(locale).then((loaded) => {
+    load = getTranslationsSnapshot(gtCatalogLocale(locale)).then((loaded) => {
       pendingLoads.delete(locale);
-      const translations = loaded[locale];
+      const translations = loaded[gtCatalogLocale(locale)];
       if (translations && Object.keys(translations).length > 0) {
-        loadedTranslations[locale] = translations;
+        loadedTranslations[locale] = normalizeTranslationCatalog(translations);
       }
     });
     pendingLoads.set(locale, load);
@@ -72,7 +78,7 @@ function applyLanguageSetting(): void {
 
 /** GT's own locale setters write the saved setting, which stays the only source of truth. */
 export function persistGTLocale(locale: string): void {
-  void updateClientSettings({ language: locale });
+  void updateClientSettings({ language: locale === GT_ENGLISH_LOCALE ? DEFAULT_LOCALE : locale });
 }
 
 export function startI18n(): void {
@@ -81,7 +87,7 @@ export function startI18n(): void {
   applyLanguageSetting();
 }
 
-/** Resolves once the requested locale's translations are ready; immediate for English. */
+/** Resolves once the requested locale's translations are ready. */
 export function whenLocaleReady(): Promise<void> {
   const locale = requestedLocale.catalogLocale;
   return loadLocale(locale).then(() => activateLocale(locale));

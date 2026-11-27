@@ -1,3 +1,5 @@
+import { LightningShell } from "../lightning/shell";
+import { LedMatrixIndicator } from "../lightning/LedMatrixIndicator";
 import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
 import { WorkLogButton, WorkLogList, WorkLogRow } from "./WorkLog";
 import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
@@ -368,6 +370,7 @@ export function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
   return (
     <div className="border-b border-border/60 pb-2 pt-1">
       <div className="flex h-6 min-w-0 items-baseline gap-2 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
+        {use(LightningShell) === "lightning" ? <LedMatrixIndicator /> : null}
         <span
           ref={shimmer ? observeVisibleAnimation : undefined}
           className="relative shrink-0 overflow-hidden whitespace-nowrap"
@@ -454,6 +457,7 @@ export function ThinkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind:
   if (isPreparingWorktree || isCompacting) return <WorkLogRow label="" />;
   // A failed group keeps this disclosure while an approval waits, but nothing is thinking then.
   const live = ctx.pendingApprovals.size === 0;
+  const led = use(LightningShell) === "lightning" && live && providerStarting === null;
   const activity = (
     <LiveActivityRow
       label={
@@ -464,7 +468,9 @@ export function ThinkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind:
       }
       iconName="brain"
       iconNode={
-        providerStarting === null ? undefined : (
+        led ? (
+          <LedMatrixIndicator />
+        ) : providerStarting === null ? undefined : (
           <ProviderStartingIcon
             environmentId={ctx.activeThreadEnvironmentId ?? null}
             instanceId={providerStarting.instanceId}
@@ -472,8 +478,9 @@ export function ThinkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind:
           />
         )
       }
-      active={live}
-      shimmer={live}
+      capsule={led}
+      active={live && !led}
+      shimmer={live && !led}
     />
   );
   const { groupId } = row;
@@ -498,6 +505,7 @@ function LiveActivityRow({
   failed = false,
   active = false,
   shimmer = false,
+  capsule = false,
 }: {
   label: ReactNode;
   iconName?: WorkEntryIconName;
@@ -507,13 +515,17 @@ function LiveActivityRow({
   failed?: boolean;
   active?: boolean;
   shimmer?: boolean;
+  capsule?: boolean;
 }) {
   const animated = active && !failed;
   const showShimmer = animated && shimmer;
   return (
     <div
       ref={animated ? observeVisibleAnimation : undefined}
-      className="relative min-h-6 w-fit max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed"
+      className={cn(
+        "relative min-h-6 w-fit max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed",
+        capsule && "rounded-full border border-foreground/10 bg-card px-2",
+      )}
     >
       <LiveActivityContent
         label={label}
@@ -634,6 +646,11 @@ export function LiveWorkEntryTimelineRow({
       ? liveThoughtLine((row.thought.detail ?? "").slice(0, THOUGHT_PREVIEW_SOURCE_MAX_LENGTH))
       : "";
   const thoughtIsStatus = thoughtLine !== "" && row.entry === row.thought;
+  const led =
+    use(LightningShell) === "lightning" &&
+    row.active &&
+    !failed &&
+    row.entry.itemType === "reasoning";
 
   return (
     <button
@@ -708,10 +725,12 @@ export function LiveWorkEntryTimelineRow({
             label
           )
         }
+        capsule={led}
+        iconNode={led ? <LedMatrixIndicator /> : undefined}
         iconName={workEntryIconName(row.entry)}
         toolIcon={row.entry.toolIcon ?? row.entry.toolSource?.icon}
         failed={failed}
-        active={row.active}
+        active={row.active && !led}
       />
     </button>
   );

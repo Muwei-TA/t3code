@@ -1,3 +1,4 @@
+import { APP_BASE_NAME } from "../../branding";
 import type { RelayClientDeviceRecord } from "@t3tools/contracts/relay";
 import { msg } from "gt-react";
 
@@ -24,7 +25,7 @@ export function mobileClientPlatformLabel(device: RelayClientDeviceRecord): stri
       : device.iosMajorVersion === null
         ? "iOS"
         : `iOS ${device.iosMajorVersion}`;
-  return `${platform}${device.appVersion ? ` · T3 Code ${device.appVersion}` : ""}`;
+  return `${platform}${device.appVersion ? ` · ${APP_BASE_NAME} ${device.appVersion}` : ""}`;
 }
 
 /** Components pass `useMessages()` so the detail follows a language switch. */

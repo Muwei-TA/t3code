@@ -1,3 +1,4 @@
+import { APP_BASE_NAME } from "../../branding";
 import { managedCapabilityDenial } from "@t3tools/client-runtime/contract-labels";
 import { DeviceHostUpdates } from "../device/DeviceHostUpdates";
 import { DeviceToolVersions } from "../device/DeviceToolVersions";
@@ -692,7 +693,7 @@ function BrowserRecordingFrameRateSetting({ disabled }: { readonly disabled: boo
 
 const LINK_TARGET_LABELS: Readonly<Record<BrowserLinkTarget, string>> = {
   system: msg("Your default browser"),
-  app: "T3 Code",
+  app: APP_BASE_NAME,
 };
 
 function BrowserLinkTargetSetting({ disabled }: { readonly disabled: boolean }) {

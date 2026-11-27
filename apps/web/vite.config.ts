@@ -2,6 +2,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeZlib from "node:zlib";
 
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import react from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import compression from "compression";
@@ -10,6 +11,7 @@ import { defineProject, type TestProjectInlineConfiguration } from "vite-plus/te
 import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
 import * as Hash from "effect/Hash";
+import englishCatalog from "./src/i18n/translations/en.json" with { type: "json" };
 import pkg from "./package.json" with { type: "json" };
 import pdfjsPkg from "pdfjs-dist/package.json" with { type: "json" };
 
@@ -31,7 +33,7 @@ Object.assign(process.env, repoEnv);
 // Signal single-origin dev explicitly; loadRepoEnv can restore deleted URL keys from .env.
 const isSingleOriginDev = process.env.T3CODE_SINGLE_ORIGIN_DEV === "1";
 
-const port = Number(process.env.PORT ?? 5733);
+const port = Number(process.env.PORT ?? LIGHTNING_BRAND.defaultDevWebPort);
 const explicitHost = process.env.HOST?.trim();
 const host = explicitHost || "localhost";
 const configuredWsUrl = isSingleOriginDev ? undefined : process.env.VITE_WS_URL?.trim();
@@ -286,7 +288,7 @@ function bootstrapTitlePlugin(): Plugin {
         hostedAppChannel: configuredHostedAppChannel,
         development,
       });
-      const title = formatAppDisplayName({ baseName: "T3 Code", stageLabel });
+      const title = formatAppDisplayName({ baseName: LIGHTNING_BRAND.baseName, stageLabel });
       return html.replace(/<title>[^<]*<\/title>/, `<title>${title}</title>`);
     },
   };
@@ -353,6 +355,14 @@ export default defineConfig(({ command }) => {
       ],
     },
     define: {
+      // GT can render other English entries directly from their source, including interpolation.
+      __LIGHTNING_ENGLISH_COPY__: JSON.stringify(
+        Object.fromEntries(
+          Object.entries(englishCatalog).filter(([, value]) =>
+            JSON.stringify(value).includes("T3 Code"),
+          ),
+        ),
+      ),
       "import.meta.env.VITE_WS_URL": JSON.stringify(configuredWsUrl ?? ""),
       // Override .env URLs with empty values in single-origin dev so clients use window.location.origin.
       "import.meta.env.VITE_HTTP_URL": JSON.stringify(configuredHttpUrl ?? ""),

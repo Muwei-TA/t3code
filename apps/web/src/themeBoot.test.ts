@@ -1,5 +1,7 @@
+import { BUILT_IN_THEMES } from "@t3tools/shared/themePalettes";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import { readThemePreference } from "./hooks/useTheme";
 import indexHtml from "../index.html?raw";
 import {
   CUSTOM_THEMES_STORAGE_KEY,
@@ -7,14 +9,10 @@ import {
   getDefaultThemeColors,
   getThemeColorsForMode,
   invalidateCustomThemes,
-  isKnownThemePreference,
   publishedThemeDefinitions,
   resolveThemeAppearance,
   T3_CHAT_THEME,
-  EMBER_THEME,
   GROVE_THEME,
-  IRIS_THEME,
-  OCEAN_THEME,
   THEME_APPEARANCE_MODE_STORAGE_KEY,
   THEME_FOLLOW_SYSTEM_STORAGE_KEY,
   toCanonicalThemeColor,
@@ -111,8 +109,7 @@ function runtimeResolvedAppearance(
   });
   invalidateCustomThemes();
   try {
-    const raw = storage[THEME_STORAGE_KEY] ?? null;
-    const theme = raw !== null && isKnownThemePreference(raw) ? raw : "system";
+    const theme = readThemePreference();
     const followRaw = storage[THEME_FOLLOW_SYSTEM_STORAGE_KEY] ?? null;
     const appearanceRaw = storage[THEME_APPEARANCE_MODE_STORAGE_KEY] ?? null;
     const appearanceMode =
@@ -256,6 +253,15 @@ describe("index.html boot script", () => {
     expect(boot.isDark).toBe(runtimeResolvedAppearance(storage, prefersDark) === "dark");
   });
 
+  it("paints the Lightning dark palette on a fresh client, including on a light OS", () => {
+    const boot = runBootScript({ prefersDark: false });
+    expect(boot.themeId).toBe("lightning");
+    expect(boot.isDark).toBe(true);
+    expect(toCanonicalThemeColor(boot.bootVariables["--boot-background"])).toBe(
+      getDefaultThemeColors("dark").canvas,
+    );
+  });
+
   it("accepts exponent-form OKLCH before the runtime mounts", () => {
     const colors = {
       canvas: "oklch(9.5e-1 1e-2 2.8e2)",
@@ -310,8 +316,7 @@ describe("index.html boot script", () => {
   });
 
   it("keeps every built-in boot splash in sync with the real palettes", () => {
-    for (const theme of [T3_CHAT_THEME, GROVE_THEME, OCEAN_THEME, EMBER_THEME, IRIS_THEME]) {
-      expect(theme.appearance).toBe("light");
+    for (const theme of BUILT_IN_THEMES) {
       for (const mode of ["light", "dark"] as const) {
         const colors = getThemeColorsForMode(theme, mode);
         expect(colors).not.toBeNull();
@@ -390,17 +395,21 @@ describe("index.html boot script", () => {
     });
 
     expect(boot.themeId).toBe("partial");
-    expect(boot.bootVariables["--boot-background"]).toBe(getDefaultThemeColors("dark").canvas);
+    expect(toCanonicalThemeColor(boot.bootVariables["--boot-background"])).toBe(
+      getDefaultThemeColors("dark").canvas,
+    );
     expect(boot.bootVariables["--boot-foreground"]).toBe("#fffaff");
-    expect(boot.bootVariables["--boot-accent"]).toBe(getDefaultThemeColors("dark").accent);
-    expect(boot.backgroundColor).toBe(DEFAULT_DARK_CHROME);
-    expect(boot.metaContent).toBe(DEFAULT_DARK_CHROME);
+    expect(toCanonicalThemeColor(boot.bootVariables["--boot-accent"])).toBe(
+      getDefaultThemeColors("dark").accent,
+    );
+    expect(toCanonicalThemeColor(boot.backgroundColor)).toBe(DEFAULT_DARK_CHROME);
+    expect(toCanonicalThemeColor(boot.metaContent)).toBe(DEFAULT_DARK_CHROME);
   });
 
-  it("follows the OS appearance when storage is unavailable", () => {
+  it("paints the runtime fallback when storage is unavailable", () => {
     const light = runBootScript({ storageThrows: true, prefersDark: false });
-    expect(light.isDark).toBe(false);
-    expect(light.themeId).toBeUndefined();
+    expect(light.isDark).toBe(true);
+    expect(light.themeId).toBe("lightning");
 
     const dark = runBootScript({ storageThrows: true, prefersDark: true });
     expect(dark.isDark).toBe(true);
