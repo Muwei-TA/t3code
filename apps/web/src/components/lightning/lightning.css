@@ -1,95 +1,115 @@
-/* Lightning Code visual system — Swirling Galaxy Vortex, 5-State Kinetic Composer, Luminous Hardware Brand & 7x7 Amber LED Pill */
-
-/* ============================================================================
- * 1. Swirling Galaxy Vortex & Volumetric Zenith Backdrop (Krea + Design+Code)
- * ============================================================================ */
-
 .lightning-cosmic-backdrop {
-  z-index: 0;
-  background-color: var(--background);
-}
-
-.lightning-zenith-beam {
-  position: absolute;
-  inset: -12% 0 auto 0;
-  height: 78%;
+  container-type: size;
+  --orbit-ice: #73bed5;
+  --orbit-iris: #aa9de7;
+  --orbit-copper: #d8a781;
+  --orbit-pearl: #e9f3ff;
+  --orbit-halo: rgb(103 134 201 / 11%);
   background:
-    radial-gradient(
-      ellipse 18% 68% at 50% 0%,
-      rgb(226 232 255 / 18%) 0%,
-      rgb(129 140 248 / 14%) 28%,
-      rgb(56 189 248 / 6%) 54%,
-      transparent 78%
-    ),
-    radial-gradient(
-      ellipse 56% 52% at 50% -4%,
-      rgb(99 102 241 / 16%) 0%,
-      rgb(30 41 59 / 9%) 48%,
-      transparent 76%
-    );
+    radial-gradient(ellipse at 22% 74%, rgb(49 67 113 / 17%), transparent 43%),
+    radial-gradient(ellipse at 78% 30%, rgb(79 55 91 / 14%), transparent 40%), var(--background);
   @variant light {
+    --orbit-ice: #316784;
+    --orbit-iris: #676598;
+    --orbit-copper: #9f6946;
+    --orbit-pearl: #4e5368;
+    --orbit-halo: rgb(92 118 180 / 10%);
     background:
-      radial-gradient(
-        ellipse 22% 65% at 50% 0%,
-        rgb(59 130 246 / 12%) 0%,
-        rgb(99 102 241 / 6%) 38%,
-        transparent 75%
-      ),
-      radial-gradient(ellipse 60% 50% at 50% -6%, rgb(148 163 184 / 12%) 0%, transparent 74%);
+      radial-gradient(ellipse at 24% 68%, rgb(158 186 213 / 16%), transparent 48%),
+      radial-gradient(ellipse at 78% 32%, rgb(189 172 203 / 14%), transparent 46%),
+      var(--background);
   }
 }
 
-.lightning-dot-grid {
+.lightning-orbit-plane {
   position: absolute;
-  inset: 0;
-  background-image: radial-gradient(
-    circle,
-    color-mix(in srgb, var(--foreground) 11%, transparent) 1px,
-    transparent 1px
-  );
-  background-size: 24px 24px;
-  mask-image: radial-gradient(ellipse 78% 72% at 50% 45%, black 18%, transparent 86%);
-  opacity: 0.52;
-  @variant light {
-    opacity: 0.36;
-  }
+  top: var(--orbit-cy, 51%);
+  left: calc(50% + (var(--chat-lane-inset-start, 0px) - var(--chat-lane-inset-end, 0px)) / 2);
+  width: max(132cqw, 136cqh);
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  transform: translate(calc(var(--orbit-dx, 0) * 16px), calc(var(--orbit-dy, 0) * 12px))
+    rotate(-13deg) scaleY(0.57);
+  transition: transform 460ms cubic-bezier(0.2, 0.72, 0.26, 1);
 }
 
-.lightning-vortex-canvas {
+.lightning-orbit-plane::before {
+  content: "";
+  position: absolute;
+  inset: 20%;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    transparent 58%,
+    var(--orbit-halo) 78%,
+    transparent 100%
+  );
+}
+
+.lightning-orbit-disc,
+.lightning-orbit-core {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  display: block;
+  animation: lightning-orbit-turn 360s linear infinite;
+  animation-play-state: var(--visible-animation-state, paused);
 }
 
-.lightning-horizon-arc {
+.lightning-orbit-core {
+  inset: 25%;
+  width: 50%;
+  height: 50%;
+  opacity: 0.72;
+  translate: calc(var(--orbit-dx, 0) * 9px) calc(var(--orbit-dy, 0) * 6px);
+  transition:
+    opacity 320ms ease,
+    translate 360ms ease-out;
+  animation-duration: 172s;
+}
+
+[data-orbit-typing] .lightning-orbit-core {
+  opacity: 1;
+}
+
+.lightning-orbit-focus {
   position: absolute;
-  left: -12%;
-  right: -12%;
-  bottom: -240px;
-  height: 320px;
-  border-radius: 50%;
-  border-top: 1px solid color-mix(in srgb, var(--foreground) 12%, transparent);
-  background: radial-gradient(
-    ellipse 60% 100% at 50% 0%,
-    rgb(99 102 241 / 14%) 0%,
-    rgb(56 189 248 / 5%) 34%,
-    transparent 70%
-  );
+  left: 50%;
+  top: 50%;
+  width: clamp(140px, 20cqw, 250px);
+  aspect-ratio: 1;
+  opacity: 0;
+  translate: -50% -50%;
+  transform: translate(calc(var(--orbit-dx, 0) * 100cqw), calc(var(--orbit-dy, 0) * 100cqh));
+  transition:
+    transform 420ms cubic-bezier(0.16, 0.64, 0.35, 1),
+    opacity 450ms ease;
+  background: radial-gradient(closest-side, var(--orbit-halo), transparent);
+  mask-image: radial-gradient(closest-side, black 12%, transparent);
+}
+
+[data-orbit-focus] .lightning-orbit-focus {
+  backdrop-filter: brightness(1.32) saturate(1.12);
   @variant light {
-    border-top-color: rgb(15 23 42 / 9%);
-    background: radial-gradient(
-      ellipse 60% 100% at 50% 0%,
-      rgb(59 130 246 / 6%) 0%,
-      transparent 70%
-    );
+    backdrop-filter: contrast(1.16) saturate(1.1);
+  }
+  opacity: 0.76;
+}
+
+.lightning-warp-burst {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+}
+
+@keyframes lightning-orbit-turn {
+  to {
+    transform: rotate(1turn);
   }
 }
-
-/* ============================================================================
- * 2. Flagship Luminous Hardware Logo, Wordmark & Hero Emblem
- * ============================================================================ */
 
 .lightning-bolt-stop-core {
   stop-color: #fff8db;
@@ -103,137 +123,165 @@
   stop-color: #ea580c;
 }
 
-.lightning-wordmark {
-  display: inline-flex;
-  align-items: center;
+.lightning-bolt-facet {
+  fill: #fff4cf;
+}
+.lightning-bolt-ridge {
+  fill: #ffdb8a;
 }
 
 .lightning-brand-chip {
+  border: 1px solid #62606a;
   background:
-    radial-gradient(circle at 50% 44%, rgb(255 155 26 / 34%) 0%, transparent 72%),
-    linear-gradient(180deg, #171720 0%, #07070b 100%);
-  border: 1px solid rgb(255 255 255 / 16%);
+    radial-gradient(ellipse at 50% 60%, rgb(235 140 35 / 22%), transparent 59%),
+    linear-gradient(152deg, #34333a, #101117 37%, #181820 74%, #39343a);
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 22%),
-    inset 0 -1px 0 rgb(0 0 0 / 75%),
-    0 4px 14px -4px rgb(0 0 0 / 82%),
-    0 0 16px -4px rgb(255 155 26 / 45%);
-  transition:
-    box-shadow 180ms ease,
-    border-color 180ms ease,
-    transform 180ms ease;
-  @variant light {
-    background:
-      radial-gradient(circle at 50% 44%, rgb(255 155 26 / 36%) 0%, transparent 72%),
-      linear-gradient(180deg, #1b1d26 0%, #0b0c11 100%);
-    border-color: rgb(15 23 42 / 24%);
-    box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 24%),
-      0 4px 12px -4px rgb(15 23 42 / 34%),
-      0 0 12px -4px rgb(255 155 26 / 40%);
-  }
+    inset 0 1px 0 rgb(255 255 255 / 33%),
+    inset 0 -1px 0 #08080c,
+    0 1px 2px rgb(0 0 0 / 42%);
 }
 
-.lightning-wordmark:hover .lightning-brand-chip {
-  border-color: rgb(255 190 92 / 42%);
+.lightning-brand-chip::before {
+  content: "";
+  position: absolute;
+  inset: 7%;
+  border-radius: 24%;
+  background: linear-gradient(148deg, rgb(0 0 0 / 47%), transparent 54%);
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 28%),
-    0 6px 18px -4px rgb(0 0 0 / 88%),
-    0 0 22px -3px rgb(255 155 26 / 65%);
+    inset 0 1px 2px #040409,
+    0 1px 0 rgb(242 218 173 / 20%);
 }
 
 .lightning-brand-chip-grid {
   position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: radial-gradient(circle, rgb(255 155 26 / 24%) 0.75px, transparent 0.9px);
-  background-size: 4px 4px;
-  opacity: 0.75;
+  inset: 13%;
+  border-radius: 18%;
+  background: radial-gradient(circle, rgb(255 177 65 / 45%) 19%, transparent 31%) 0 0 /
+    calc(100% / 7) calc(100% / 7);
 }
 
 .lightning-brand-bolt {
-  filter: drop-shadow(0 0 4.5px rgb(255 155 26 / 82%));
+  filter: drop-shadow(0 1px 0 #81350d) drop-shadow(0 0 3px rgb(255 152 20 / 78%));
 }
 
 .lightning-brand-chip-prism {
   position: absolute;
-  pointer-events: none;
-  inset: auto 10% 0 10%;
-  height: 1.5px;
+  inset: auto 21% 8%;
+  height: 1px;
   background: linear-gradient(
     90deg,
-    transparent 0%,
-    rgb(34 211 238 / 85%) 24%,
-    rgb(139 92 246 / 90%) 52%,
-    rgb(255 155 26 / 95%) 78%,
-    transparent 100%
+    transparent,
+    #62dada 16%,
+    #9d88e3 45%,
+    #fff0cf 68%,
+    #e99b43 80%,
+    transparent
   );
 }
 
-.lightning-wordmark-glow {
-  background-image: linear-gradient(
-    110deg,
-    #ffffff 0%,
-    #f8fafc 32%,
-    #ffe6ad 48%,
-    #ffad33 56%,
-    #e4e4ec 72%,
-    #ffffff 100%
-  );
-  background-size: 240% 100%;
-  background-position: 100% 0;
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent;
-  animation: lightning-brand-sheen 6.5s ease-in-out infinite;
+.lightning-brand-chip::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: linear-gradient(110deg, transparent 27%, rgb(255 230 182 / 38%) 49%, transparent 63%);
+}
+
+.lightning-brand-chip[data-charging]::after {
+  animation: lightning-chip-charge 620ms ease-out;
   animation-play-state: var(--visible-animation-state, paused);
+}
+
+.lightning-brand-chip[data-charging] .lightning-brand-bolt {
+  animation: lightning-core-charge 620ms ease-out;
+  animation-play-state: var(--visible-animation-state, paused);
+}
+
+@keyframes lightning-chip-charge {
+  0% {
+    transform: translateX(-90%);
+    opacity: 0;
+  }
+  26% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(95%);
+    opacity: 0;
+  }
+}
+
+@keyframes lightning-core-charge {
+  22% {
+    filter: brightness(1.32) drop-shadow(0 0 5px #ffad32);
+  }
+}
+
+.lightning-wordmark-glow,
+.lightning-wordmark-sub {
+  background-clip: text;
+  color: transparent;
+}
+.lightning-wordmark-glow {
+  --metal-face: #d8dbe2;
+  --metal-flash: #fff5dc;
+  background-image: linear-gradient(174deg, #fff 20%, #f1eeeb 52%, #bcc4d4 83%);
   @variant light {
-    background-image: linear-gradient(
-      110deg,
-      #0b0d13 0%,
-      #1e2433 34%,
-      #d97706 50%,
-      #1e2433 66%,
-      #0b0d13 100%
-    );
+    --metal-face: #232a35;
+    --metal-flash: #785933;
+    background-image: linear-gradient(174deg, #394451, #10131a 78%);
   }
 }
 
 .lightning-wordmark-sub {
-  color: color-mix(in srgb, var(--foreground) 72%, transparent);
+  --metal-face: #ddb68a;
+  --metal-flash: #fff1c7;
   font-weight: 500;
+  background-image: linear-gradient(166deg, #ffedca 14%, #f2cd97 45%, #b79375 84%);
+  @variant light {
+    --metal-face: #704729;
+    --metal-flash: #93662e;
+    background-image: linear-gradient(166deg, #8a542d, #654026 70%);
+  }
 }
 
-@keyframes lightning-brand-sheen {
-  0%,
-  55% {
-    background-position: 110% 0;
+@media (prefers-reduced-motion: no-preference) {
+  [data-lightning-wordmark]:has([data-charging])
+    :is(.lightning-wordmark-glow, .lightning-wordmark-sub) {
+    background-image: linear-gradient(
+      110deg,
+      var(--metal-face) 32%,
+      var(--metal-flash) 50%,
+      var(--metal-face) 68%
+    );
+    background-size: 250% 100%;
+    animation: lightning-metal-sheen 620ms ease-out;
+    animation-play-state: var(--visible-animation-state, paused);
   }
-  100% {
-    background-position: -10% 0;
+}
+
+@keyframes lightning-metal-sheen {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+
+@media (forced-colors: active) {
+  .lightning-wordmark-glow,
+  .lightning-wordmark-sub {
+    color: CanvasText;
   }
 }
 
 .lightning-hero-emblem {
-  background:
-    radial-gradient(circle at 50% 42%, rgb(255 155 26 / 34%) 0%, transparent 68%),
-    linear-gradient(180deg, #181822 0%, #07070b 100%);
-  border: 1px solid rgb(255 255 255 / 16%);
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 24%),
-    0 18px 42px -12px rgb(0 0 0 / 90%),
-    0 0 38px -6px rgb(255 155 26 / 45%),
-    0 0 64px -16px rgb(129 140 248 / 35%);
-  @variant light {
-    background:
-      radial-gradient(circle at 50% 42%, rgb(255 155 26 / 34%) 0%, transparent 68%),
-      linear-gradient(180deg, #1b1d26 0%, #0b0c11 100%);
-    border-color: rgb(15 23 42 / 22%);
-    box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 24%),
-      0 14px 32px -10px rgb(15 23 42 / 28%),
-      0 0 28px -8px rgb(255 155 26 / 35%);
-  }
+    inset 0 1px 0 rgb(255 255 255 / 48%),
+    inset 0 -2px 0 #08090c,
+    0 5px 8px -4px rgb(0 0 0 / 54%),
+    0 11px 27px -9px rgb(223 137 48 / 32%);
 }
 
 .lightning-eyebrow-pill {
@@ -319,6 +367,14 @@
   }
 }
 
+.lightning-hero-capsule-glow::after {
+  content: "";
+  position: absolute;
+  inset: -3px 0 0;
+  background: inherit;
+  mask: radial-gradient(circle, #000 1px, transparent 1.25px) 0 0 / 4px 4px;
+}
+
 .lightning-hardware-card {
   background: linear-gradient(180deg, rgb(255 255 255 / 4.5%) 0%, rgb(255 255 255 / 1.5%) 100%);
   border: 1px solid rgb(255 255 255 / 8%);
@@ -344,10 +400,16 @@
 }
 
 .lightning-status-led {
-  background: #34d399;
+  border: 1px solid color-mix(in srgb, var(--foreground) 38%, transparent);
+  box-shadow: inset 0 1px 1px rgb(0 0 0 / 18%);
+}
+
+.lightning-status-led[data-connected="true"] {
+  border: 0;
+  background: radial-gradient(circle at 40% 32%, #dcffee, #5de3ad 43%, #157657 85%);
   box-shadow: 0 0 8px rgb(52 211 153 / 75%);
   @variant light {
-    background: #10b981;
+    background: radial-gradient(circle at 40% 32%, #d7ffed, #2da87e 48%, #156249 85%);
     box-shadow: 0 0 6px rgb(16 185 129 / 45%);
   }
 }
@@ -526,74 +588,79 @@ html[data-theme-id="lightning"]
   isolation: isolate;
 }
 
-/* Sweeping luminous edge beam gliding smoothly along the top & bottom lips of the capsule */
 .lightning-composer-rim-sweep {
+  pointer-events: none;
   position: absolute;
   inset: 0;
   border-radius: inherit;
   padding: 1px;
-  background: linear-gradient(
-    105deg,
-    transparent 12%,
-    rgb(56 189 248 / 38%) 34%,
-    rgb(139 92 246 / 52%) 50%,
-    rgb(255 155 26 / 42%) 66%,
-    transparent 88%
-  );
-  background-size: 260% 100%;
   mask:
     linear-gradient(#fff 0 0) content-box,
     linear-gradient(#fff 0 0);
   mask-composite: exclude;
-  -webkit-mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  opacity: 0.45;
-  animation: lightning-rim-glide 5.2s linear infinite;
+  opacity: 0.58;
   animation-play-state: var(--visible-animation-state, paused);
   transition: opacity 220ms ease;
-  @variant light {
-    opacity: 0.34;
-  }
 }
 
-.lightning-composer-rim-sweep[data-phase="typing"] {
-  opacity: 0.92;
-  animation-duration: 2.2s;
+.lightning-composer-rim-sweep::before {
+  content: "";
+  position: absolute;
+  width: 32%;
+  height: 14px;
+  offset-path: inset(1px round 1.45rem);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    #7899d9 45%,
+    #ccbdff 71%,
+    #fff1cc 86%,
+    transparent
+  );
+  animation: lightning-rim-glide 9s linear infinite;
+  animation-play-state: var(--visible-animation-state, paused);
 }
 
+.lightning-composer-rim-sweep[data-phase="typing"],
 .lightning-composer-rim-sweep[data-phase="sending"] {
   opacity: 1;
-  animation-duration: 0.72s;
 }
 
-.lightning-composer-rim-sweep[data-phase="running"],
-.lightning-composer-rim-sweep[data-phase="voice"] {
-  opacity: 0.85;
-  animation-duration: 2.8s;
+.lightning-composer-rim-sweep[data-phase="typing"]::before {
+  animation-duration: 3.8s;
+}
+.lightning-composer-rim-sweep[data-phase="sending"]::before {
+  animation-duration: 0.8s;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    #a889f7 35%,
+    #ffae60 64%,
+    #fff8df 86%,
+    transparent
+  );
 }
 
-/* Send ignition plasma shockwave flash */
 .lightning-send-surge {
   position: absolute;
-  inset: 0;
-  border-radius: inherit;
+  inset: auto 4% 0;
+  height: 14px;
+  transform-origin: bottom;
   background: radial-gradient(
-    ellipse 85% 95% at 50% 105%,
-    rgb(255 244 210 / 48%) 0%,
-    rgb(236 72 153 / 34%) 32%,
-    rgb(56 189 248 / 26%) 62%,
-    transparent 84%
+    ellipse at 50% 110%,
+    #fff6d6 2%,
+    #ffa46f 16%,
+    rgb(182 99 239 / 46%) 38%,
+    transparent 72%
   );
-  animation: lightning-send-flash 760ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: lightning-send-flash 800ms ease-out both;
   animation-play-state: var(--visible-animation-state, paused);
 }
 
 .lightning-energy-wave-bloom {
   position: absolute;
-  inset: auto 4% -12px 4%;
-  height: 44px;
+  inset: auto 9% -12px;
+  height: 25px;
   border-radius: 9999px;
   filter: blur(16px);
   opacity: 0.22;
@@ -644,7 +711,7 @@ html[data-theme-id="lightning"]
   position: absolute;
   inset: auto 0 0 0;
   width: 100%;
-  height: 36px;
+  height: 26px;
   display: block;
   transform-origin: center bottom;
   transform: scaleY(var(--lightning-wave-amp, 1));
@@ -717,26 +784,23 @@ html[data-theme-id="lightning"]
 }
 
 @keyframes lightning-rim-glide {
-  0% {
-    background-position: 160% 0;
-  }
-  100% {
-    background-position: -60% 0;
+  to {
+    offset-distance: 100%;
   }
 }
 
 @keyframes lightning-send-flash {
   0% {
-    opacity: 0.95;
-    transform: scaleY(0.45);
+    opacity: 0.3;
+    transform: scale(0.25, 0.3);
   }
-  38% {
-    opacity: 0.78;
-    transform: scaleY(1.08);
+  20% {
+    opacity: 0.94;
+    transform: scale(0.68, 1.1);
   }
   100% {
     opacity: 0;
-    transform: scaleY(1.25);
+    transform: scale(1.13, 0.7);
   }
 }
 
@@ -782,6 +846,54 @@ html[data-theme-id="lightning"]
   }
   100% {
     transform: translateX(-4px) scaleY(0.82);
+  }
+}
+
+.lightning-key-crest {
+  opacity: 0;
+  transform-origin: center bottom;
+}
+
+.lightning-energy-wave[data-phase="typing"] .lightning-key-crest {
+  animation: lightning-key-strike 580ms cubic-bezier(0.18, 0.67, 0.27, 1) both;
+  animation-play-state: var(--visible-animation-state, paused);
+}
+
+@keyframes lightning-key-strike {
+  0% {
+    opacity: 0.2;
+    transform: translateX(0) scaleY(0.4);
+  }
+  19% {
+    opacity: 1;
+    transform: translateX(-16px) scaleY(1.18);
+  }
+  56% {
+    opacity: 0.66;
+    transform: translateX(-63px) scaleY(0.72);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-101px) scaleY(0.3);
+  }
+}
+
+.lightning-energy-wave[data-phase="sending"] .lightning-wave-spark {
+  animation: lightning-spark-flight 760ms ease-out both;
+  animation-play-state: var(--visible-animation-state, paused);
+}
+
+@keyframes lightning-spark-flight {
+  0% {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--spark-flight), -9px) scale(0.48);
   }
 }
 
@@ -971,6 +1083,13 @@ html[data-theme-id="lightning"]
  * ============================================================================ */
 
 @media (prefers-reduced-motion: reduce) {
+  .lightning-orbit-disc,
+  .lightning-orbit-core,
+  .lightning-brand-chip[data-charging]::after,
+  .lightning-brand-chip[data-charging] .lightning-brand-bolt,
+  .lightning-energy-wave[data-phase="typing"] .lightning-key-crest,
+  .lightning-energy-wave[data-phase="sending"] .lightning-wave-spark,
+  .lightning-composer-rim-sweep::before,
   .lightning-composer-rim-sweep,
   .lightning-send-surge,
   .lightning-energy-wave-bloom,
@@ -980,6 +1099,25 @@ html[data-theme-id="lightning"]
   .lightning-thinking-text,
   .lightning-wordmark-glow {
     animation: none;
+  }
+
+  .lightning-orbit-plane,
+  .lightning-orbit-core,
+  .lightning-orbit-focus {
+    transition: none;
+  }
+  .lightning-orbit-plane {
+    transform: rotate(-13deg) scaleY(0.57);
+  }
+  .lightning-orbit-core {
+    translate: none;
+  }
+  .lightning-orbit-focus,
+  .lightning-send-surge {
+    display: none;
+  }
+  .lightning-energy-wave {
+    transition: none;
   }
 
   .lightning-led-frame {

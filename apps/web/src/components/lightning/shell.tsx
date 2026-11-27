@@ -8,7 +8,8 @@ export function readLightningShell(): "lightning" | "classic" {
   return "lightning";
 }
 
-export const LightningShell = createContext<ReturnType<typeof readLightningShell>>("lightning");
+export const LightningShell =
+  createContext<ReturnType<typeof readLightningShell>>(readLightningShell());
 
 export function WorkspaceShellProvider(props: ComponentProps<typeof SidebarProvider>) {
   const [shell] = useState(readLightningShell);

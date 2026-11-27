@@ -13,8 +13,9 @@ import {
 import { openCommandPalette } from "../../commandPaletteBus";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { primaryServerKeybindingsAtom } from "../../state/server";
+import { observeVisibleAnimation } from "../../lib/visibleAnimation";
 import { Button } from "../ui/button";
-import { LightningAppIcon } from "./LightningAppIcon";
+import { LightningHardwareBadge } from "./LightningAppIcon";
 import { LightningCosmicBackdrop } from "./LightningCosmicBackdrop";
 import { WorkspaceStatus } from "./WorkspaceStatus";
 
@@ -34,10 +35,8 @@ export function LightningHeroStage({ onScratch }: { onScratch: (() => void) | nu
     >
       <LightningCosmicBackdrop variant="hero" />
       <div className="relative z-10 my-auto flex w-full max-w-3xl flex-col items-center">
-        <div className="lightning-hero-emblem relative mb-5 grid size-14 place-items-center overflow-hidden rounded-2xl">
-          <span aria-hidden="true" className="lightning-brand-chip-grid" />
-          <LightningAppIcon className="lightning-brand-bolt relative z-10 size-8" />
-          <span aria-hidden="true" className="lightning-brand-chip-prism" />
+        <div className="mb-5 inline-flex">
+          <LightningHardwareBadge hero />
         </div>
         <div className="lightning-eyebrow-pill mb-5 inline-flex items-center rounded-full px-3 py-1">
           <WorkspaceStatus hero />
@@ -51,13 +50,15 @@ export function LightningHeroStage({ onScratch }: { onScratch: (() => void) | nu
             : gt("Add a project to start your first thread.")}
         </p>
 
-        {/* Floating Krea-inspired double-bevel obsidian command capsule */}
-        <div className="lightning-hero-capsule-moat mt-9 w-full max-w-2xl">
+        <div
+          ref={observeVisibleAnimation}
+          className="lightning-hero-capsule-moat mt-9 w-full max-w-2xl"
+        >
           <div className="lightning-hero-capsule relative flex flex-col overflow-hidden text-left">
             <button
               type="button"
               onClick={primaryLaunch}
-              className="group flex w-full cursor-pointer items-center justify-between gap-4 px-5 pt-5 pb-4 text-left focus-visible:outline-none"
+              className="group flex w-full cursor-pointer items-center justify-between gap-4 px-5 pt-5 pb-4 text-left focus-visible:outline-2 focus-visible:-outline-offset-3 focus-visible:outline-ring"
             >
               <span className="truncate text-base text-muted-foreground/80 transition-colors group-hover:text-foreground">
                 {gt("Ask anything...")}
@@ -92,37 +93,32 @@ export function LightningHeroStage({ onScratch }: { onScratch: (() => void) | nu
               </Button>
             </div>
             <span aria-hidden="true" className="lightning-hero-capsule-glow" />
+            <span aria-hidden="true" className="lightning-composer-rim-sweep" />
           </div>
         </div>
 
-        {/* Design+Code precision hardware quick cards */}
         <nav
           aria-label={gt("Workspace")}
           className="mt-7 grid w-full max-w-2xl grid-cols-1 gap-2.5 sm:grid-cols-2"
         >
           {[
             {
-              index: "01",
               to: "/settings/connections",
               label: gt("Connections"),
               Icon: MonitorIcon,
             },
             {
-              index: "02",
               to: "/harness",
               label: gt("Harness"),
               Icon: BlocksIcon,
             },
-          ].map(({ index, to, label, Icon }) => (
+          ].map(({ to, label, Icon }) => (
             <Link
               key={to}
               to={to}
               className="lightning-hardware-card group flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-ring"
             >
               <span className="flex min-w-0 items-center gap-3">
-                <span className="font-mono text-3xs tracking-widest text-muted-foreground/60">
-                  {index}
-                </span>
                 <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-foreground/10 bg-foreground/4 text-muted-foreground transition-colors group-hover:text-foreground">
                   <Icon aria-hidden="true" className="size-3.5" />
                 </span>
