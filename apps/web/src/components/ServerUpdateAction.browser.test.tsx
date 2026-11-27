@@ -182,7 +182,8 @@ describe("ServerUpdateAction", () => {
 
   it.each([
     { kind: "bunx" },
-    { kind: "npm-global", prefix: "/opt/node", legacyPackage: true },
+    { kind: "npm-global", prefix: "/opt/node" },
+    { kind: "npm-global", prefix: "/opt/node", packageName: "t3" },
   ] as const)(
     "tells a legacy $kind user to relaunch the old server with the copied command",
     async (installation) => {

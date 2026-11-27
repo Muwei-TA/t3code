@@ -156,16 +156,7 @@ export const resolveServerInstallation = Effect.gen(function* () {
       baseDir: linked || "/",
     } satisfies ServerInstallation;
   }
-  const windows = platform === "win32";
-  const match = NPM_GLOBAL_ENTRY.exec(entry.replaceAll("\\", "/"))?.groups;
-  const modulesParent = match?.modulesParent;
-  const name = match?.name;
-  if (
-    modulesParent === undefined ||
-    (!windows && !modulesParent.endsWith("/lib/")) ||
-    (name !== CLI_NPM_PACKAGE_NAME && name !== "t3")
-  ) {
-    if (runner === null) return null;
+  if (runner !== null) {
     const node = yield* HostProcess.ExecutablePath;
     return {
       kind: runner === "pnpm dlx" ? "pnpm-dlx" : runner,
@@ -174,6 +165,16 @@ export const resolveServerInstallation = Effect.gen(function* () {
         : {}),
     } satisfies ServerInstallation;
   }
+  const windows = platform === "win32";
+  const match = NPM_GLOBAL_ENTRY.exec(entry.replaceAll("\\", "/"))?.groups;
+  const modulesParent = match?.modulesParent;
+  const name = match?.name;
+  if (
+    modulesParent === undefined ||
+    (!windows && !modulesParent.endsWith("/lib/")) ||
+    (name !== CLI_NPM_PACKAGE_NAME && name !== "t3")
+  )
+    return null;
   const rawPrefix = windows ? modulesParent : modulesParent.slice(0, -"lib/".length);
   if (
     /(?:^|\/)node_modules\//i.test(rawPrefix) ||
@@ -202,7 +203,7 @@ export const resolveServerInstallation = Effect.gen(function* () {
   return {
     kind: "npm-global",
     prefix,
-    ...(manifest.name === "t3" ? { legacyPackage: true } : {}),
+    packageName: manifest.name,
   } satisfies ServerInstallation;
 }).pipe(Effect.orElseSucceed(() => null));
 

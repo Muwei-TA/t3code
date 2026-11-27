@@ -38,7 +38,13 @@ describe("versionSkew", () => {
   });
   it("uses the Lightning CLI when there is no installed launcher path", () => {
     expect(manualServerUpdateCommand("0.0.45")).toBe("lightning update 0.0.45");
-    expect(manualServerUpdateCommand("0.0.45", { kind: "npm-global", prefix: "/opt/node" })).toBe(
+    expect(
+      manualServerUpdateCommand("0.0.45", {
+        kind: "npm-global",
+        prefix: "/opt/node",
+        packageName: "@muwei-ta/lightning-code",
+      }),
+    ).toBe(
       "npm install --global --prefix '/opt/node' 'https://github.com/Muwei-TA/t3code/releases/download/v0.0.45/t3.tgz'",
     );
     expect(
@@ -70,15 +76,18 @@ describe("versionSkew", () => {
     expect(manualServerUpdateCommand("0.0.45-nightly.20261127.4", { kind })).toBe(command);
   });
 
-  it("relaunches a legacy global install without overwriting its executable", () => {
-    expect(
-      manualServerUpdateCommand("0.0.45-nightly.20261127.4", {
-        kind: "npm-global",
-        prefix: "/opt/node",
-        legacyPackage: true,
-      }),
-    ).toBe(`npx --yes --package '${exactRelease}' -- lightning`);
-  });
+  it.each([undefined, "t3"])(
+    "relaunches a legacy global install (%s) without overwriting its executable",
+    (packageName) => {
+      expect(
+        manualServerUpdateCommand("0.0.45-nightly.20261127.4", {
+          kind: "npm-global",
+          prefix: "/opt/node",
+          ...(packageName === undefined ? {} : { packageName }),
+        }),
+      ).toBe(`npx --yes --package '${exactRelease}' -- lightning`);
+    },
+  );
 
   it("uses the Node command shims when copying commands for PowerShell", () => {
     expect(manualServerUpdateCommand("0.0.45-nightly.20261127.4", { kind: "npx" }, "windows")).toBe(
@@ -87,7 +96,11 @@ describe("versionSkew", () => {
     expect(
       manualServerUpdateCommand(
         "0.0.45-nightly.20261127.4",
-        { kind: "npm-global", prefix: "C:\\Maria's tools" },
+        {
+          kind: "npm-global",
+          prefix: "C:\\Maria's tools",
+          packageName: "@muwei-ta/lightning-code",
+        },
         "windows",
       ),
     ).toBe(`npm.cmd install --global --prefix 'C:\\Maria''s tools' '${exactRelease}'`);

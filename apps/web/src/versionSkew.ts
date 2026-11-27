@@ -7,7 +7,7 @@ import type {
 } from "@t3tools/contracts";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
-import { cliReleaseAssetUrl } from "@t3tools/shared/cliRelease";
+import { CLI_NPM_PACKAGE_NAME, cliReleaseAssetUrl } from "@t3tools/shared/cliRelease";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import * as Schema from "effect/Schema";
 import { msg } from "gt-react";
@@ -105,7 +105,9 @@ export function supportsDesktopAppUpdate(
 }
 
 export function legacyServerUpdateRunner(installation?: ServerInstallation) {
-  if (installation?.kind === "npm-global") return installation.legacyPackage ? "npx" : null;
+  if (installation?.kind === "npm-global") {
+    return installation.packageName === CLI_NPM_PACKAGE_NAME ? null : "npx";
+  }
   if (
     installation === undefined ||
     installation.kind === "t3-launcher" ||
@@ -130,7 +132,7 @@ export function manualServerUpdateCommand(
     // An inherited T3CODE_HOME would otherwise send the update to a home the launcher is not in.
     return `${windows ? "& " : ""}${quote(installation.launcher)} update --base-dir ${quote(installation.baseDir)} ${targetVersion}`;
   }
-  if (installation?.kind === "npm-global" && !installation.legacyPackage) {
+  if (installation?.kind === "npm-global" && installation.packageName === CLI_NPM_PACKAGE_NAME) {
     const tarball = cliReleaseAssetUrl(targetVersion, "t3.tgz");
     return `${windows ? "npm.cmd" : "npm"} install --global --prefix ${quote(installation.prefix)} ${quote(tarball)}`;
   }

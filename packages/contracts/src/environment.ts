@@ -71,8 +71,8 @@ export const ServerInstallation = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("npm-global"),
-    prefix: TrimmedNonEmptyString,
-    legacyPackage: Schema.optionalKey(Schema.Literal(true)),
+    prefix: InstalledPath,
+    packageName: Schema.optionalKey(TrimmedNonEmptyString),
   }),
   // A launcher (script, or a legacy symlink) into a downloaded runtime, as the install script and `t3 update` leave.
   Schema.Struct({

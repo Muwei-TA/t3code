@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodePath from "@effect/platform-node/NodePath";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { CLI_NPM_PACKAGE_NAME } from "@t3tools/shared/cliRelease";
@@ -271,7 +272,11 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       );
       expect(yield* resolve).toBeNull();
       yield* fs.symlink(entry, globalBin);
-      expect(yield* resolve).toEqual({ kind: "npm-global", prefix });
+      expect(yield* resolve).toEqual({
+        kind: "npm-global",
+        prefix,
+        packageName: CLI_NPM_PACKAGE_NAME,
+      });
       yield* fs.remove(globalBin);
       yield* fs.writeFileString(globalBin, "an unrelated t3 command");
       expect(yield* resolve).toBeNull();
@@ -313,7 +318,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
             {
               kind: "npm-global",
               prefix,
-              ...(name === "t3" ? { legacyPackage: true } : {}),
+              packageName: name,
             },
           ],
         ] as const) {
@@ -376,7 +381,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%${rela
         expect(yield* resolve).toEqual({
           kind: "npm-global",
           prefix,
-          ...(name === "t3" ? { legacyPackage: true } : {}),
+          packageName: name,
         });
         yield* fs.writeFileString(wrapper, shim.replace("bin\\t3.mjs", "bin\\another.mjs"));
         expect(yield* resolve).toBeNull();
@@ -386,6 +391,26 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%${rela
         );
         expect(yield* resolve).toBeNull();
       }),
+  );
+
+  it.effect("keeps the Windows npm cache classified as a runner", () =>
+    Effect.gen(function* () {
+      const entry = "C:\\cache\\_npx\\hash\\node_modules\\t3\\dist\\bin.mjs";
+      const node = "C:\\Program Files\\nodejs\\node.exe";
+      const installation = yield* resolveServerInstallation.pipe(
+        Effect.provide(NodePath.layerWin32),
+        Effect.provideService(
+          FileSystem.FileSystem,
+          FileSystem.makeNoop({ realPath: (value) => Effect.succeed(value) }),
+        ),
+        Effect.provideService(HostProcess.Arguments, [node, entry]),
+        Effect.provideService(HostProcess.ExecutablePath, node),
+        Effect.provideService(HostProcess.IsExecutable, false),
+        Effect.provideService(HostProcess.Platform, "win32"),
+        Effect.provideService(HostProcess.Environment, {}),
+      );
+      expect(installation).toEqual({ kind: "npx", launch: { node, entry } });
+    }),
   );
 
   it.effect("names the launcher that started a downloaded runtime", () =>
