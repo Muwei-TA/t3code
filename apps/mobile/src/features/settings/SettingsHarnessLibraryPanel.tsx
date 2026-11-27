@@ -767,6 +767,20 @@ export function SettingsHarnessLibraryPanel({
                       onValueChange={() => void handleToggleSkill(skill)}
                     />
                   </View>
+                  {skill.files?.map((file) => (
+                    <Text
+                      key={file.relativePath}
+                      className="font-mono text-xs text-foreground-muted"
+                    >
+                      {file.relativePath}
+                      {file.executable ? " [+x]" : ""}
+                    </Text>
+                  ))}
+                  {skill.companionTruncated ? (
+                    <Text className="text-xs text-foreground">
+                      <T>The server returned a partial file tree.</T>
+                    </Text>
+                  ) : null}
                   {skill.description ? (
                     <Text className="text-xs text-foreground-muted" numberOfLines={2}>
                       {skill.description}

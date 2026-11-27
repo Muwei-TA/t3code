@@ -336,98 +336,123 @@ export function SettingsHarnessPluginsHooksPanel({
           <T>No lifecycle hooks configured on this host yet.</T>
         </Text>
       ) : (
-        hooksSnapshot.hooks.map((hook) => (
-          <View
-            key={`${hook.source}:${hook.id}`}
-            className="gap-2 rounded-xl border border-border-subtle bg-card p-3"
-          >
-            <View className="flex-row items-center justify-between gap-2">
-              <View className="min-w-0 flex-1">
-                <Text
-                  className="font-mono text-sm font-t3-medium text-foreground"
-                  numberOfLines={1}
-                >
-                  {hook.id}
-                </Text>
-                <Text className="text-2xs text-foreground-muted" numberOfLines={1}>
-                  {hook.event} · {hook.target.type}
-                  {hook.pluginId ? ` · ${hook.pluginId}` : ""}
-                </Text>
-                {hook.source === "user" &&
-                !canOperateTerminal &&
-                hook.target.type === "command" &&
-                !hook.enabled ? (
-                  <Text className="text-xs text-foreground-muted">
-                    <T>Enabling command hooks requires terminal access.</T>
+        [...hooksSnapshot.hooks]
+          .sort((a, b) => Number(Boolean(b.pendingApproval)) - Number(Boolean(a.pendingApproval)))
+          .map((hook) => (
+            <View
+              key={`${hook.source}:${hook.id}`}
+              className="gap-2 rounded-xl border border-border-subtle bg-card p-3"
+            >
+              <View className="flex-row items-center justify-between gap-2">
+                <View className="min-w-0 flex-1">
+                  <Text
+                    className="font-mono text-sm font-t3-medium text-foreground"
+                    numberOfLines={1}
+                  >
+                    {hook.id}
                   </Text>
-                ) : null}
-              </View>
-              {hook.source === "user" ? (
-                <Switch
-                  value={hook.enabled}
-                  disabled={
-                    !canWriteSettings ||
-                    busyId === hook.id ||
-                    (!canOperateTerminal && hook.target.type === "command" && !hook.enabled)
-                  }
-                  onValueChange={(enabled) => {
-                    void (async () => {
+                  <Text className="text-2xs text-foreground-muted" numberOfLines={1}>
+                    {hook.event} · {hook.target.type}
+                    {hook.pluginId ? ` · ${hook.pluginId}` : ""}
+                  </Text>
+                  {hook.source === "user" &&
+                  !canOperateTerminal &&
+                  hook.target.type === "command" &&
+                  !hook.enabled ? (
+                    <Text className="text-xs text-foreground-muted">
+                      <T>Enabling command hooks requires terminal access.</T>
+                    </Text>
+                  ) : null}
+                </View>
+                {hook.source === "user" && hook.pendingApproval ? (
+                  <Button
+                    label={gt("Approve & Enable")}
+                    disabled={
+                      !canWriteSettings ||
+                      busyId === hook.id ||
+                      (!canOperateTerminal && hook.target.type === "command")
+                    }
+                    onPress={async () => {
                       setBusyId(hook.id);
-                      await setHookEnabled({ environmentId, input: { id: hook.id, enabled } });
+                      await setHookEnabled({
+                        environmentId,
+                        input: { id: hook.id, enabled: true },
+                      });
                       setBusyId(null);
                       hooksQuery.refresh();
-                    })();
-                  }}
-                />
-              ) : null}
-            </View>
-            <View className="flex-row flex-wrap gap-2">
-              <Button
-                label={gt("Test")}
-                tone="secondary"
-                disabled={!canWriteSettings || !canOperateTerminal || busyId === hook.id}
-                onPress={() => {
-                  void (async () => {
-                    setBusyId(hook.id);
-                    const res = await testHook({ environmentId, input: { id: hook.id } });
-                    setBusyId(null);
-                    if (res._tag === "Success") {
-                      const r = res.value;
-                      Dialog.alert(
-                        r.blocked
-                          ? gt("Hook blocked ({ms}ms)", { ms: r.durationMs })
-                          : r.ok
-                            ? gt("Hook passed ({ms}ms)", { ms: r.durationMs })
-                            : gt("Hook failed ({ms}ms)", { ms: r.durationMs }),
-                        r.blockReason ?? r.injectedContext ?? r.error ?? r.stdout ?? gt("Done."),
-                      );
-                    } else if (!isAtomCommandInterrupted(res)) {
-                      Dialog.alert(
-                        gt("Hook test failed"),
-                        errorDisplayMessage(squashAtomCommandFailure(res), m) ?? gt("Try again."),
-                      );
+                    }}
+                  />
+                ) : hook.source === "user" ? (
+                  <Switch
+                    value={hook.enabled}
+                    disabled={
+                      !canWriteSettings ||
+                      busyId === hook.id ||
+                      (!canOperateTerminal && hook.target.type === "command" && !hook.enabled)
                     }
-                  })();
-                }}
-              />
-              {hook.source === "user" ? (
+                    onValueChange={(enabled) => {
+                      void (async () => {
+                        setBusyId(hook.id);
+                        await setHookEnabled({ environmentId, input: { id: hook.id, enabled } });
+                        setBusyId(null);
+                        hooksQuery.refresh();
+                      })();
+                    }}
+                  />
+                ) : null}
+              </View>
+              <View className="flex-row flex-wrap gap-2">
                 <Button
-                  label={gt("Remove")}
+                  label={gt("Test")}
                   tone="secondary"
-                  disabled={!canWriteSettings || busyId === hook.id}
+                  disabled={
+                    !canWriteSettings ||
+                    !canOperateTerminal ||
+                    busyId === hook.id ||
+                    hook.pendingApproval === true
+                  }
                   onPress={() => {
                     void (async () => {
                       setBusyId(hook.id);
-                      await removeHook({ environmentId, input: { id: hook.id } });
+                      const res = await testHook({ environmentId, input: { id: hook.id } });
                       setBusyId(null);
-                      hooksQuery.refresh();
+                      if (res._tag === "Success") {
+                        const r = res.value;
+                        Dialog.alert(
+                          r.blocked
+                            ? gt("Hook blocked ({ms}ms)", { ms: r.durationMs })
+                            : r.ok
+                              ? gt("Hook passed ({ms}ms)", { ms: r.durationMs })
+                              : gt("Hook failed ({ms}ms)", { ms: r.durationMs }),
+                          r.blockReason ?? r.injectedContext ?? r.error ?? r.stdout ?? gt("Done."),
+                        );
+                      } else if (!isAtomCommandInterrupted(res)) {
+                        Dialog.alert(
+                          gt("Hook test failed"),
+                          errorDisplayMessage(squashAtomCommandFailure(res), m) ?? gt("Try again."),
+                        );
+                      }
                     })();
                   }}
                 />
-              ) : null}
+                {hook.source === "user" ? (
+                  <Button
+                    label={hook.pendingApproval ? gt("Reject") : gt("Remove")}
+                    tone="secondary"
+                    disabled={!canWriteSettings || busyId === hook.id}
+                    onPress={() => {
+                      void (async () => {
+                        setBusyId(hook.id);
+                        await removeHook({ environmentId, input: { id: hook.id } });
+                        setBusyId(null);
+                        hooksQuery.refresh();
+                      })();
+                    }}
+                  />
+                ) : null}
+              </View>
             </View>
-          </View>
-        ))
+          ))
       )}
 
       <Modal

@@ -62,6 +62,22 @@ describe("searchSettings", () => {
     expect(searchSettings("long lines", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
     const spanish = (message: string) => (message === "Word wrap" ? "Ajuste de línea" : message);
     expect(searchSettings("ajuste", ITEMS, spanish).map((item) => item.id)).toEqual(["word-wrap"]);
+    for (const [query, tab] of [
+      ["plugins", "skills"],
+      ["MCP servers", "tools"],
+      ["memory", "context"],
+      ["hooks", "guardrails"],
+    ]) {
+      expect(searchSettings(query!)).toContainEqual(
+        expect.objectContaining({ to: "/harness", tab }),
+      );
+    }
+    expect(searchSettings("CLI Import")).toContainEqual(
+      expect.objectContaining({ to: "/settings/sync", id: "harness-transfer" }),
+    );
+    expect(searchSettings("workflows")).toContainEqual(
+      expect.objectContaining({ to: "/automations", tab: "workflows" }),
+    );
     for (const query of ["fallback", "fallback agent", "fallback model"]) {
       expect(searchSettings(query)[0]).toMatchObject({
         id: "fallback-model",

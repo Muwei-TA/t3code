@@ -440,7 +440,10 @@ export function ComposerControlsBar(props: {
             <MenuSeparator />
             <MenuItem
               onClick={() => {
-                void navigate({ to: "/settings/harness" });
+                void navigate({
+                  to: "/harness",
+                  search: { tab: "context", ...(environmentId ? { machine: environmentId } : {}) },
+                });
               }}
             >
               <Settings2Icon className="size-3.5 text-muted-foreground" />

@@ -193,6 +193,7 @@ import {
   newProjectId,
 } from "../lib/utils";
 import { buildThreadRouteParams } from "../threadRoutes";
+import { validateSettingsScopeSearch } from "./settings/settingsScope";
 import { useAvailableSettingsSearchItems } from "./settings/useAvailableSettingsSearchItems";
 import {
   applyWslEnvironmentConfiguration,
@@ -1917,9 +1918,12 @@ function OpenCommandPaletteDialog(props: {
     run: async () => {
       await navigate({
         to: item.to,
+        ...(item.tab
+          ? { search: (previous) => ({ ...validateSettingsScopeSearch(previous), tab: item.tab }) }
+          : {}),
         hash: item.targetId ?? item.id,
         replace: pathname === item.to,
-        hashScrollIntoView: false,
+        hashScrollIntoView: item.to === "/harness",
       });
     },
   }));

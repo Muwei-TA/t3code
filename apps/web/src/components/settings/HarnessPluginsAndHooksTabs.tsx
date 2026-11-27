@@ -32,15 +32,6 @@ import { useState } from "react";
 import { harnessEnvironment } from "../../state/harness";
 import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
-import {
-  AlertDialog,
-  AlertDialogClose,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogPopup,
-  AlertDialogTitle,
-} from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -90,7 +81,6 @@ export function HarnessPluginsTab({ environmentId }: { readonly environmentId: E
     AsyncResult.getOrElse(queryResult, () => null as HarnessPluginsSnapshot | null);
 
   const listPlugins = useAtomCommand(harnessEnvironment.listPlugins, { reportFailure: false });
-  const installPlugin = useAtomCommand(harnessEnvironment.installPlugin, { reportFailure: false });
   const trustPlugin = useAtomCommand(harnessEnvironment.trustPlugin, { reportFailure: false });
   const setPluginEnabled = useAtomCommand(harnessEnvironment.setPluginEnabled, {
     reportFailure: false,
@@ -99,9 +89,6 @@ export function HarnessPluginsTab({ environmentId }: { readonly environmentId: E
   const reloadPlugins = useAtomCommand(harnessEnvironment.reloadPlugins, { reportFailure: false });
 
   const [busy, setBusy] = useState(false);
-  const [installOpen, setInstallOpen] = useState(false);
-  const [installPath, setInstallPath] = useState("");
-  const [trustTarget, setTrustTarget] = useState<HarnessPluginView | null>(null);
 
   const refresh = async () => {
     setBusy(true);
@@ -110,9 +97,29 @@ export function HarnessPluginsTab({ environmentId }: { readonly environmentId: E
     if (res._tag === "Success") setOverrideSnapshot(res.value);
   };
 
+  const trust = async (plugin: HarnessPluginView) => {
+    setBusy(true);
+    const res = await trustPlugin({
+      environmentId,
+      input: { id: plugin.id, expectedDigest: TrimmedNonEmptyString.make(plugin.contentDigest) },
+    });
+    setBusy(false);
+    if (res._tag === "Success") {
+      setOverrideSnapshot(res.value);
+      toastManager.add({ type: "success", title: gt("Plugin trusted and activated") });
+    } else if (!isAtomCommandInterrupted(res)) {
+      toastManager.add({
+        type: "error",
+        title: gt("Could not trust plugin"),
+        description: formatError(squashAtomCommandFailure(res), gt("Try again.")),
+      });
+      void refresh();
+    }
+  };
+
   if (snapshot === null) {
     return (
-      <SettingsSection {...setting("harness-mcp")}>
+      <SettingsSection {...setting("harness-plugins")}>
         <p className="px-4 py-3 text-sm text-muted-foreground">
           <T>Loading portable plugins...</T>
         </p>
@@ -126,38 +133,25 @@ export function HarnessPluginsTab({ environmentId }: { readonly environmentId: E
 
   return (
     <>
-      <SettingsSection {...setting("harness-mcp")}>
-        <SettingsRow
-          title={<T>Portable Plugins</T>}
-          description={
-            <T>
-              Reversible plugin bundles in <Var>{snapshot.pluginsDir}</Var> supporting
-              t3-plugin.json and .claude-plugin/plugin.json. Digests require owner trust.
-            </T>
-          }
-        >
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!editable || busy}
-              onClick={async () => {
-                setBusy(true);
-                const res = await reloadPlugins({ environmentId, input: {} });
-                setBusy(false);
-                if (res._tag === "Success") setOverrideSnapshot(res.value);
-              }}
-            >
-              <RefreshCwIcon className="size-3.5" aria-hidden />
-              <T>Reload</T>
-            </Button>
-            <Button size="sm" disabled={!editable || busy} onClick={() => setInstallOpen(true)}>
-              <PlusIcon className="size-3.5" aria-hidden />
-              <T>Install Plugin</T>
-            </Button>
-          </div>
-        </SettingsRow>
-
+      <SettingsSection
+        {...setting("harness-plugins")}
+        headerAction={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!editable || busy}
+            onClick={async () => {
+              setBusy(true);
+              const res = await reloadPlugins({ environmentId, input: {} });
+              setBusy(false);
+              if (res._tag === "Success") setOverrideSnapshot(res.value);
+            }}
+          >
+            <RefreshCwIcon className="size-3.5" aria-hidden />
+            <T>Reload</T>
+          </Button>
+        }
+      >
         {!allowsPlugins ? (
           <p className="px-4 py-2 text-xs text-muted-foreground">
             <T>Your organization has disabled external plugins.</T>
@@ -166,228 +160,108 @@ export function HarnessPluginsTab({ environmentId }: { readonly environmentId: E
 
         {snapshot.plugins.length === 0 ? (
           <p className="px-4 py-4 text-sm text-muted-foreground">
-            <T>
-              No plugins installed yet. Install a local t3-plugin or .claude-plugin folder, or pack
-              one in Creator mode.
-            </T>
+            <T>No plugins installed.</T>
           </p>
         ) : (
           <div className="divide-y divide-border/60">
-            {snapshot.plugins.map((plugin) => (
-              <div
-                key={plugin.id}
-                className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
-              >
-                <div className="min-w-0 flex-1 space-y-1">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="font-mono text-sm font-medium text-foreground">
-                      {plugin.name}
-                    </span>
-                    <Badge variant="outline">v{plugin.version}</Badge>
-                    <Badge variant="secondary">{plugin.format}</Badge>
-                    {plugin.active ? (
-                      <Badge variant="success">{gt("Active")}</Badge>
-                    ) : plugin.trustStatus === "digest_changed" ? (
-                      <Badge variant="error">{gt("Digest changed")}</Badge>
-                    ) : plugin.trustStatus === "untrusted" ? (
-                      <Badge variant="warning">{gt("Untrusted")}</Badge>
-                    ) : (
-                      <Badge variant="outline">{gt("Disabled")}</Badge>
-                    )}
+            {[...snapshot.plugins]
+              .sort(
+                (a, b) => Number(b.trustStatus !== "trusted") - Number(a.trustStatus !== "trusted"),
+              )
+              .map((plugin) => (
+                <div
+                  key={plugin.id}
+                  className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                >
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-mono text-sm font-medium text-foreground">
+                        {plugin.name}
+                      </span>
+                      <Badge variant="outline">v{plugin.version}</Badge>
+                      <Badge variant="secondary">{plugin.format}</Badge>
+                      {plugin.active ? (
+                        <Badge variant="success">{gt("Active")}</Badge>
+                      ) : plugin.trustStatus === "digest_changed" ? (
+                        <Badge variant="error">{gt("Digest changed")}</Badge>
+                      ) : plugin.trustStatus === "untrusted" ? (
+                        <Badge variant="warning">{gt("Untrusted")}</Badge>
+                      ) : (
+                        <Badge variant="outline">{gt("Disabled")}</Badge>
+                      )}
+                    </div>
+                    {plugin.description ? (
+                      <p className="text-xs text-muted-foreground">{plugin.description}</p>
+                    ) : null}
+                    <p className="font-mono text-2xs text-muted-foreground/85">
+                      {gt(
+                        "sha256:{digest} · {skills} skills · {modes} modes · {hooks} hooks · {workflows} workflows",
+                        {
+                          digest: plugin.contentDigest.slice(0, 16) || "none",
+                          skills: plugin.skillIds.length,
+                          modes: plugin.modeIds.length,
+                          hooks: plugin.hookIds.length,
+                          workflows: plugin.workflowFiles.length,
+                        },
+                      )}
+                    </p>
+                    {plugin.lastError ? (
+                      <p className="text-xs text-destructive">{plugin.lastError}</p>
+                    ) : null}
                   </div>
-                  {plugin.description ? (
-                    <p className="text-xs text-muted-foreground">{plugin.description}</p>
-                  ) : null}
-                  <p className="font-mono text-2xs text-muted-foreground/85">
-                    {gt(
-                      "sha256:{digest} · {skills} skills · {modes} modes · {hooks} hooks · {workflows} workflows",
-                      {
-                        digest: plugin.contentDigest.slice(0, 16) || "none",
-                        skills: plugin.skillIds.length,
-                        modes: plugin.modeIds.length,
-                        hooks: plugin.hookIds.length,
-                        workflows: plugin.workflowFiles.length,
-                      },
+                  <div className="flex items-center gap-2">
+                    {plugin.trustStatus !== "trusted" && plugin.contentDigest ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!editable || busy}
+                        onClick={() => void trust(plugin)}
+                      >
+                        <ShieldCheckIcon className="size-3.5" aria-hidden />
+                        <T>Trust & Enable</T>
+                      </Button>
+                    ) : (
+                      <Switch
+                        aria-label={gt("Toggle {id}", { id: plugin.name })}
+                        checked={plugin.enabled}
+                        disabled={!editable || busy}
+                        onCheckedChange={async (checked) => {
+                          setBusy(true);
+                          const res = await setPluginEnabled({
+                            environmentId,
+                            input: { id: plugin.id, enabled: checked },
+                          });
+                          setBusy(false);
+                          if (res._tag === "Success") setOverrideSnapshot(res.value);
+                        }}
+                      />
                     )}
-                  </p>
-                  {plugin.lastError ? (
-                    <p className="text-xs text-destructive">{plugin.lastError}</p>
-                  ) : null}
-                </div>
-                <div className="flex items-center gap-2">
-                  {plugin.trustStatus !== "trusted" && plugin.contentDigest ? (
                     <Button
-                      size="sm"
                       variant="outline"
-                      disabled={!editable || busy}
-                      onClick={() => setTrustTarget(plugin)}
-                    >
-                      <ShieldCheckIcon className="size-3.5" aria-hidden />
-                      <T>Trust</T>
-                    </Button>
-                  ) : (
-                    <Switch
-                      checked={plugin.enabled}
-                      disabled={!editable || busy}
-                      onCheckedChange={async (checked) => {
+                      size="sm"
+                      aria-label={gt("Remove {id}", { id: plugin.name })}
+                      disabled={!canWriteSettings || busy}
+                      onClick={async () => {
                         setBusy(true);
-                        const res = await setPluginEnabled({
+                        const res = await removePlugin({
                           environmentId,
-                          input: { id: plugin.id, enabled: checked },
+                          input: { id: plugin.id },
                         });
                         setBusy(false);
-                        if (res._tag === "Success") setOverrideSnapshot(res.value);
+                        if (res._tag === "Success") {
+                          setOverrideSnapshot(res.value);
+                          toastManager.add({ type: "success", title: gt("Plugin removed") });
+                        }
                       }}
-                    />
-                  )}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!canWriteSettings || busy}
-                    onClick={async () => {
-                      setBusy(true);
-                      const res = await removePlugin({
-                        environmentId,
-                        input: { id: plugin.id },
-                      });
-                      setBusy(false);
-                      if (res._tag === "Success") {
-                        setOverrideSnapshot(res.value);
-                        toastManager.add({ type: "success", title: gt("Plugin removed") });
-                      }
-                    }}
-                  >
-                    <Trash2Icon className="size-3.5" aria-hidden />
-                  </Button>
+                    >
+                      <Trash2Icon className="size-3.5" aria-hidden />
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
           </div>
         )}
       </SettingsSection>
-
-      <Dialog open={installOpen} onOpenChange={setInstallOpen}>
-        <DialogPopup className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>
-              <T>Install Local Plugin</T>
-            </DialogTitle>
-            <DialogDescription>
-              <T>
-                Copies a t3-plugin.json or .claude-plugin/plugin.json folder into
-                ~/.t3/harness/plugins. You will review its SHA-256 digest before activation.
-              </T>
-            </DialogDescription>
-          </DialogHeader>
-          <DialogPanel>
-            <div className="space-y-2">
-              <label className="text-xs font-medium">{gt("Plugin Folder Path")}</label>
-              <Input
-                value={installPath}
-                placeholder="/path/to/my-plugin"
-                onChange={(e) => setInstallPath(e.target.value)}
-              />
-            </div>
-          </DialogPanel>
-          <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setInstallOpen(false)}>
-              <T>Cancel</T>
-            </Button>
-            <Button
-              size="sm"
-              disabled={busy || installPath.trim().length === 0}
-              onClick={async () => {
-                setBusy(true);
-                const res = await installPlugin({
-                  environmentId,
-                  input: { sourcePath: TrimmedNonEmptyString.make(installPath.trim()) },
-                });
-                setBusy(false);
-                if (res._tag === "Success") {
-                  setOverrideSnapshot(res.value);
-                  setInstallOpen(false);
-                  setInstallPath("");
-                  toastManager.add({
-                    type: "success",
-                    title: gt("Plugin installed. Review digest to trust."),
-                  });
-                } else if (!isAtomCommandInterrupted(res)) {
-                  toastManager.add({
-                    type: "error",
-                    title: gt("Failed to install plugin"),
-                    description: formatError(squashAtomCommandFailure(res), gt("Try again.")),
-                  });
-                }
-              }}
-            >
-              <T>Install</T>
-            </Button>
-          </DialogFooter>
-        </DialogPopup>
-      </Dialog>
-
-      <AlertDialog
-        open={trustTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setTrustTarget(null);
-        }}
-      >
-        {trustTarget ? (
-          <AlertDialogPopup>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                <T>
-                  Trust plugin “<Var>{trustTarget.name}</Var>”?
-                </T>
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                <T>
-                  Pin SHA-256 digest <Var>{trustTarget.contentDigest.slice(0, 24)}</Var> and
-                  activate its skills, modes, and hooks. Any future file modification revokes trust
-                  automatically.
-                </T>
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogClose render={<Button variant="outline" size="sm" />}>
-                <T>Cancel</T>
-              </AlertDialogClose>
-              <Button
-                size="sm"
-                disabled={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  const res = await trustPlugin({
-                    environmentId,
-                    input: {
-                      id: trustTarget.id,
-                      expectedDigest: TrimmedNonEmptyString.make(trustTarget.contentDigest),
-                    },
-                  });
-                  setBusy(false);
-                  setTrustTarget(null);
-                  if (res._tag === "Success") {
-                    setOverrideSnapshot(res.value);
-                    toastManager.add({
-                      type: "success",
-                      title: gt("Plugin trusted and activated"),
-                    });
-                  } else if (!isAtomCommandInterrupted(res)) {
-                    toastManager.add({
-                      type: "error",
-                      title: gt("Could not trust plugin"),
-                      description: formatError(squashAtomCommandFailure(res), gt("Try again.")),
-                    });
-                    void refresh();
-                  }
-                }}
-              >
-                <T>Trust & Activate</T>
-              </Button>
-            </AlertDialogFooter>
-          </AlertDialogPopup>
-        ) : null}
-      </AlertDialog>
     </>
   );
 }
@@ -419,7 +293,7 @@ export function HarnessHooksTab({ environmentId }: { readonly environmentId: Env
 
   if (snapshot === null) {
     return (
-      <SettingsSection {...setting("harness-mcp")}>
+      <SettingsSection {...setting("harness-hooks")}>
         <p className="px-4 py-3 text-sm text-muted-foreground">
           <T>Loading lifecycle hooks...</T>
         </p>
@@ -431,7 +305,7 @@ export function HarnessHooksTab({ environmentId }: { readonly environmentId: Env
 
   return (
     <>
-      <SettingsSection {...setting("harness-mcp")}>
+      <SettingsSection {...setting("harness-hooks")}>
         <SettingsRow
           title={<T>Lifecycle & Tool Hooks</T>}
           description={
@@ -456,20 +330,30 @@ export function HarnessHooksTab({ environmentId }: { readonly environmentId: Env
               <RefreshCwIcon className="size-3.5" aria-hidden />
               <T>Refresh</T>
             </Button>
-            <Button
-              size="sm"
-              disabled={!editable || busy}
-              onClick={() => {
-                setEditingHook(null);
-                setEditorOpen(true);
-              }}
-            >
-              <PlusIcon className="size-3.5" aria-hidden />
-              <T>Add Hook</T>
-            </Button>
+            <details>
+              <summary className="cursor-pointer text-xs text-muted-foreground">
+                <T>Manual configuration</T>
+              </summary>
+              <Button
+                size="sm"
+                disabled={!editable || busy}
+                onClick={() => {
+                  setEditingHook(null);
+                  setEditorOpen(true);
+                }}
+              >
+                <PlusIcon className="size-3.5" aria-hidden />
+                <T>Add Hook</T>
+              </Button>
+            </details>
           </div>
         </SettingsRow>
 
+        {snapshot.hooks.some((hook) => hook.pendingApproval) ? (
+          <h3 className="bg-warning/10 px-4 py-2 text-sm font-semibold">
+            <T>Pending hook proposals</T>
+          </h3>
+        ) : null}
         {snapshot.hooks.length === 0 ? (
           <p className="px-4 py-4 text-sm text-muted-foreground">
             <T>
@@ -479,113 +363,168 @@ export function HarnessHooksTab({ environmentId }: { readonly environmentId: Env
           </p>
         ) : (
           <div className="divide-y divide-border/60">
-            {snapshot.hooks.map((hook) => (
-              <div
-                key={`${hook.source}:${hook.id}`}
-                className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
-              >
-                <div className="min-w-0 flex-1 space-y-1">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <WebhookIcon className="size-3.5 text-muted-foreground" aria-hidden />
-                    <span className="font-mono text-xs font-medium text-foreground">{hook.id}</span>
-                    <Badge variant="outline">{hook.event}</Badge>
-                    <Badge variant="secondary">{hook.target.type}</Badge>
-                    {hook.source === "plugin" && hook.pluginId ? (
-                      <Badge variant="info">{hook.pluginId}</Badge>
-                    ) : null}
-                    {hook.matcher ? <Badge variant="outline">{hook.matcher}</Badge> : null}
-                    {hook.failClosed ? <Badge variant="warning">{gt("Fail-closed")}</Badge> : null}
-                  </div>
-                  <p className="truncate font-mono text-2xs text-muted-foreground">
-                    {hook.target.type === "command"
-                      ? [hook.target.command, ...(hook.target.args ?? [])].join(" ")
-                      : hook.target.url}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!editable || !canRunTerminal || busy}
-                    onClick={async () => {
-                      setBusy(true);
-                      const res = await testHook({
-                        environmentId,
-                        input: { id: hook.id },
-                      });
-                      setBusy(false);
-                      if (res._tag === "Success") {
-                        const r = res.value;
-                        toastManager.add({
-                          type: r.ok ? "success" : "warning",
-                          title: r.blocked
-                            ? gt("Hook blocked ({ms}ms)", { ms: r.durationMs })
-                            : r.ok
-                              ? gt("Hook passed ({ms}ms)", { ms: r.durationMs })
-                              : gt("Hook failed ({ms}ms)", { ms: r.durationMs }),
-                          description:
-                            r.blockReason ?? r.injectedContext ?? r.error ?? r.stdout ?? undefined,
-                        });
-                      } else if (!isAtomCommandInterrupted(res)) {
-                        toastManager.add({
-                          type: "error",
-                          title: gt("Hook test failed"),
-                          description: formatError(squashAtomCommandFailure(res), gt("Try again.")),
-                        });
-                      }
-                    }}
-                  >
-                    <PlayIcon className="size-3.5" aria-hidden />
-                    <T>Test</T>
-                  </Button>
-                  {hook.source === "user" ? (
-                    <>
-                      {!canRunTerminal && hook.target.type === "command" && !hook.enabled ? (
-                        <span className="text-xs text-muted-foreground">
-                          <T>Enabling command hooks requires terminal access.</T>
-                        </span>
+            {[...snapshot.hooks]
+              .sort(
+                (a, b) => Number(Boolean(b.pendingApproval)) - Number(Boolean(a.pendingApproval)),
+              )
+              .map((hook) => (
+                <div
+                  key={`${hook.source}:${hook.id}`}
+                  className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                >
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <WebhookIcon className="size-3.5 text-muted-foreground" aria-hidden />
+                      <span className="font-mono text-xs font-medium text-foreground">
+                        {hook.id}
+                      </span>
+                      <Badge variant="outline">{hook.event}</Badge>
+                      <Badge variant="secondary">{hook.target.type}</Badge>
+                      {hook.source === "plugin" && hook.pluginId ? (
+                        <Badge variant="info">{hook.pluginId}</Badge>
                       ) : null}
-                      <Switch
-                        checked={hook.enabled}
-                        disabled={
-                          !editable ||
-                          busy ||
-                          (!canRunTerminal && hook.target.type === "command" && !hook.enabled)
+                      {hook.matcher ? <Badge variant="outline">{hook.matcher}</Badge> : null}
+                      {hook.pendingApproval ? (
+                        <Badge variant="warning">{gt("Pending hook proposal")}</Badge>
+                      ) : null}
+                      {hook.failClosed ? (
+                        <Badge variant="warning">{gt("Fail-closed")}</Badge>
+                      ) : null}
+                    </div>
+                    <p className="truncate font-mono text-2xs text-muted-foreground">
+                      {hook.target.type === "command"
+                        ? [hook.target.command, ...(hook.target.args ?? [])].join(" ")
+                        : hook.target.url}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={
+                        !editable || !canRunTerminal || busy || hook.pendingApproval === true
+                      }
+                      onClick={async () => {
+                        setBusy(true);
+                        const res = await testHook({
+                          environmentId,
+                          input: { id: hook.id },
+                        });
+                        setBusy(false);
+                        if (res._tag === "Success") {
+                          const r = res.value;
+                          toastManager.add({
+                            type: r.ok ? "success" : "warning",
+                            title: r.blocked
+                              ? gt("Hook blocked ({ms}ms)", { ms: r.durationMs })
+                              : r.ok
+                                ? gt("Hook passed ({ms}ms)", { ms: r.durationMs })
+                                : gt("Hook failed ({ms}ms)", { ms: r.durationMs }),
+                            description:
+                              r.blockReason ??
+                              r.injectedContext ??
+                              r.error ??
+                              r.stdout ??
+                              undefined,
+                          });
+                        } else if (!isAtomCommandInterrupted(res)) {
+                          toastManager.add({
+                            type: "error",
+                            title: gt("Hook test failed"),
+                            description: formatError(
+                              squashAtomCommandFailure(res),
+                              gt("Try again."),
+                            ),
+                          });
                         }
-                        onCheckedChange={async (checked) => {
-                          setBusy(true);
-                          const res = await setHookEnabled({
-                            environmentId,
-                            input: { id: hook.id, enabled: checked },
-                          });
-                          setBusy(false);
-                          if (res._tag === "Success") setOverrideSnapshot(res.value);
-                        }}
-                      />
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={!editable || busy}
-                        onClick={async () => {
-                          setBusy(true);
-                          const res = await removeHook({
-                            environmentId,
-                            input: { id: hook.id },
-                          });
-                          setBusy(false);
-                          if (res._tag === "Success") {
-                            setOverrideSnapshot(res.value);
-                            toastManager.add({ type: "success", title: gt("Hook removed") });
-                          }
-                        }}
-                      >
-                        <Trash2Icon className="size-3.5" aria-hidden />
-                      </Button>
-                    </>
-                  ) : null}
+                      }}
+                    >
+                      <PlayIcon className="size-3.5" aria-hidden />
+                      <T>Test</T>
+                    </Button>
+                    {hook.source === "user" ? (
+                      <>
+                        {!canRunTerminal && hook.target.type === "command" && !hook.enabled ? (
+                          <span className="text-xs text-muted-foreground">
+                            <T>Enabling command hooks requires terminal access.</T>
+                          </span>
+                        ) : null}
+                        {hook.pendingApproval ? (
+                          <Button
+                            size="sm"
+                            disabled={
+                              !editable ||
+                              busy ||
+                              (!canRunTerminal && hook.target.type === "command")
+                            }
+                            onClick={async () => {
+                              setBusy(true);
+                              const result = await setHookEnabled({
+                                environmentId,
+                                input: { id: hook.id, enabled: true },
+                              });
+                              setBusy(false);
+                              if (result._tag === "Success") setOverrideSnapshot(result.value);
+                              else if (!isAtomCommandInterrupted(result))
+                                toastManager.add({
+                                  type: "error",
+                                  title: gt("Could not approve hook"),
+                                  description: formatError(
+                                    squashAtomCommandFailure(result),
+                                    gt("Try again."),
+                                  ),
+                                });
+                            }}
+                          >
+                            <T>Approve & Enable</T>
+                          </Button>
+                        ) : (
+                          <Switch
+                            checked={hook.enabled}
+                            disabled={
+                              !editable ||
+                              busy ||
+                              (!canRunTerminal && hook.target.type === "command" && !hook.enabled)
+                            }
+                            onCheckedChange={async (checked) => {
+                              setBusy(true);
+                              const res = await setHookEnabled({
+                                environmentId,
+                                input: { id: hook.id, enabled: checked },
+                              });
+                              setBusy(false);
+                              if (res._tag === "Success") setOverrideSnapshot(res.value);
+                            }}
+                          />
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={!editable || busy}
+                          onClick={async () => {
+                            setBusy(true);
+                            const res = await removeHook({
+                              environmentId,
+                              input: { id: hook.id },
+                            });
+                            setBusy(false);
+                            if (res._tag === "Success") {
+                              setOverrideSnapshot(res.value);
+                              toastManager.add({ type: "success", title: gt("Hook removed") });
+                            }
+                          }}
+                        >
+                          {hook.pendingApproval ? (
+                            <T>Reject</T>
+                          ) : (
+                            <Trash2Icon className="size-3.5" aria-hidden />
+                          )}
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
           </div>
         )}
       </SettingsSection>

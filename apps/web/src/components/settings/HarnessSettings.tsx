@@ -75,12 +75,8 @@ import { Select, SelectItem, SelectPopup, SelectTrigger } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
-import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
-import { useSettingsScope } from "./SettingsScopeContext";
+import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useSearchableSetting } from "./settingsSearch";
-import { HarnessLibraryPanels, type HarnessPanelTab } from "./HarnessLibraryTabs";
-import { HarnessMemoryTab, HarnessSyncTab } from "./HarnessMemoryAndSyncTabs";
-import { HarnessHooksTab, HarnessPluginsTab } from "./HarnessPluginsAndHooksTabs";
 
 const decodeServerId = Schema.decodeUnknownOption(HarnessMcpServerId);
 
@@ -220,95 +216,7 @@ function formatErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-export function HarnessSettingsPanel() {
-  const gt = useGT();
-  const setting = useSearchableSetting();
-  const { scope, environment } = useSettingsScope();
-  const [activeTab, setActiveTab] = useState<HarnessPanelTab>("mcp");
-  const connected = environment?.connection.phase === "connected";
-  const workspaceRoot =
-    scope.kind === "project" || scope.kind === "checkout"
-      ? scope.members.find((member) => member.environmentId === environment?.environmentId)
-          ?.workspaceRoot
-      : undefined;
-
-  const tabs: ReadonlyArray<{ readonly id: HarnessPanelTab; readonly label: string }> = [
-    { id: "mcp", label: gt("MCP Servers") },
-    { id: "modes", label: gt("Modes") },
-    { id: "skills", label: gt("Skills") },
-    { id: "rules", label: gt("Rules & AGENTS.md") },
-    { id: "commands", label: gt("Commands") },
-    { id: "plugins", label: gt("Plugins") },
-    { id: "hooks", label: gt("Hooks") },
-    { id: "memory", label: gt("Memory") },
-    { id: "sync", label: gt("Git Sync") },
-    { id: "approvals", label: gt("Approvals") },
-    { id: "transfer", label: gt("Import / Export") },
-  ];
-
-  return (
-    <SettingsPageContainer>
-      {connected && environment ? (
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-1.5">
-            {tabs.map((tab) => (
-              <Button
-                key={tab.id}
-                size="sm"
-                variant={activeTab === tab.id ? "default" : "outline"}
-                onClick={() => setActiveTab(tab.id)}
-              >
-                {tab.label}
-              </Button>
-            ))}
-          </div>
-          {activeTab === "mcp" ? (
-            <EnvironmentHarnessMcpSection
-              key={`${environment.environmentId}:${workspaceRoot ?? ""}`}
-              environment={environment}
-              workspaceRoot={workspaceRoot}
-            />
-          ) : activeTab === "plugins" ? (
-            <HarnessPluginsTab
-              key={`${environment.environmentId}:plugins`}
-              environmentId={environment.environmentId}
-            />
-          ) : activeTab === "hooks" ? (
-            <HarnessHooksTab
-              key={`${environment.environmentId}:hooks`}
-              environmentId={environment.environmentId}
-            />
-          ) : activeTab === "memory" ? (
-            <HarnessMemoryTab
-              key={`${environment.environmentId}:memory`}
-              environmentId={environment.environmentId}
-            />
-          ) : activeTab === "sync" ? (
-            <HarnessSyncTab
-              key={`${environment.environmentId}:sync`}
-              environmentId={environment.environmentId}
-            />
-          ) : (
-            <HarnessLibraryPanels
-              key={`${environment.environmentId}:${workspaceRoot ?? ""}:${activeTab}`}
-              activeTab={activeTab}
-              environmentId={environment.environmentId}
-              workspaceRoot={workspaceRoot}
-            />
-          )}
-        </div>
-      ) : (
-        <SettingsSection {...setting("harness-mcp")}>
-          <p className="px-4 py-3 text-sm text-muted-foreground">
-            <T>Connect an environment to configure portable MCP servers and harness extensions.</T>
-          </p>
-        </SettingsSection>
-      )}
-    </SettingsPageContainer>
-  );
-}
-
-function EnvironmentHarnessMcpSection({
+export function EnvironmentHarnessMcpSection({
   environment,
   workspaceRoot,
 }: {
@@ -551,9 +459,8 @@ function EnvironmentHarnessMcpSection({
     }
   };
 
-  const handleConfirmRemove = async () => {
-    if (!removeTarget) return;
-    const target = removeTarget;
+  const handleConfirmRemove = async (target = removeTarget) => {
+    if (!target) return;
     setRemoveTarget(null);
     setBusyServerId(target.id);
     const result = await removeMcp({
@@ -643,7 +550,11 @@ function EnvironmentHarnessMcpSection({
     });
   };
 
-  const servers = snapshot?.servers ?? [];
+  const servers = [...(snapshot?.servers ?? [])].sort(
+    (a, b) =>
+      Number(Boolean(b.config.pendingApproval || b.needsTrustConfirmation)) -
+      Number(Boolean(a.config.pendingApproval || a.needsTrustConfirmation)),
+  );
 
   return (
     <>
@@ -656,15 +567,20 @@ function EnvironmentHarnessMcpSection({
                 <DownloadIcon className="size-3" aria-hidden />
                 <T>Import from CLI</T>
               </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={snapshot?.managedPolicyAllowsHarness === false}
-                onClick={() => setEditorState({ mode: "add" })}
-              >
-                <PlusIcon className="size-3" aria-hidden />
-                <T>Add MCP server</T>
-              </Button>
+              <details>
+                <summary className="cursor-pointer text-xs text-muted-foreground">
+                  <T>Manual configuration</T>
+                </summary>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={snapshot?.managedPolicyAllowsHarness === false}
+                  onClick={() => setEditorState({ mode: "add" })}
+                >
+                  <PlusIcon className="size-3" aria-hidden />
+                  <T>Add MCP server</T>
+                </Button>
+              </details>
             </div>
           ) : null
         }
@@ -728,6 +644,13 @@ function EnvironmentHarnessMcpSection({
           ) : null}
         </div>
 
+        {servers.some(
+          (server) => server.config.pendingApproval || server.needsTrustConfirmation,
+        ) ? (
+          <h3 className="bg-warning/10 px-4 py-2 text-sm font-semibold">
+            <T>Pending approval</T>
+          </h3>
+        ) : null}
         {servers.length === 0 ? (
           <div className="px-4 pb-4 text-sm text-muted-foreground">
             <T>
@@ -773,7 +696,13 @@ function EnvironmentHarnessMcpSection({
                         ? gt("Native passthrough")
                         : gt("T3 Gateway")}
                     </Badge>
+                    {server.config.pendingApproval || server.needsTrustConfirmation ? (
+                      <Badge variant="warning">{gt("Pending approval")}</Badge>
+                    ) : null}
                     {stateBadge}
+                    <span className="text-xs text-muted-foreground">
+                      {gt("{count} tools", { count: server.toolCount })}
+                    </span>
                   </div>
                 }
                 description={
@@ -930,7 +859,30 @@ function EnvironmentHarnessMcpSection({
                       ) : null}
                     </>
                   ) : null}
-                  {server.scope === "user" && canWriteSettings ? (
+                  {server.config.pendingApproval && server.scope === "user" && canWriteSettings ? (
+                    <>
+                      <Button
+                        size="sm"
+                        disabled={
+                          isBusy ||
+                          server.state === "blocked_by_policy" ||
+                          (server.config.transport.type === "stdio" && !canRunStdio) ||
+                          (server.requiresSecretAccess && !canManageProviders)
+                        }
+                        onClick={() => void handleToggleEnabled(server, true)}
+                      >
+                        <T>Approve & Enable</T>
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isBusy}
+                        onClick={() => void handleConfirmRemove(server)}
+                      >
+                        <T>Reject</T>
+                      </Button>
+                    </>
+                  ) : server.scope === "user" && canWriteSettings ? (
                     <Switch
                       size="sm"
                       checked={server.config.enabled}
@@ -963,7 +915,7 @@ function EnvironmentHarnessMcpSection({
                       <TerminalIcon className="size-3.5" aria-hidden />
                     </Button>
                   ) : null}
-                  {server.scope === "user" && canWriteSettings ? (
+                  {server.scope === "user" && !server.config.pendingApproval && canWriteSettings ? (
                     <>
                       <Button
                         size="icon-xs"

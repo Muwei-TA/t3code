@@ -4,11 +4,14 @@ import type {
   HarnessWorkflowValidateResult,
   WorkflowDefinitionFile,
 } from "@t3tools/contracts";
+import { fromYaml } from "@t3tools/shared/schemaYaml";
+import * as Schema from "effect/Schema";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { T, useGT } from "gt-react";
 import { CheckCircle2Icon, Clock3Icon, WorkflowIcon } from "lucide-react";
 import { useState } from "react";
 
+import { HarnessAgentAction } from "../harness/HarnessAgentAction";
 import { isElectron } from "~/env";
 import {
   useConnectedEnvironmentIds,
@@ -83,6 +86,11 @@ export function AutomationsPage() {
   const definitions = useEnvironmentQuery(
     enabled && maySave && environmentId !== null && search.tab === "workflows"
       ? serverEnvironment.workflowDefinition({ environmentId, input: {} })
+      : null,
+  );
+  const workflows = useEnvironmentQuery(
+    enabled && environmentId !== null && search.tab === "workflows"
+      ? serverEnvironment.workflowsLive({ environmentId, input: {} })
       : null,
   );
   const saveWorkflow = useAtomCommand(serverEnvironment.saveWorkflowDefinition);
@@ -221,7 +229,16 @@ export function AutomationsPage() {
                       </SelectPopup>
                     </Select>
                   ) : null}
+                  {enabled && maySave && environmentId ? (
+                    <HarnessAgentAction
+                      key={environmentId}
+                      environmentId={environmentId}
+                      domain="workflows"
+                      label={gt("Create Workflow with Agent")}
+                    />
+                  ) : null}
                   <Button
+                    variant="outline"
                     render={
                       <Link
                         to="/workflows"
@@ -245,7 +262,56 @@ export function AutomationsPage() {
                 </div>
               </div>
 
-              <div className="space-y-3 rounded-xl border border-border bg-card p-6">
+              {environmentId && workflows.data ? (
+                <section className="grid gap-3">
+                  <h2 className="font-semibold">
+                    <T>Workflows</T>
+                  </h2>
+                  {workflows.data.workflows.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      <T>No workflows yet.</T>
+                    </p>
+                  ) : null}
+                  {workflows.data.workflows.map((workflow) => {
+                    const source = definitions.data?.files.find((file) =>
+                      file.workflows.includes(workflow.name + "@" + workflow.version),
+                    );
+                    return (
+                      <article key={workflow.name} className="space-y-1 rounded-xl border p-4">
+                        <h3 className="font-medium">{workflow.name}</h3>
+                        <p className="text-sm text-muted-foreground">{workflow.description}</p>
+                        {source?.name.endsWith(".yaml") || source?.name.endsWith(".yml") ? (
+                          <WorkflowSteps source={source.source} />
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                  <h2 className="font-semibold">
+                    <T>Recent runs</T>
+                  </h2>
+                  {workflows.data.runs.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      <T>No runs yet.</T>
+                    </p>
+                  ) : null}
+                  {workflows.data.runs.slice(0, 10).map((run) => (
+                    <Link
+                      key={run.runId}
+                      to="/workflows"
+                      search={{ env: environmentId, run: run.runId }}
+                      className="flex justify-between gap-2 rounded-lg border p-3"
+                    >
+                      {run.title || run.workflow}
+                      <Badge variant="outline">{run.status}</Badge>
+                    </Link>
+                  ))}
+                </section>
+              ) : null}
+              {workflows.error ? <p role="alert">{workflows.error}</p> : null}
+              <details className="space-y-3 rounded-xl border border-border bg-card p-6">
+                <summary className="cursor-pointer text-sm font-medium">
+                  <T>Source / YAML</T>
+                </summary>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <h3 className="text-sm font-semibold text-foreground">
@@ -342,11 +408,32 @@ export function AutomationsPage() {
                     ) : null}
                   </div>
                 ) : null}
-              </div>
+              </details>
             </div>
           )}
         </div>
       </div>
     </SidebarInset>
+  );
+}
+
+const decodeWorkflowSteps = Schema.decodeUnknownOption(
+  fromYaml(Schema.Struct({ steps: Schema.Array(Schema.Struct({ id: Schema.String })) })),
+);
+
+function WorkflowSteps({ source }: { source: string }) {
+  const overview = decodeWorkflowSteps(source);
+  if (overview._tag === "None" || overview.value.steps.length === 0) return null;
+  return (
+    <div>
+      <h4 className="text-sm font-medium">
+        <T>Steps</T>
+      </h4>
+      <ol className="list-inside list-decimal text-sm">
+        {overview.value.steps.map((step) => (
+          <li key={step.id}>{step.id}</li>
+        ))}
+      </ol>
+    </div>
   );
 }

@@ -82,9 +82,17 @@ export function SettingsScopeSentence() {
   };
   const group = scope.groups.find((candidate) => candidate.projectKey === scope.search.project);
   const hasCheckouts = group ? settingsScopeCheckoutChoices(group, scope.search).length > 0 : false;
-  const project = <ProjectScopeMenu {...props} />;
+  const project = <ProjectScopeMenu {...props} global={pathname === "/harness"} />;
   const environment = <EnvironmentScopeMenu {...props} />;
   const checkout = <CheckoutScopeMenu {...props} />;
+  if (pathname === "/harness")
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        {environment}
+        {project}
+        {hasCheckouts ? checkout : null}
+      </div>
+    );
   const onEnvironment = scope.search.machine || scope.scope.kind === "checkout";
   return (
     <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-3 text-sm text-muted-foreground sm:px-4">
@@ -401,8 +409,15 @@ function CheckoutScopeMenu({ value, groups, onChange }: SettingsScopeMenuProps) 
   );
 }
 
-function ProjectScopeMenu({ value, groups, environments, onChange }: SettingsScopeMenuProps) {
+function ProjectScopeMenu({
+  value,
+  groups,
+  environments,
+  onChange,
+  global,
+}: SettingsScopeMenuProps & { global: boolean }) {
   const gt = useGT();
+  const allProjects = global ? gt("Global") : gt("All projects");
   const selected = groups.find((group) => group.projectKey === value.project);
   const projects = projectScopeMenuGroups(groups, value).map((group) => ({
     group,
@@ -412,13 +427,11 @@ function ProjectScopeMenu({ value, groups, environments, onChange }: SettingsSco
     <ScopeMenu
       ariaLabel={gt("Project scope")}
       icon={selected ? <ProjectFavicon project={selected} className="size-3.5 shrink-0" /> : null}
-      label={
-        selected?.displayName ?? (value.project ? gt("Unavailable project") : gt("All projects"))
-      }
+      label={selected?.displayName ?? (value.project ? gt("Unavailable project") : allProjects)}
       value={projectAxisValue(value)}
       onChange={(next) => onChange(selectProjectAxis(value, next))}
       searchLabel={gt("Search projects")}
-      allOption={{ value: ALL_PROJECTS_VALUE, label: gt("All projects") }}
+      allOption={{ value: ALL_PROJECTS_VALUE, label: allProjects }}
       options={projects.map(({ group, machines }) => {
         const sameName = projects.filter(
           (other) =>

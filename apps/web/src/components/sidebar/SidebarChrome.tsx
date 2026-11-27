@@ -4,6 +4,7 @@ import {
   ChartNoAxesColumnIcon,
   Clock3Icon,
   SettingsIcon,
+  BlocksIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { T, useGT } from "gt-react";
@@ -311,6 +312,14 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               onClick={handleIssuesClick}
             />
           ) : null}
+          <SidebarUtilityItem
+            icon={<BlocksIcon />}
+            label={gt("Harness")}
+            onClick={() => {
+              closeMobileSidebar();
+              void navigate({ to: "/harness" });
+            }}
+          />
           <SidebarUtilityItem
             icon={<Clock3Icon />}
             label={gt("Automations")}

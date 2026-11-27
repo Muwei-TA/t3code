@@ -44,6 +44,8 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
+import { SkillBundleInspector } from "../harness/SkillBundleInspector";
+import { useEnvironmentQuery } from "../../state/query";
 import { harnessEnvironment } from "../../state/harness";
 import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -179,6 +181,7 @@ export function HarnessLibraryPanels({
   const [modeModal, setModeModal] = useState<
     null | { readonly mode: "add" } | { readonly mode: "edit"; readonly item: HarnessModeEntry }
   >(null);
+  const [inspected, setInspected] = useState<string | null>(null);
   const [skillModal, setSkillModal] = useState<
     null | { readonly mode: "add" } | { readonly mode: "edit"; readonly item: HarnessSkillEntry }
   >(null);
@@ -220,7 +223,7 @@ export function HarnessLibraryPanels({
 
   if (snapshot === null) {
     return (
-      <SettingsSection {...setting("harness-mcp")}>
+      <SettingsSection title={gt("Harness")}>
         <p className="px-4 py-3 text-sm text-muted-foreground">
           <T>Loading portable Harness library...</T>
         </p>
@@ -235,7 +238,7 @@ export function HarnessLibraryPanels({
   if (activeTab === "modes") {
     return (
       <>
-        <SettingsSection {...setting("harness-mcp")}>
+        <SettingsSection {...setting("harness-modes")}>
           <SettingsRow
             title={<T>Declarative Modes</T>}
             description={
@@ -251,14 +254,19 @@ export function HarnessLibraryPanels({
                 <RefreshCwIcon className="size-3.5" aria-hidden />
                 <T>Refresh</T>
               </Button>
-              <Button
-                size="sm"
-                disabled={!editable || busy}
-                onClick={() => setModeModal({ mode: "add" })}
-              >
-                <PlusIcon className="size-3.5" aria-hidden />
-                <T>Add Mode</T>
-              </Button>
+              <details>
+                <summary className="cursor-pointer text-xs text-muted-foreground">
+                  <T>Manual configuration</T>
+                </summary>
+                <Button
+                  size="sm"
+                  disabled={!editable || busy}
+                  onClick={() => setModeModal({ mode: "add" })}
+                >
+                  <PlusIcon className="size-3.5" aria-hidden />
+                  <T>Add Mode</T>
+                </Button>
+              </details>
             </div>
           </SettingsRow>
 
@@ -284,16 +292,28 @@ export function HarnessLibraryPanels({
                   {mode.description ? (
                     <p className="text-xs text-muted-foreground">{mode.description}</p>
                   ) : null}
-                  {mode.allowedMcpServers && mode.allowedMcpServers.length > 0 ? (
-                    <p className="font-mono text-2xs text-muted-foreground/85">
-                      {gt("Allowed MCP: {servers}", {
-                        servers: mode.allowedMcpServers.join(", "),
-                      })}
-                    </p>
-                  ) : null}
+                  <ContextSource body={mode.body} />
+                  <div className="flex flex-wrap gap-1">
+                    {mode.allowedMcpServers?.map((id) => (
+                      <Badge key={id} variant="secondary">
+                        {gt("MCP · {id}", { id })}
+                      </Badge>
+                    ))}
+                    {mode.includedRules?.map((id) => (
+                      <Badge key={id} variant="outline">
+                        {gt("Rule · {id}", { id })}
+                      </Badge>
+                    ))}
+                    {mode.includedSkills?.map((id) => (
+                      <Badge key={id} variant="outline">
+                        {gt("Skill · {id}", { id })}
+                      </Badge>
+                    ))}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <Switch
+                    aria-label={gt("Toggle {id}", { id: mode.id })}
                     checked={mode.enabled}
                     disabled={!editable || busy || mode.id === "build"}
                     onCheckedChange={async (checked) => {
@@ -363,6 +383,10 @@ export function HarnessLibraryPanels({
         </SettingsSection>
 
         <ModeEditorDialog
+          environmentId={environmentId}
+          workspaceRoot={workspaceRoot}
+          rules={snapshot.rules.map((rule) => rule.id)}
+          skills={snapshot.skills.map((skill) => skill.id)}
           state={modeModal}
           onClose={() => setModeModal(null)}
           onSave={async (payload) => {
@@ -416,7 +440,7 @@ export function HarnessLibraryPanels({
     };
 
     return (
-      <SettingsSection {...setting("harness-mcp")}>
+      <SettingsSection {...setting("harness-approvals")}>
         <SettingsRow
           title={<T>Approval Grants & Audit Ledger</T>}
           description={
@@ -524,32 +548,30 @@ export function HarnessLibraryPanels({
   if (activeTab === "skills") {
     return (
       <>
-        <SettingsSection {...setting("harness-mcp")}>
-          <SettingsRow
-            title={<T>Portable Skills</T>}
-            description={
-              <T>
-                Standard SKILL.md library shared across all providers via native mount or T3
-                Gateway. Stored in <Var>{snapshot.harnessDir}</Var>/skills and .agents/skills.
-              </T>
-            }
-          >
+        <SettingsSection
+          {...setting("harness-skills")}
+          headerAction={
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" disabled={busy} onClick={() => void refresh()}>
                 <RefreshCwIcon className="size-3.5" aria-hidden />
                 <T>Refresh</T>
               </Button>
-              <Button
-                size="sm"
-                disabled={!editable || busy}
-                onClick={() => setSkillModal({ mode: "add" })}
-              >
-                <PlusIcon className="size-3.5" aria-hidden />
-                <T>Add Skill</T>
-              </Button>
+              <details>
+                <summary className="cursor-pointer text-xs text-muted-foreground">
+                  <T>Manual configuration</T>
+                </summary>
+                <Button
+                  size="sm"
+                  disabled={!editable || busy}
+                  onClick={() => setSkillModal({ mode: "add" })}
+                >
+                  <PlusIcon className="size-3.5" aria-hidden />
+                  <T>Add Skill</T>
+                </Button>
+              </details>
             </div>
-          </SettingsRow>
-
+          }
+        >
           {snapshot.skills.length === 0 ? (
             <p className="px-4 py-4 text-sm text-muted-foreground">
               <T>
@@ -588,6 +610,7 @@ export function HarnessLibraryPanels({
                   </div>
                   <div className="flex items-center gap-2">
                     <Switch
+                      aria-label={gt("Toggle {id}", { id: skill.id })}
                       checked={skill.enabled}
                       disabled={!editable || busy}
                       onCheckedChange={async (checked) => {
@@ -600,12 +623,23 @@ export function HarnessLibraryPanels({
                         if (res._tag === "Success") setOverrideSnapshot(res.value);
                       }}
                     />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      aria-expanded={inspected === skill.sourcePath}
+                      onClick={() =>
+                        setInspected(inspected === skill.sourcePath ? null : skill.sourcePath)
+                      }
+                    >
+                      <T>Inspect files</T>
+                    </Button>
                     {skill.scope === "user" ? (
                       <>
                         <Button
                           variant="outline"
                           size="sm"
                           disabled={!editable || busy}
+                          aria-label={gt("Edit {id}", { id: skill.id })}
                           onClick={() => setSkillModal({ mode: "edit", item: skill })}
                         >
                           <PencilIcon className="size-3.5" aria-hidden />
@@ -614,6 +648,7 @@ export function HarnessLibraryPanels({
                           variant="outline"
                           size="sm"
                           disabled={!editable || busy}
+                          aria-label={gt("Delete {id}", { id: skill.id })}
                           onClick={async () => {
                             setBusy(true);
                             const res = await removeSkill({
@@ -632,6 +667,13 @@ export function HarnessLibraryPanels({
                       </>
                     ) : null}
                   </div>
+                  {inspected === skill.sourcePath ? (
+                    <SkillBundleInspector
+                      environmentId={environmentId}
+                      workspaceRoot={workspaceRoot}
+                      skill={skill}
+                    />
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -667,98 +709,135 @@ export function HarnessLibraryPanels({
 
   if (activeTab === "rules") {
     const currentAgents = agentsDraft ?? snapshot.userAgentsMd.body;
+    const contextBytes =
+      (agentsDraft === null
+        ? snapshot.userAgentsMd.bytes
+        : new TextEncoder().encode(currentAgents).length) +
+      (snapshot.projectAgentsMd?.bytes ?? 0) +
+      snapshot.rules.reduce(
+        (bytes, rule) =>
+          bytes + (rule.effectiveEnabled && rule.apply === "always" ? rule.bytes : 0),
+        0,
+      );
     const currentBudget = budgetDraft ?? String(snapshot.maxSystemContextBytes);
     return (
       <>
-        <SettingsSection {...setting("harness-mcp")}>
-          <SettingsRow
-            title={<T>Personal AGENTS.md</T>}
-            description={
-              <T>
-                Always-on personal coding preferences projected across every CLI without silent
-                truncation. Oversized blocks degrade cleanly to on-demand tool reads.
-              </T>
-            }
-          >
-            <Button
-              size="sm"
-              disabled={!editable || busy || agentsDraft === null}
-              onClick={async () => {
-                setBusy(true);
-                const res = await saveAgentsMd({
-                  environmentId,
-                  input: { body: currentAgents, ...wsInput },
-                });
-                setBusy(false);
-                if (res._tag === "Success") {
-                  setOverrideSnapshot(res.value);
-                  setAgentsDraft(null);
-                  toastManager.add({ type: "success", title: gt("Personal AGENTS.md saved") });
-                } else if (!isAtomCommandInterrupted(res)) {
-                  toastManager.add({
-                    type: "error",
-                    title: gt("Could not save AGENTS.md"),
-                    description: formatError(squashAtomCommandFailure(res), gt("Try again.")),
-                  });
-                }
-              }}
+        <SettingsSection title={gt("AGENTS.md")}>
+          <div className="grid gap-2 p-4 text-sm">
+            <label>
+              {gt("Always-on source text · {used} bytes against a {limit}-byte budget", {
+                used: contextBytes,
+                limit: snapshot.maxSystemContextBytes,
+              })}
+              <progress
+                className="block w-full"
+                value={contextBytes}
+                max={snapshot.maxSystemContextBytes}
+              />
+            </label>
+            {snapshot.userAgentsMd.body ? (
+              <pre className="whitespace-pre-wrap">{snapshot.userAgentsMd.body}</pre>
+            ) : null}
+            {snapshot.projectAgentsMd?.exists ? (
+              <details>
+                <summary>{snapshot.projectAgentsMd.path}</summary>
+                <pre className="whitespace-pre-wrap">{snapshot.projectAgentsMd.body}</pre>
+              </details>
+            ) : null}
+          </div>
+          <details>
+            <summary className="cursor-pointer px-4 py-2 text-sm">
+              <T>Edit personal AGENTS.md and budget</T>
+            </summary>
+            <SettingsRow
+              title={<T>Personal AGENTS.md</T>}
+              description={
+                <T>
+                  Always-on personal coding preferences projected across every CLI without silent
+                  truncation. Oversized blocks degrade cleanly to on-demand tool reads.
+                </T>
+              }
             >
-              <SaveIcon className="size-3.5" aria-hidden />
-              <T>Save AGENTS.md</T>
-            </Button>
-          </SettingsRow>
-          <div className="space-y-3 px-4 pb-4">
-            <Textarea
-              rows={6}
-              disabled={!editable || busy}
-              value={currentAgents}
-              placeholder={gt("Write personal cross-CLI rules in Markdown...")}
-              onChange={(event) => setAgentsDraft(event.target.value)}
-            />
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-              <span>{gt("Inline context budget (bytes):")}</span>
-              <div className="flex items-center gap-2">
-                <Input
-                  type="number"
-                  className="w-28"
-                  disabled={!editable || busy}
-                  value={currentBudget}
-                  onChange={(event) => setBudgetDraft(event.target.value)}
-                />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!editable || busy || budgetDraft === null}
-                  onClick={async () => {
-                    const parsed = Number.parseInt(currentBudget, 10);
-                    if (!Number.isFinite(parsed) || parsed < 1024) {
-                      toastManager.add({
-                        type: "error",
-                        title: gt("Budget must be at least 1024 bytes"),
-                      });
-                      return;
-                    }
-                    setBusy(true);
-                    const res = await updateSettings({
-                      environmentId,
-                      input: { maxSystemContextBytes: PositiveInt.make(parsed), ...wsInput },
+              <Button
+                size="sm"
+                disabled={!editable || busy || agentsDraft === null}
+                onClick={async () => {
+                  setBusy(true);
+                  const res = await saveAgentsMd({
+                    environmentId,
+                    input: { body: currentAgents, ...wsInput },
+                  });
+                  setBusy(false);
+                  if (res._tag === "Success") {
+                    setOverrideSnapshot(res.value);
+                    setAgentsDraft(null);
+                    toastManager.add({ type: "success", title: gt("Personal AGENTS.md saved") });
+                  } else if (!isAtomCommandInterrupted(res)) {
+                    toastManager.add({
+                      type: "error",
+                      title: gt("Could not save AGENTS.md"),
+                      description: formatError(squashAtomCommandFailure(res), gt("Try again.")),
                     });
-                    setBusy(false);
-                    if (res._tag === "Success") {
-                      setOverrideSnapshot(res.value);
-                      setBudgetDraft(null);
-                      toastManager.add({ type: "success", title: gt("Context budget updated") });
-                    }
-                  }}
-                >
-                  <T>Update budget</T>
-                </Button>
+                  }
+                }}
+              >
+                <SaveIcon className="size-3.5" aria-hidden />
+                <T>Save AGENTS.md</T>
+              </Button>
+            </SettingsRow>
+            <div className="space-y-3 px-4 pb-4">
+              <Textarea
+                rows={6}
+                disabled={!editable || busy}
+                value={currentAgents}
+                placeholder={gt("Write personal cross-CLI rules in Markdown...")}
+                onChange={(event) => setAgentsDraft(event.target.value)}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>{gt("Inline context budget (bytes):")}</span>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    aria-label={gt("Context budget in bytes")}
+                    disabled={!editable || busy}
+                    value={currentBudget}
+                    onChange={(event) => setBudgetDraft(event.target.value)}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!editable || busy || budgetDraft === null}
+                    onClick={async () => {
+                      const parsed = Number.parseInt(currentBudget, 10);
+                      if (!Number.isFinite(parsed) || parsed < 1024) {
+                        toastManager.add({
+                          type: "error",
+                          title: gt("Budget must be at least 1024 bytes"),
+                        });
+                        return;
+                      }
+                      setBusy(true);
+                      const res = await updateSettings({
+                        environmentId,
+                        input: { maxSystemContextBytes: PositiveInt.make(parsed), ...wsInput },
+                      });
+                      setBusy(false);
+                      if (res._tag === "Success") {
+                        setOverrideSnapshot(res.value);
+                        setBudgetDraft(null);
+                        toastManager.add({ type: "success", title: gt("Context budget updated") });
+                      }
+                    }}
+                  >
+                    <T>Update budget</T>
+                  </Button>
+                </div>
               </div>
             </div>
-          </div>
+          </details>
         </SettingsSection>
 
-        <SettingsSection {...setting("harness-mcp")}>
+        <SettingsSection {...setting("harness-rules")}>
           <SettingsRow
             title={<T>Conditional Rules (rules/*.md)</T>}
             description={
@@ -767,14 +846,19 @@ export function HarnessLibraryPanels({
               </T>
             }
           >
-            <Button
-              size="sm"
-              disabled={!editable || busy}
-              onClick={() => setRuleModal({ mode: "add" })}
-            >
-              <PlusIcon className="size-3.5" aria-hidden />
-              <T>Add Rule</T>
-            </Button>
+            <details>
+              <summary className="cursor-pointer text-xs text-muted-foreground">
+                <T>Manual configuration</T>
+              </summary>
+              <Button
+                size="sm"
+                disabled={!editable || busy}
+                onClick={() => setRuleModal({ mode: "add" })}
+              >
+                <PlusIcon className="size-3.5" aria-hidden />
+                <T>Add Rule</T>
+              </Button>
+            </details>
           </SettingsRow>
           {snapshot.rules.length === 0 ? (
             <p className="px-4 py-4 text-sm text-muted-foreground">
@@ -808,9 +892,11 @@ export function HarnessLibraryPanels({
                     {rule.description ? (
                       <p className="text-xs text-muted-foreground">{rule.description}</p>
                     ) : null}
+                    <ContextSource body={rule.body} />
                   </div>
                   <div className="flex items-center gap-2">
                     <Switch
+                      aria-label={gt("Toggle {id}", { id: rule.id })}
                       checked={rule.enabled}
                       disabled={!editable || busy || rule.lockedByPolicy === true}
                       onCheckedChange={async (checked) => {
@@ -887,7 +973,7 @@ export function HarnessLibraryPanels({
   if (activeTab === "commands") {
     return (
       <>
-        <SettingsSection {...setting("harness-mcp")}>
+        <SettingsSection {...setting("harness-commands")}>
           <SettingsRow
             title={<T>Custom Slash Commands</T>}
             description={
@@ -897,14 +983,19 @@ export function HarnessLibraryPanels({
               </T>
             }
           >
-            <Button
-              size="sm"
-              disabled={!editable || busy}
-              onClick={() => setCommandModal({ mode: "add" })}
-            >
-              <PlusIcon className="size-3.5" aria-hidden />
-              <T>Add Command</T>
-            </Button>
+            <details>
+              <summary className="cursor-pointer text-xs text-muted-foreground">
+                <T>Manual configuration</T>
+              </summary>
+              <Button
+                size="sm"
+                disabled={!editable || busy}
+                onClick={() => setCommandModal({ mode: "add" })}
+              >
+                <PlusIcon className="size-3.5" aria-hidden />
+                <T>Add Command</T>
+              </Button>
+            </details>
           </SettingsRow>
           {snapshot.commands.length === 0 ? (
             <p className="px-4 py-4 text-sm text-muted-foreground">
@@ -932,9 +1023,11 @@ export function HarnessLibraryPanels({
                     {cmd.description ? (
                       <p className="text-xs text-muted-foreground">{cmd.description}</p>
                     ) : null}
+                    <ContextSource body={cmd.body} />
                   </div>
                   <div className="flex items-center gap-2">
                     <Switch
+                      aria-label={gt("Toggle {id}", { id: cmd.id })}
                       checked={cmd.enabled}
                       disabled={!editable || busy}
                       onCheckedChange={async (checked) => {
@@ -1023,7 +1116,7 @@ export function HarnessLibraryPanels({
 
   return (
     <>
-      <SettingsSection {...setting("harness-mcp")}>
+      <SettingsSection {...setting("harness-transfer")}>
         <SettingsRow
           title={<T>Import Skills, Rules & Commands</T>}
           description={
@@ -1165,7 +1258,7 @@ export function HarnessLibraryPanels({
         ) : null}
       </SettingsSection>
 
-      <SettingsSection {...setting("harness-mcp")}>
+      <SettingsSection title={gt("CLI export")}>
         <SettingsRow
           title={<T>Reverse Export to Native CLI</T>}
           description={
@@ -1740,7 +1833,16 @@ function ModeEditorDialog({
   state,
   onClose,
   onSave,
+  environmentId,
+  workspaceRoot,
+  rules,
+  skills,
 }: {
+  environmentId: EnvironmentId;
+  workspaceRoot: string | undefined;
+  rules: readonly HarnessRuleId[];
+  skills: readonly HarnessSkillId[];
+
   readonly state:
     | null
     | { readonly mode: "add" }
@@ -1763,6 +1865,10 @@ function ModeEditorDialog({
     <Dialog open={state !== null} onOpenChange={(open) => !open && onClose()}>
       {state !== null ? (
         <ModeEditorDialogBody
+          environmentId={environmentId}
+          workspaceRoot={workspaceRoot}
+          rules={rules}
+          skills={skills}
           key={state.mode === "edit" ? state.item.id : "new-mode"}
           existing={state.mode === "edit" ? state.item : null}
           onClose={onClose}
@@ -1777,7 +1883,16 @@ function ModeEditorDialogBody({
   existing,
   onClose,
   onSave,
+  environmentId,
+  workspaceRoot,
+  rules,
+  skills,
 }: {
+  environmentId: EnvironmentId;
+  workspaceRoot: string | undefined;
+  rules: readonly HarnessRuleId[];
+  skills: readonly HarnessSkillId[];
+
   readonly existing: HarnessModeEntry | null;
   readonly onClose: () => void;
   readonly onSave: (payload: {
@@ -1802,15 +1917,15 @@ function ModeEditorDialogBody({
   );
   const [readonlyMode, setReadonlyMode] = useState(existing?.readonly ?? false);
   const [proposePlan, setProposePlan] = useState(existing?.proposePlan ?? false);
-  const [allowedMcpText, setAllowedMcpText] = useState(
-    existing?.allowedMcpServers?.join(", ") ?? "",
+  const servers = useEnvironmentQuery(
+    harnessEnvironment.listMcpQuery({
+      environmentId,
+      input: workspaceRoot ? { workspaceRoot } : {},
+    }),
   );
-  const [includedRulesText, setIncludedRulesText] = useState(
-    existing?.includedRules?.join(", ") ?? "",
-  );
-  const [includedSkillsText, setIncludedSkillsText] = useState(
-    existing?.includedSkills?.join(", ") ?? "",
-  );
+  const [allowedMcpServers, setServers] = useState(existing?.allowedMcpServers ?? []);
+  const [includedRules, setRules] = useState(existing?.includedRules ?? []);
+  const [includedSkills, setSkills] = useState(existing?.includedSkills ?? []);
   const [body, setBody] = useState(existing?.body ?? "");
 
   return (
@@ -1877,34 +1992,24 @@ function ModeEditorDialogBody({
               <span>{gt("Propose plan")}</span>
             </label>
           </div>
-          <div className="space-y-1">
-            <label className="text-xs font-medium">
-              {gt("Allowed MCP Servers (comma separated, blank = all)")}
-            </label>
-            <Input
-              value={allowedMcpText}
-              placeholder={gt("github, linear")}
-              onChange={(e) => setAllowedMcpText(e.target.value)}
-            />
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1">
-              <label className="text-xs font-medium">{gt("Force-included Rules")}</label>
-              <Input
-                value={includedRulesText}
-                placeholder="security-policy"
-                onChange={(e) => setIncludedRulesText(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium">{gt("Force-included Skills")}</label>
-              <Input
-                value={includedSkillsText}
-                placeholder="code-review"
-                onChange={(e) => setIncludedSkillsText(e.target.value)}
-              />
-            </div>
-          </div>
+          <BindingPicker
+            label={gt("Allowed MCP servers (none selected allows all)")}
+            values={allowedMcpServers}
+            options={servers.data?.servers.map((server) => server.id) ?? []}
+            onChange={setServers}
+          />
+          <BindingPicker
+            label={gt("Force-included Rules")}
+            values={includedRules}
+            options={rules}
+            onChange={setRules}
+          />
+          <BindingPicker
+            label={gt("Force-included Skills")}
+            values={includedSkills}
+            options={skills}
+            onChange={setSkills}
+          />
           <div className="space-y-1">
             <label className="text-xs font-medium">{gt("System Prompt (Markdown)")}</label>
             <Textarea
@@ -1932,15 +2037,6 @@ function ModeEditorDialogBody({
               });
               return;
             }
-            const parseList = (raw: string) =>
-              raw
-                .split(/[,\n]+/u)
-                .map((item) => item.trim())
-                .filter(Boolean)
-                .map((item) => TrimmedNonEmptyString.make(item));
-            const allowedMcpServers = parseList(allowedMcpText);
-            const includedRules = parseList(includedRulesText);
-            const includedSkills = parseList(includedSkillsText);
             void onSave({
               id: decoded.value,
               ...(name.trim() ? { name: TrimmedNonEmptyString.make(name.trim()) } : {}),
@@ -1959,5 +2055,53 @@ function ModeEditorDialogBody({
         </Button>
       </DialogFooter>
     </DialogPopup>
+  );
+}
+
+function BindingPicker<Id extends string>({
+  label,
+  values,
+  options,
+  onChange,
+}: {
+  label: string;
+  values: readonly Id[];
+  options: readonly Id[];
+  onChange: (values: readonly Id[]) => void;
+}) {
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-xs font-medium">{label}</legend>
+      <div className="flex flex-wrap gap-2">
+        {Array.from(new Set([...options, ...values])).map((id) => (
+          <label key={id} className="flex items-center gap-1 text-xs">
+            <Checkbox
+              checked={values.includes(id)}
+              onCheckedChange={(checked) =>
+                onChange(checked ? [...values, id] : values.filter((value) => value !== id))
+              }
+            />
+            {id}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
+function ContextSource({ body }: { body: string }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!body) return null;
+  return (
+    <details onToggle={(event) => setExpanded(event.currentTarget.open)}>
+      <summary className="cursor-pointer text-xs text-muted-foreground">
+        <T>Read instructions</T>
+      </summary>
+      {expanded ? (
+        <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words py-2 text-sm">
+          {body}
+        </pre>
+      ) : null}
+    </details>
   );
 }

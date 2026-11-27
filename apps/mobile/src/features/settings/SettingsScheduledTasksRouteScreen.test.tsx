@@ -128,8 +128,19 @@ vi.mock("../../state/server", () => ({
     upsertScheduledTask: { permissionAtom: () => Atom.make(true) },
   },
 }));
+vi.mock("../../state/harness", () => ({ harnessEnvironment: { libraryQuery: () => "library" } }));
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: () => ({ data: { tasks: mocks.tasks, threads: [] } }),
+  useEnvironmentQuery: (query: unknown) => ({
+    data:
+      query === "library"
+        ? {
+            modes: [
+              { id: "triage", name: "Triage", effectiveEnabled: true },
+              { id: "retired", name: "Retired", effectiveEnabled: false },
+            ],
+          }
+        : { tasks: mocks.tasks, threads: [] },
+  }),
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => mocks.upsert }));
 vi.mock("../../state/queries", () => ({
@@ -205,6 +216,14 @@ function button(label: string) {
   return element;
 }
 describe("scheduled task batched edits", () => {
+  it("saves a custom enabled Harness mode from the selected environment", async () => {
+    expect(container.textContent).not.toContain("Select Retired");
+    act(() => button("Select Triage").click());
+    await act(async () => button("Save changes").click());
+    expect(mocks.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ input: expect.objectContaining({ modeId: "triage" }) }),
+    );
+  });
   it("submits the selected interval when saved before React commits", async () => {
     await act(async () => {
       button("Interval").click();

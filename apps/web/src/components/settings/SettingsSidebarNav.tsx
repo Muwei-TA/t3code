@@ -1,3 +1,4 @@
+import { validateSettingsScopeSearch } from "./settingsScope";
 import {
   lazy,
   Suspense,
@@ -26,6 +27,7 @@ import {
   MicIcon,
   PaletteIcon,
   PlugIcon,
+  ClockIcon,
   SearchIcon,
   ServerIcon,
   Settings2Icon,
@@ -103,7 +105,9 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/keybindings": KeyboardIcon,
   "/settings/snap-shot": SnapShotIcon,
   "/settings/providers": BotIcon,
-  "/settings/harness": PlugIcon,
+  "/settings/sync": PlugIcon,
+  "/harness": PlugIcon,
+  "/automations": ClockIcon,
   "/settings/threads": MessagesSquareIcon,
   "/settings/browser": GlobeIcon,
   "/settings/devices": SmartphoneIcon,
@@ -227,9 +231,12 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     }
     void navigate({
       to: item.to,
+      ...(item.tab
+        ? { search: (previous) => ({ ...validateSettingsScopeSearch(previous), tab: item.tab }) }
+        : {}),
       hash: targetId,
       replace: true,
-      hashScrollIntoView: false,
+      hashScrollIntoView: item.to === "/harness",
       state: { settingsTargetHighlight: true },
     });
   };

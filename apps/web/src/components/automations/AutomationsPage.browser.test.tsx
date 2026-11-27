@@ -27,6 +27,31 @@ const environments = ["Laptop", "Server"].map((label) => ({
   },
 }));
 
+const definitions = Atom.make(
+  AsyncResult.success({
+    directory: "/workflows",
+    single: false,
+    problems: [],
+    revision: 1,
+    problem: null,
+    files: [
+      {
+        name: "review.yaml",
+        source: "steps:\n  - id: inspect-changes",
+        workflows: ["review@1"],
+        problems: [],
+      },
+    ],
+  }),
+);
+const workflows = Atom.make(
+  AsyncResult.success({
+    workflows: [{ name: "review", version: 1, triggers: [] }],
+    runs: [],
+    questions: [],
+  }),
+);
+
 const decodeScheduledTask = Schema.decodeSync(ScheduledTask);
 const tasks = new Map(
   environments.map(({ environmentId, label }) => {
@@ -58,7 +83,12 @@ const tasks = new Map(
 
 vi.mock(import("../../state/environments"), async (original) => ({
   ...(await original()),
+  useConnectedEnvironmentIds: () => environments.map((env) => env.environmentId),
   useEnvironments: () => ({ environments }) as never,
+}));
+
+vi.mock("../workflows/useWorkflowEnvironmentIds", () => ({
+  useWorkflowEnvironmentIds: () => environments.map((env) => env.environmentId),
 }));
 
 vi.mock(import("../../state/server"), async (original) => {
@@ -67,6 +97,12 @@ vi.mock(import("../../state/server"), async (original) => {
     ...actual,
     serverEnvironment: {
       ...actual.serverEnvironment,
+      saveWorkflowDefinition: {
+        ...actual.serverEnvironment.saveWorkflowDefinition,
+        permissionAtom: () => Atom.make(true),
+      },
+      workflowsLive: () => workflows,
+      workflowDefinition: () => definitions,
       scheduledTasksLive: ({ environmentId }: { environmentId: EnvironmentId }) =>
         tasks.get(environmentId)!,
     },
@@ -105,4 +141,11 @@ it("filters scheduled tasks by environment from the Automations route", async ()
     .toBeVisible();
   await expect.element(screen.getByText("Server reminder")).toBeVisible();
   await expect.element(screen.getByText("Laptop reminder")).not.toBeInTheDocument();
+  await screen.getByRole("button", { name: "Workflows", exact: true }).click();
+  await expect.element(screen.getByText("inspect-changes")).toBeVisible();
+  await expect.element(screen.getByText("Validate YAML", { exact: true })).not.toBeVisible();
+  await screen.getByRole("button", { name: "Create Workflow with Agent" }).click();
+  await expect
+    .element(page.getByRole("textbox", { name: "Paste a link or describe the change" }))
+    .toBeVisible();
 });
