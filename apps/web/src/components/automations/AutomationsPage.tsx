@@ -263,7 +263,7 @@ export function AutomationsPage() {
               </div>
 
               {environmentId && workflows.data ? (
-                <section className="grid gap-3">
+                <section className="grid min-w-0 grid-cols-1 gap-3">
                   <h2 className="font-semibold">
                     <T>Workflows</T>
                   </h2>

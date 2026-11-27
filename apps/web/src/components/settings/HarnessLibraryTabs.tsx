@@ -723,7 +723,7 @@ export function HarnessLibraryPanels({
     return (
       <>
         <SettingsSection title={gt("AGENTS.md")}>
-          <div className="grid gap-2 p-4 text-sm">
+          <div className="flex min-w-0 flex-col gap-2 p-4 text-sm">
             <label>
               {gt("Always-on source text · {used} bytes against a {limit}-byte budget", {
                 used: contextBytes,

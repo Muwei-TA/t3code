@@ -145,7 +145,7 @@ export function HarnessAgentAction({
             <DialogTitle>{label}</DialogTitle>
           </DialogHeader>
           <DialogPanel>
-            <div className="grid gap-4">
+            <div className="flex min-w-0 flex-col gap-4">
               {error ? (
                 <p role="alert" className="text-sm text-destructive">
                   {error}
@@ -187,7 +187,7 @@ export function HarnessAgentAction({
                       <T>Plugin</T>
                     </Button>
                   </div>
-                  <label>
+                  <label className="flex min-w-0 flex-col gap-2">
                     <T>Directory on the selected server</T>
                     <Input value={path} onChange={(e) => setPath(e.target.value)} />
                   </label>
@@ -210,7 +210,7 @@ export function HarnessAgentAction({
                 </>
               ) : (
                 <>
-                  <label className="grid gap-2">
+                  <label className="flex min-w-0 flex-col gap-2">
                     <T>Paste a link or describe the change</T>
                     <Textarea
                       value={request}
@@ -219,7 +219,9 @@ export function HarnessAgentAction({
                     />
                   </label>
                   {project ? (
-                    <p className="text-xs text-muted-foreground">{project.workspaceRoot}</p>
+                    <p className="break-all font-mono text-xs text-muted-foreground">
+                      {project.workspaceRoot}
+                    </p>
                   ) : (
                     <p>
                       <T>Add a project on this server to open an agent thread.</T>

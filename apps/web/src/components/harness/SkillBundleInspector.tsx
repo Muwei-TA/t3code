@@ -126,7 +126,7 @@ export function SkillBundleInspector({
           <T>The server returned a partial file tree.</T>
         </p>
       ) : null}
-      <div className="grid gap-4 sm:grid-cols-[minmax(10rem,1fr)_minmax(0,3fr)]">
+      <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-[minmax(10rem,1fr)_minmax(0,3fr)]">
         <FileTree files={files} prefix="" selected={selected.relativePath} onSelect={setPath} />
         <div className="min-w-0 space-y-2">
           <p className="break-all font-mono text-xs">{selected.relativePath}</p>

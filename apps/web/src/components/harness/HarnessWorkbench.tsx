@@ -103,7 +103,7 @@ function HarnessContent({ tab }: { tab: HarnessDomain | "sync" }) {
   return (
     <div
       key={JSON.stringify([environmentId, workspaceRoot, revision])}
-      className="grid min-w-0 gap-5"
+      className="flex min-w-0 flex-col gap-5"
     >
       {tab === "sync" ? (
         <>
