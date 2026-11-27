@@ -9,10 +9,12 @@ import * as Schema from "effect/Schema";
 import { Command } from "effect/cli";
 
 const brandEntries = [
+  "apps/server/src/auth/McpOAuth.ts",
   "apps/server/src/binCli.ts",
   "apps/server/src/config.ts",
   "apps/server/src/os-jank.ts",
   "apps/server/src/provider/ModelManifest.ts",
+  "apps/server/src/serverRuntimeStartup.ts",
   "apps/server/src/telemetry/AnalyticsService.ts",
   "apps/server/src/cli/config.ts",
   "apps/server/src/cli/install.ts",
