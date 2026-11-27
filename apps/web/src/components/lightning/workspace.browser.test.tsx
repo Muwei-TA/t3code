@@ -224,6 +224,9 @@ it("transitions composer telemetry across waiting, typing, sending, running, and
 
   await screen.rerender(composer(true, true));
   expect(screen.container.querySelector("[data-lightning-thinking-pill]")).not.toBeNull();
+  const thinkingLabel = screen.getByText("Thinking", { exact: true });
+  await expect.element(thinkingLabel).toBeVisible();
+  expect(thinkingLabel.element().getAnimations()).toHaveLength(0);
   expect(screen.container.querySelector("[data-lightning-energy-wave='voice']")).not.toBeNull();
   expect(
     screen.container

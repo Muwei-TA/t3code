@@ -1059,22 +1059,7 @@ html[data-theme-id="lightning"]
 }
 
 .lightning-thinking-text {
-  background-image: linear-gradient(
-    105deg,
-    #9ca3af 0%,
-    #a1a1aa 32%,
-    #fff4d6 48%,
-    #ffb44c 55%,
-    #a1a1aa 70%,
-    #9ca3af 100%
-  );
-  background-size: 240% 100%;
-  background-position: 100% 0;
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent;
-  animation: lightning-thinking-shimmer 2.4s ease-in-out infinite;
-  animation-play-state: var(--visible-animation-state, paused);
+  color: #e4e4e7;
 }
 
 @keyframes lightning-led-step {
@@ -1085,15 +1070,6 @@ html[data-theme-id="lightning"]
   16.66%,
   100% {
     opacity: 0;
-  }
-}
-
-@keyframes lightning-thinking-shimmer {
-  0% {
-    background-position: 115% 0;
-  }
-  100% {
-    background-position: -15% 0;
   }
 }
 
@@ -1115,7 +1091,6 @@ html[data-theme-id="lightning"]
   .lightning-wave-band,
   .lightning-wave-spark,
   .lightning-led-frame,
-  .lightning-thinking-text,
   .lightning-wordmark-glow {
     animation: none;
   }
@@ -1147,7 +1122,6 @@ html[data-theme-id="lightning"]
     opacity: 1;
   }
 
-  .lightning-thinking-text,
   .lightning-wordmark-glow {
     background-position: 50% 0;
   }
