@@ -329,10 +329,10 @@
 
     @variant lightning-light {
       --color-screen: #fafafc;
-      --color-sheet: rgba(241, 242, 246, 0.98);
-      --color-sheet-solid: #f1f2f6;
+      --color-sheet: rgba(246, 247, 250, 0.98);
+      --color-sheet-solid: #f6f7fa;
       --color-card: #ffffff;
-      --color-grouped-card: #f1f2f6;
+      --color-grouped-card: #ebedf3;
       --color-card-alt: #f8f9fc;
       --color-card-translucent: rgba(255, 255, 255, 0.8);
       --color-thread-canvas: #fafafc;
@@ -342,7 +342,7 @@
       --color-thread-hover: #e9ecf3;
       --color-row-hover: #eceef4;
       --color-composer-panel: rgba(250, 250, 252, 0.88);
-      --color-composer-surface: rgba(241, 242, 246, 0.94);
+      --color-composer-surface: rgba(235, 237, 243, 0.94);
       --color-composer-border: rgba(226, 229, 238, 0.8);
       --color-foreground: #0f1117;
       --color-foreground-secondary: #525866;
@@ -352,8 +352,8 @@
       --color-focus: #2563eb;
       --color-border-subtle: rgba(226, 229, 238, 0.7);
       --color-separator: rgba(226, 229, 238, 0.55);
-      --color-subtle: #f1f2f6;
-      --color-subtle-strong: #f1f2f6;
+      --color-subtle: #ebedf3;
+      --color-subtle-strong: #ebedf3;
       --color-inline-skill-background: #eef2ff;
       --color-inline-skill-border: rgba(37, 99, 235, 0.42);
       --color-inline-skill-foreground: #0f1117;
@@ -361,14 +361,14 @@
       --color-prominent-action: #2563eb;
       --color-prominent-action-foreground: #ffffff;
       --color-primary-foreground: #ffffff;
-      --color-primary-text: #2563eb;
+      --color-primary-text: #2462e7;
       --color-primary-shadow: #000000;
-      --color-secondary: #f1f2f6;
+      --color-secondary: #ebedf3;
       --color-secondary-foreground: #0f1117;
       --color-secondary-border: #e2e5ee;
       --color-switch-active-track: #2563eb;
       --color-switch-active-thumb: #ffffff;
-      --color-switch-inactive-track: #f1f2f6;
+      --color-switch-inactive-track: #ebedf3;
       --color-switch-inactive-thumb: #525866;
       --color-warning: #fef5e7;
       --color-warning-border: rgba(217, 119, 6, 0.32);
@@ -389,14 +389,14 @@
       --color-header-foreground: #0f1117;
       --color-header-border: #e2e5ee;
       --color-glass-surface: rgba(255, 255, 255, 0.74);
-      --color-glass-fallback: rgba(241, 242, 246, 0.94);
+      --color-glass-fallback: rgba(235, 237, 243, 0.94);
       --color-glass-tint: rgba(255, 255, 255, 0.22);
       --color-status-bar: #fafafc;
       --color-md-body: #0f1117;
       --color-md-strong: #0f1117;
       --color-md-link: #2563eb;
       --color-md-blockquote-border: #e2e5ee;
-      --color-md-blockquote-bg: #f1f2f6;
+      --color-md-blockquote-bg: #ebedf3;
       --color-md-code-bg: #f4f5f9;
       --color-md-code-text: #0f1117;
       --color-md-user-code-bg: rgba(15, 17, 23, 0.18);
