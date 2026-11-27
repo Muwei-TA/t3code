@@ -100,12 +100,28 @@ it("accepts case-insensitive directory aliases and recovers orphaned install bac
     }
     const orphanStage = NodePath.join(root, ".install-my-skill-abc123");
     await NodeFSP.mkdir(NodePath.join(orphanStage, "old"), { recursive: true });
+    await NodeFSP.mkdir(NodePath.join(orphanStage, "new"), { recursive: true });
     await NodeFSP.writeFile(NodePath.join(orphanStage, "old", "SKILL.md"), "restored");
+    {
+      using _failRename = vi.spyOn(NodeFSP, "rename").mockRejectedValueOnce(new Error("EIO"));
+      await recoverOrphanedReplace(root, root);
+    }
+    expect(await NodeFSP.readFile(NodePath.join(orphanStage, "old", "SKILL.md"), "utf8")).toBe(
+      "restored",
+    );
     await recoverOrphanedReplace(root, root);
     expect(await NodeFSP.readFile(NodePath.join(root, "my-skill", "SKILL.md"), "utf8")).toBe(
       "restored",
     );
     expect(await NodeFSP.readdir(root)).not.toContain(".install-my-skill-abc123");
+
+    // Post-commit stage (`new` already moved to target) must never resurrect a deleted skill.
+    const committedStage = NodePath.join(root, ".install-deleted-skill-def456");
+    await NodeFSP.mkdir(NodePath.join(committedStage, "old"), { recursive: true });
+    await NodeFSP.writeFile(NodePath.join(committedStage, "old", "SKILL.md"), "obsolete");
+    await recoverOrphanedReplace(root, root);
+    expect(await NodeFSP.readdir(root)).not.toContain("deleted-skill");
+    expect(await NodeFSP.readdir(root)).not.toContain(".install-deleted-skill-def456");
   } finally {
     await NodeFSP.rm(root, { recursive: true, force: true });
   }

@@ -1947,8 +1947,24 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                     }
                     const changes: PullChange[] = [];
                     const finalSizes = new Map<string, number>();
-                    if (skill && previous) {
-                      for (const [name, file] of previous) finalSizes.set(name, file.bytes.length);
+                    if (skill) {
+                      const projectedNames = new Set<string>(previous?.keys() ?? []);
+                      for (const path of paths) {
+                        if (isLockedPath(path)) continue;
+                        const entry = afterEntries.get(path);
+                        if (entry !== undefined && !isRegularSyncEntry(entry)) continue;
+                        const relName = path.slice(group.length + 1);
+                        if (entry === undefined) projectedNames.delete(relName);
+                        else projectedNames.add(relName);
+                      }
+                      if (projectedNames.size > 512) {
+                        skipGroup(group, paths);
+                        return;
+                      }
+                      if (previous) {
+                        for (const [name, file] of previous)
+                          finalSizes.set(name, file.bytes.length);
+                      }
                     }
                     let incomingBytes = 0;
                     for (const path of paths) {

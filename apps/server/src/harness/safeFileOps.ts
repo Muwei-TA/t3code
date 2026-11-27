@@ -291,13 +291,27 @@ export async function recoverOrphanedReplace(root: string, parentDir: string): P
     if (!match?.[1]) continue;
     const stageDir = NodePath.join(safeParent, entry.name);
     const oldDir = NodePath.join(stageDir, "old");
+    const newDir = NodePath.join(stageDir, "new");
     const targetDir = NodePath.join(safeParent, match[1]);
     const oldStat = await statIfPresent(oldDir);
-    if (!oldStat || oldStat.isSymbolicLink() || !oldStat.isDirectory()) continue;
+    const newStat = await statIfPresent(newDir);
+    if (!oldStat || oldStat.isSymbolicLink() || !oldStat.isDirectory()) {
+      await NodeFSP.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+      continue;
+    }
+    // `new` disappears atomically when `rename(staged, target)` commits; without it, `old` is an obsolete post-commit backup.
+    if (newStat === null) {
+      await NodeFSP.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+      continue;
+    }
     if ((await statIfPresent(targetDir)) !== null) continue;
-    await assertContainedNoSymlinks(root, oldDir);
-    await assertContainedNoSymlinks(root, targetDir);
-    await NodeFSP.rename(oldDir, targetDir).catch(() => {});
+    try {
+      await assertContainedNoSymlinks(root, oldDir);
+      await assertContainedNoSymlinks(root, targetDir);
+      await NodeFSP.rename(oldDir, targetDir);
+    } catch {
+      continue;
+    }
     await NodeFSP.rm(stageDir, { recursive: true, force: true }).catch(() => {});
   }
 }

@@ -891,6 +891,13 @@ describe("HarnessSyncService", () => {
         const localSkill = path.join(paths.harnessDir, "skills", "bulk");
         expect(yield* fs.exists(path.join(localSkill, "b", "f-510.md"))).toBe(true);
         expect(yield* fs.exists(path.join(localSkill, "a"))).toBe(false);
+
+        // Adding a 513th empty file must skip the entire package before reading blobs.
+        yield* fs.writeFileString(path.join(skillDir, "b", "overflow.md"), "");
+        yield* push;
+        const oversized = yield* sync.pull();
+        expect(oversized.skippedFiles).toContain("skills/bulk/b/overflow.md");
+        expect(yield* fs.exists(path.join(localSkill, "b", "overflow.md"))).toBe(false);
       }).pipe(Effect.provide(makeTestLayer(root, paths)));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
