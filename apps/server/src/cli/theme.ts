@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - publish commits and rollbacks
 // move exact directory entries with rename, which the FileSystem service does
 // not expose atomically.
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 
@@ -171,7 +172,7 @@ export class ThemeTargetMissingError extends Schema.TaggedError<ThemeTargetMissi
   }
 }
 
-const envT3Home = Config.String("T3CODE_HOME").pipe(Config.option);
+const envT3Home = Config.String(LIGHTNING_BRAND.homeEnvVar).pipe(Config.option);
 const DEV_STATE_PLACEHOLDER_URL = new URL("http://localhost");
 
 const hasLiveServer = (statePath: string) =>

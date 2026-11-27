@@ -73,7 +73,7 @@ const emptyBackendObservabilitySettings: BackendObservabilitySettings = {
 };
 
 const DESKTOP_BACKEND_ENV_NAMES = [
-  "T3CODE_PORT",
+  "LIGHTNING_CODE_PORT",
   "T3CODE_MODE",
   "T3CODE_NO_BROWSER",
   "T3CODE_HOST",
@@ -88,7 +88,7 @@ const DESKTOP_BACKEND_ENV_NAMES = [
 const WSL_FORWARDED_ENV_NAMES = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
-  "T3CODE_TELEMETRY_ENABLED",
+  "LIGHTNING_CODE_TELEMETRY_ENABLED",
   "T3CODE_FEATURE_FLAGS",
   // Otherwise the WSL server keeps exporting to endpoints from the bootstrap.
   "T3CODE_OTEL_SDK_DISABLED",
@@ -423,7 +423,7 @@ const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(f
 
   if (input.runtimeArchive !== null) {
     // Staged runtimes bundle Node and node-pty; provider PATH discovery must not require them.
-    // Probe first: the runtime cache lives under the login shell's T3CODE_HOME.
+    // Probe first: the runtime cache lives under the login shell's LIGHTNING_CODE_HOME.
     const stagedProbe = yield* wslEnv.probeRuntime(runningDistro);
     if (stagedProbe.ok) {
       const runtime = yield* wslEnv.prepareRuntime(
@@ -573,7 +573,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         ...backendChildEnvPatch(),
         ELECTRON_RUN_AS_NODE: "1",
         T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
-        T3CODE_CLI_PATH: Option.getOrUndefined(input.cliPath),
+        LIGHTNING_CODE_CLI_PATH: Option.getOrUndefined(input.cliPath),
         [DESKTOP_HOST_SCOPE_ENV]: input.hostScope,
       },
       extendEnv: true,
@@ -683,7 +683,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
 
   const parentEnvWithoutT3Home: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(env)) {
-    if (key === "T3CODE_HOME") continue;
+    if (key === "LIGHTNING_CODE_HOME") continue;
     parentEnvWithoutT3Home[key] = value;
   }
   const wslEnv = mergeWslEnv(parentEnvWithoutT3Home.WSLENV, forwardedEnvNames);
@@ -699,7 +699,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       ...forwardedEnv,
       ...(wslEnv !== undefined ? { WSLENV: wslEnv } : {}),
     },
-    // env already excludes T3CODE_HOME; merging the host env would restore it.
+    // env already excludes LIGHTNING_CODE_HOME; merging the host env would restore it.
     extendEnv: false,
     bootstrap,
     bootstrapDelivery: "stdin" as const,
@@ -749,7 +749,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       "--exec",
       "env",
       `PATH=${launchPath}`,
-      ...(preflight.t3Home === null ? [] : [`T3CODE_HOME=${preflight.t3Home}`]),
+      ...(preflight.t3Home === null ? [] : [`LIGHTNING_CODE_HOME=${preflight.t3Home}`]),
       ...command,
       "--bootstrap-fd",
       "0",

@@ -1,3 +1,4 @@
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import { doctorCommand } from "./cli/doctor.ts";
 import { policyCommand } from "./cli/policy.ts";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -62,7 +63,7 @@ const connectUnavailableCommand = Command.make("connect", {
   Command.withHandler(() =>
     Effect.fail(
       new CliError.ShowHelp({
-        commandPath: ["t3", "connect"],
+        commandPath: [LIGHTNING_BRAND.cliCommand, "connect"],
         errors: [new ConnectPublicConfigMissingError({ cause: connectPublicConfigMissingMessage })],
       }),
     ),
@@ -70,16 +71,18 @@ const connectUnavailableCommand = Command.make("connect", {
 );
 
 export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
-  Command.make("t3", { ...sharedServerCommandFlags }).pipe(
+  Command.make(LIGHTNING_BRAND.cliCommand, { ...sharedServerCommandFlags }).pipe(
     Command.withDescription(
-      "Run T3 Code in this terminal and open it in your browser. To use it from your other devices, run `t3 up`.",
+      `Run ${LIGHTNING_BRAND.baseName} in this terminal and open it in your browser. To use it from your other devices, run \`${LIGHTNING_BRAND.cliCommand} up\`.`,
     ),
     Command.withHandler(runDefaultServerCommand),
     Command.withSubcommands([
       Command.make("help").pipe(
         Command.withDescription("Show command help."),
         Command.withHandler(() =>
-          Effect.fail(new CliError.ShowHelp({ commandPath: ["t3"], errors: [] })),
+          Effect.fail(
+            new CliError.ShowHelp({ commandPath: [LIGHTNING_BRAND.cliCommand], errors: [] }),
+          ),
         ),
       ),
       acpMcpBridgeCommand,

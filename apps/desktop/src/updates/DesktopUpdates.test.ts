@@ -116,6 +116,20 @@ describe("DesktopUpdates", () => {
     }),
   );
 
+  it.effect("ignores an inherited package update feed until a Lightning feed is configured", () => {
+    const harness = makeHarness({
+      env: { T3CODE_DESKTOP_MOCK_UPDATES: "false" },
+      appUpdateYml: "provider: github\nowner: pingdotgg\nrepo: t3code",
+    });
+    return Effect.gen(function* () {
+      const updates = yield* DesktopUpdates.DesktopUpdates;
+      yield* updates.configure;
+      assert.isFalse((yield* updates.getState).enabled);
+      assert.equal(harness.checkCount(), 0);
+      assert.isEmpty(harness.feedUrls());
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
   it.effect("keeps the disabled reason available after configuration and channel changes", () => {
     const harness = makeHarness({ env: { T3CODE_DISABLE_AUTO_UPDATE: "true" } });
     const reason = "Automatic updates are disabled by the T3CODE_DISABLE_AUTO_UPDATE setting.";

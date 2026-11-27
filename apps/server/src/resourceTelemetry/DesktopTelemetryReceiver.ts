@@ -244,7 +244,10 @@ export function makeApplyDesktopShellEnvironmentSnapshot(
         return false;
       });
     }
-    applyShellEnvironment(environment, message.environment, platform);
+    const { T3CODE_TELEMETRY_ENABLED: consent, ...patch } = message.environment;
+    applyShellEnvironment(environment, patch, platform);
+    if (consent === null) delete environment.LIGHTNING_CODE_TELEMETRY_ENABLED;
+    else if (consent !== undefined) environment.LIGHTNING_CODE_TELEMETRY_ENABLED = consent;
     if (message.environment.NODE_EXTRA_CA_CERTS !== undefined) {
       yield* Effect.gen(function* () {
         const certificates = baseCertificates;

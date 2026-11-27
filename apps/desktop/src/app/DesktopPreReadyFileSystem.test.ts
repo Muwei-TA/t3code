@@ -6,14 +6,12 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 
 import * as DesktopPreReadyFileSystem from "./DesktopPreReadyFileSystem.ts";
-import * as DesktopUserData from "./DesktopUserData.ts";
 
 const resolveWindowsUserData = (appDataDirectory: string) =>
-  DesktopUserData.resolveUserDataPath({
-    appDataDirectory,
-    isDevelopment: false,
-    platform: "win32",
-  }).pipe(Effect.provide(DesktopPreReadyFileSystem.layer));
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.exists(`${appDataDirectory}/Local State`)),
+    Effect.provide(DesktopPreReadyFileSystem.layer),
+  );
 
 it.layer(NodeServices.layer)("DesktopPreReadyFileSystem", (it) => {
   it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32" || process.getuid?.() === 0)(

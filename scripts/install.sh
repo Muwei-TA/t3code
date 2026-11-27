@@ -1,25 +1,25 @@
 #!/bin/sh
-# Installs the T3 Code CLI from a GitHub Release archive. Needs only sh, tar,
+# Installs the Lightning Code CLI from a GitHub Release archive. Needs only sh, tar,
 # sha256sum or shasum, and curl or wget; no Node, npm, or compiler.
 #
-#   curl -fsSL https://t3.codes/install.sh | sh
+#   sh scripts/install.sh
 #
 # Environment:
 #   T3CODE_CHANNEL           release train to follow: stable, nightly, or preview
 #                            (default: stable; preview is a maintainers' test train)
 #   T3CODE_VERSION           exact version to install (overrides T3CODE_CHANNEL)
-#   T3CODE_HOME              T3 home directory (default: ~/.t3)
+#   LIGHTNING_CODE_HOME              T3 home directory (default: ~/.lightning-code)
 #   T3CODE_INSTALL_BIN_DIR   where the `t3` command goes (default: ~/.local/bin)
-#   T3CODE_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
+#   LIGHTNING_CODE_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
 #
-# The archive is unpacked into $T3CODE_HOME/runtime/versions/<version>, the
+# The archive is unpacked into $LIGHTNING_CODE_HOME/runtime/versions/<version>, the
 # same layout `t3 service install` uses, so the service reuses this download
 # instead of fetching the release again.
 set -eu
 
-repo="pingdotgg/t3code"
-base_url="${T3CODE_RELEASE_BASE_URL:-https://github.com/${repo}/releases/download}"
-t3_home="${T3CODE_HOME:-$HOME/.t3}"
+repo="Muwei-TA/t3code"
+base_url="${LIGHTNING_CODE_RELEASE_BASE_URL:-https://github.com/${repo}/releases/download}"
+t3_home="${LIGHTNING_CODE_HOME:-$HOME/.lightning-code}"
 case "$t3_home" in
   /*) ;;
   *)
@@ -55,7 +55,7 @@ step() {
 if "$interactive"; then
   printf '\n%s' "$bold" >&2
   printf '  %s\n' '██████████ ████████ ' >&2
-  printf '  %s\n' '    ███       ▄██▀       T3 Code' >&2
+  printf '  %s\n' '    ███       ▄██▀       Lightning Code' >&2
   printf '  %s%s     %sCLI installer%s\n' '    ███       ████▄ ' "$reset" "$muted" "$reset$bold" >&2
   printf '  %s\n' '    ███    ▄     ███' >&2
   printf '  %s\n' '    ███    ███████▀ ' >&2
@@ -171,7 +171,7 @@ case "$(uname -m)" in
   *) fail "unsupported architecture $(uname -m)" ;;
 esac
 if [ "${platform}-${arch}" = darwin-x64 ]; then
-  fail "there is no t3 CLI for Intel Macs. Install the desktop app from https://t3.codes/download, or run a server from source: https://github.com/${repo}/blob/main/docs/user/install.md#intel-macs"
+  fail "there is no t3 CLI for Intel Macs. Install the desktop app from https://github.com/Muwei-TA/t3code/releases, or run a server from source: https://github.com/${repo}/blob/main/docs/user/install.md#intel-macs"
 fi
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 if command -v sha256sum >/dev/null 2>&1; then
@@ -237,7 +237,7 @@ else
   trap 'printf "\n" >&2; exit 143' TERM
 
   if "$interactive"; then printf '\r\033[2K' >&2; fi
-  printf '  %sInstalling%s T3 Code %s%s%s\n\n' "$muted" "$reset" "$bold" "$version" "$reset" >&2
+  printf '  %sInstalling%s Lightning Code %s%s%s\n\n' "$muted" "$reset" "$bold" "$version" "$reset" >&2
   step "Downloading..."
   fetch_status=0
   fetch "${base_url}/v${version}/SHA256SUMS" "${staging}/SHA256SUMS" || fetch_status=$?
@@ -254,7 +254,7 @@ else
   actual="$(checksum "${staging}/${archive}")"
   [ "$actual" = "$expected" ] || fail "checksum mismatch for ${archive}"
 
-  step "Extracting T3 Code..."
+  step "Extracting Lightning Code..."
   tar -xzf "${staging}/${archive}" -C "$staging" --strip-components=1
   rm -f "${staging}/${archive}" "${staging}/SHA256SUMS"
   "${staging}/t3" --version >/dev/null || fail "the downloaded executable does not run"
@@ -300,15 +300,15 @@ version_t3() {
   case "${1#"$2"/}" in */*/*) return 1 ;; */t3) return 0 ;; *) return 1 ;; esac
 }
 slot_empty=true
-if [ -e "${bin_dir}/t3" ] || [ -L "${bin_dir}/t3" ]; then
+if [ -e "${bin_dir}/lightning" ] || [ -L "${bin_dir}/lightning" ]; then
   slot_empty=false
   owned=false
   real_versions_dir="$(CDPATH='' cd -P -- "$versions_dir" && pwd)"
-  if [ -L "${bin_dir}/t3" ]; then
-    existing="$(readlink "${bin_dir}/t3" 2>/dev/null || true)"
+  if [ -L "${bin_dir}/lightning" ]; then
+    existing="$(readlink "${bin_dir}/lightning" 2>/dev/null || true)"
     case "$existing" in /*) ;; *) existing="${bin_dir}/${existing}" ;; esac
   else
-    existing="$(script_t3 "${bin_dir}/t3")"
+    existing="$(script_t3 "${bin_dir}/lightning")"
   fi
   if [ -n "$existing" ]; then
     # Through a symlinked T3 home the path names the alias; resolve its folder to compare.
@@ -318,14 +318,14 @@ if [ -e "${bin_dir}/t3" ] || [ -L "${bin_dir}/t3" ]; then
       */./* | */../* | */. | */..) ;;
       *)
         if version_t3 "$existing" "$versions_dir" || version_t3 "$existing" "$real_versions_dir" ||
-          [ "$existing" = "${t3_home}/bin/t3" ]; then owned=true; fi
+          [ "$existing" = "${t3_home}/bin/lightning" ]; then owned=true; fi
         ;;
     esac
     if [ -n "$existing_dir" ] && version_t3 "${existing_dir}/${existing##*/}" "$real_versions_dir"; then
       owned=true
     fi
   fi
-  "$owned" || fail "another t3 is already at ${bin_dir}/t3. Remove it and run this again, or run ${target_dir}/t3 directly."
+  "$owned" || fail "another t3 is already at ${bin_dir}/lightning. Remove it and run this again, or run ${target_dir}/t3 directly."
 fi
 launcher_tmp="$(mktemp "${bin_dir}/.t3.XXXXXX")"
 trap 'rm -f "$launcher_tmp"' EXIT
@@ -335,20 +335,20 @@ launcher_script "${target_dir}/t3" > "$launcher_tmp"
 chmod 755 "$launcher_tmp"
 # An empty spot is hard-linked without -f, so a file that appears after the check above is kept.
 if "$slot_empty"; then
-  ln "$launcher_tmp" "${bin_dir}/t3" || fail "could not write ${bin_dir}/t3; something else was created there."
+  ln "$launcher_tmp" "${bin_dir}/lightning" || fail "could not write ${bin_dir}/lightning; something else was created there."
 else
   # Known race, accepted: a file written here after the ownership check above is overwritten.
   # mv replaces a legacy symlink rather than writing through it.
-  mv -f "$launcher_tmp" "${bin_dir}/t3"
+  mv -f "$launcher_tmp" "${bin_dir}/lightning"
 fi
 rm -f "$launcher_tmp"
 trap - EXIT
 # Pruning keeps what this launcher points at; a background service cannot see bin_dir otherwise.
-launcher="$(CDPATH='' cd -P -- "$bin_dir" && pwd)/t3"
+launcher="$(CDPATH='' cd -P -- "$bin_dir" && pwd)/lightning"
 launchers="${t3_home}/runtime/launchers"
 grep -qxF "$launcher" "$launchers" 2>/dev/null || printf '%s\n' "$launcher" >> "$launchers"
 if "$interactive"; then printf '\r\033[2K' >&2; fi
-printf '  %sInstalled T3 Code %s%s\n\n' "$green" "$version" "$reset" >&2
+printf '  %sInstalled Lightning Code %s%s\n\n' "$green" "$version" "$reset" >&2
 # The folder a shell reads its startup file from: $1 when set and safe to paste, else $2 when
 # unset. A set but unsafe folder prints nothing, since the default would never be read.
 read_from() {
@@ -383,18 +383,18 @@ if [ -n "$path_rest" ]; then
 fi
 # A t3 earlier on PATH runs instead; the PATH command adds this folder last.
 # A PATH entry with a trailing slash gives `dir//t3`.
-first_t3="$(command -v t3 2>/dev/null | tr -s / || true)"
-case "$first_t3" in "" | "${bin_dir}/t3") first_t3= ;; esac
+first_t3="$(command -v lightning 2>/dev/null | tr -s / || true)"
+case "$first_t3" in "" | "${bin_dir}/lightning") first_t3= ;; esac
 if [ -n "$first_t3" ]; then
-  printf '  Another t3 at %s runs first, so run %s%s/t3%s to use this one.\n\n' "$first_t3" "$bold" "$bin_dir" "$reset"
+  printf '  Another lightning at %s runs first, so run %s%s/t3%s to use this one.\n\n' "$first_t3" "$bold" "$bin_dir" "$reset"
 else
   case ":${PATH}:" in
-    *":${bin_dir}:"* | *":${bin_dir}/:"*) printf '  Run %st3%s to use T3 Code here, or %st3 up%s to use it from your other devices.\n\n' "$bold" "$reset" "$bold" "$reset" ;;
+    *":${bin_dir}:"* | *":${bin_dir}/:"*) printf '  Run %slightning%s to use Lightning Code here, or %slightning up%s to use it from your other devices.\n\n' "$bold" "$reset" "$bold" "$reset" ;;
     *)
       if [ -n "$path_command" ]; then
-        printf '  %s is not on your PATH yet. Add it with:\n\n    %s\n\n  Then open a new terminal and run %st3%s.\n\n' "$bin_dir" "$path_command" "$bold" "$reset"
+        printf '  %s is not on your PATH yet. Add it with:\n\n    %s\n\n  Then open a new terminal and run %slightning%s.\n\n' "$bin_dir" "$path_command" "$bold" "$reset"
       else
-        printf '  Add %s to your PATH, then run %st3%s.\n\n' "$bin_dir" "$bold" "$reset"
+        printf '  Add %s to your PATH, then run %slightning%s.\n\n' "$bin_dir" "$bold" "$reset"
       fi
       ;;
   esac

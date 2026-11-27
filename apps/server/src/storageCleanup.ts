@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import { resolveLightningWorktreeHome } from "./devHome.ts";
 import * as NodeFSP from "node:fs/promises";
 import {
   CheckpointScopeId,
@@ -21,7 +22,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
-import { resolveWorktreeT3Home } from "@t3tools/shared/devHome";
+
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -1109,7 +1110,7 @@ const make = Effect.gen(function* () {
     // A git worktree's dev home is seeded from real data, so its threads and any
     // copied settings can point at the developer's real worktrees.
     const isWorktreeDevHome =
-      (yield* resolveWorktreeT3Home(config.baseDir)) === path.resolve(config.baseDir);
+      (yield* resolveLightningWorktreeHome(config.baseDir)) === path.resolve(config.baseDir);
     for (const directory of isWorktreeDevHome
       ? [config.worktreesDir]
       : managedWorktreesDirectories(

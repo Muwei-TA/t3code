@@ -133,7 +133,7 @@ it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
         );
         assert.equal(manifest.name, "t3");
         assert.equal(manifest.version, VERSION);
-        assert.deepStrictEqual(manifest.bin, { t3: "./bin/t3.mjs" });
+        assert.deepStrictEqual(manifest.bin, { lightning: "./bin/t3.mjs" });
         assert.isUndefined(manifest.dependencies);
         assert.isUndefined(manifest.optionalDependencies);
         assert.isAbove(npmReleaseDatabaseMigration(manifest) ?? 0, 0);
@@ -153,9 +153,9 @@ it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
         const home = path.join(root, "home");
         const env = {
           PATH: (yield* HostProcess.Environment).PATH,
-          T3CODE_HOME: home,
+          LIGHTNING_CODE_HOME: home,
           T3CODE_TEST_CALLS: path.join(root, "calls"),
-          T3CODE_RELEASE_BASE_URL: release.baseUrl,
+          LIGHTNING_CODE_RELEASE_BASE_URL: release.baseUrl,
         };
         const launcher = path.join(packageDir, "bin/t3.mjs");
         const first = yield* run(process.execPath, [launcher, "serve", "a b"], {
@@ -225,7 +225,7 @@ it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
         const raceHome = path.join(root, "race-home");
         const launch = run(process.execPath, [launcher, "--version"], {
           cwd: root,
-          env: { ...env, T3CODE_HOME: raceHome },
+          env: { ...env, LIGHTNING_CODE_HOME: raceHome },
         });
         const [one, two] = yield* Effect.all([launch, launch], { concurrency: "unbounded" });
         assert.equal(one.exitCode, 0, one.stderr);
@@ -303,7 +303,7 @@ fs.readFileSync = (file, ...rest) => {
         const recovered = yield* run(
           process.execPath,
           ["--import", peerHook, launcher, "--version"],
-          { cwd: root, env: { ...env, T3CODE_HOME: staleHome } },
+          { cwd: root, env: { ...env, LIGHTNING_CODE_HOME: staleHome } },
         );
         const checks = (yield* fs.readFileString(peerChecks)).trim().split("\n");
         assert.isAtLeast(checks.length, 2);
@@ -323,7 +323,7 @@ fs.readFileSync = (file, ...rest) => {
         yield* fs.makeDirectory(`${staleOnlyDir}.lock`);
         const locked = yield* run(process.execPath, [launcher, "--version"], {
           cwd: root,
-          env: { ...env, T3CODE_HOME: staleOnlyHome },
+          env: { ...env, LIGHTNING_CODE_HOME: staleOnlyHome },
         });
         assert.equal(locked.exitCode, 1);
         assert.include(locked.stderr, `delete ${staleOnlyDir}.lock`);
@@ -333,7 +333,7 @@ fs.readFileSync = (file, ...rest) => {
         yield* fs.remove(`${staleOnlyDir}.lock`, { recursive: true });
         const replaced = yield* run(process.execPath, [launcher, "--version"], {
           cwd: root,
-          env: { ...env, T3CODE_HOME: staleOnlyHome },
+          env: { ...env, LIGHTNING_CODE_HOME: staleOnlyHome },
         });
         assert.equal(replaced.stdout.trim(), VERSION, replaced.stderr);
         assert.equal(replaced.exitCode, 0);
@@ -345,7 +345,7 @@ fs.readFileSync = (file, ...rest) => {
         release.corruptChecksum();
         const corrupt = yield* run(process.execPath, [launcher, "--version"], {
           cwd: root,
-          env: { ...env, T3CODE_HOME: path.join(root, "other-home") },
+          env: { ...env, LIGHTNING_CODE_HOME: path.join(root, "other-home") },
         });
         assert.equal(corrupt.exitCode, 1);
         assert.include(corrupt.stderr, "checksum mismatch");
@@ -388,8 +388,8 @@ syncBuiltinESMExports();
           );
           const env = {
             PATH: (yield* HostProcess.Environment).PATH,
-            T3CODE_HOME: home,
-            T3CODE_RELEASE_BASE_URL: release.baseUrl,
+            LIGHTNING_CODE_HOME: home,
+            LIGHTNING_CODE_RELEASE_BASE_URL: release.baseUrl,
             T3CODE_TEST_READY: path.join(root, "probe-ready"),
             T3CODE_TEST_TERM: path.join(root, "probe-term"),
           };
@@ -461,7 +461,7 @@ console.log(process.pid, provider.pid);
         const launcher = NodeChildProcess.spawn(
           process.execPath,
           [path.join(installed, "package/bin/t3.mjs"), "serve"],
-          { cwd: root, env: { PATH: hostPath, T3CODE_HOME: home }, stdio: "pipe" },
+          { cwd: root, env: { PATH: hostPath, LIGHTNING_CODE_HOME: home }, stdio: "pipe" },
         );
         let pids: Array<number> = [];
         yield* Effect.addFinalizer(() =>

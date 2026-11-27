@@ -62,7 +62,7 @@ const devServerInput = {
   autoBootstrapProjectFromCwd: undefined,
   logWebSocketEvents: undefined,
   host: undefined,
-  port: 13_773,
+  port: 13_775,
   devUrl: undefined,
   dryRun: false,
   share: false,
@@ -111,11 +111,11 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         const byDefault = yield* createDevRunnerEnv({ ...input, baseEnv: {} });
         const optedIn = yield* createDevRunnerEnv({
           ...input,
-          baseEnv: { T3CODE_TELEMETRY_ENABLED: "true" },
+          baseEnv: { LIGHTNING_CODE_TELEMETRY_ENABLED: "true" },
         });
 
-        assert.equal(byDefault.T3CODE_TELEMETRY_ENABLED, "false");
-        assert.equal(optedIn.T3CODE_TELEMETRY_ENABLED, "true");
+        assert.equal(byDefault.LIGHTNING_CODE_TELEMETRY_ENABLED, "false");
+        assert.equal(optedIn.LIGHTNING_CODE_TELEMETRY_ENABLED, "true");
       }),
     );
 
@@ -166,7 +166,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
           assert.equal(env.VITE_HTTP_URL, undefined);
           assert.equal(env.VITE_WS_URL, undefined);
-          assert.equal(env.T3CODE_PORT, "13773");
+          assert.equal(env.LIGHTNING_CODE_PORT, "13775");
           assert.equal(env.T3CODE_SINGLE_ORIGIN_DEV, "1");
         }),
     );
@@ -207,7 +207,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.T3CODE_PORT, "13773");
+        assert.equal(env.LIGHTNING_CODE_PORT, "13775");
         assert.equal(env.T3CODE_HOST, undefined);
         assert.equal(env.T3CODE_LAN, undefined);
       }),
@@ -240,7 +240,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
   describe("findFirstAvailableOffset", () => {
     it.effect("advances until all required ports are available", () =>
       Effect.gen(function* () {
-        const taken = new Set([13773, 5733, 13774, 5734]);
+        const taken = new Set([13775, 5735, 13776, 5736]);
         const offset = yield* findFirstAvailableOffset({
           startOffset: 0,
           requireServerPort: true,
@@ -256,8 +256,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       Effect.gen(function* () {
         const probed: Array<{ port: number; role: string | undefined }> = [];
         const offset = yield* findFirstAvailableOffset({
-          // 5733 + 833 = 6566, which browsers block as sane-port.
-          startOffset: 833,
+          // 5735 + 831 = 6566, which browsers block as sane-port.
+          startOffset: 831,
           requireServerPort: true,
           requireWebPort: true,
           checkPortAvailability: (port, role) => {
@@ -266,7 +266,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           },
         });
 
-        assert.equal(offset, 834);
+        assert.equal(offset, 832);
         assert.deepStrictEqual(probed, [
           { port: 14_607, role: "server" },
           { port: 6567, role: "web" },
@@ -277,13 +277,13 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
     it.effect("does not reject a server-only offset because its unused web port is blocked", () =>
       Effect.gen(function* () {
         const offset = yield* findFirstAvailableOffset({
-          startOffset: 833,
+          startOffset: 831,
           requireServerPort: true,
           requireWebPort: false,
           checkPortAvailability: () => Effect.succeed(true),
         });
 
-        assert.equal(offset, 833);
+        assert.equal(offset, 831);
       }),
     );
   });
@@ -295,7 +295,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         const calls: Array<[number, string]> = [];
 
         const available = yield* checkPortAvailabilityOnHosts(
-          13_773,
+          13_775,
           ["127.0.0.1", "0.0.0.0", "::"],
           (port, host) =>
             Effect.promise(async () => {
@@ -310,9 +310,9 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
         assert.equal(available, true);
         assert.deepStrictEqual(calls, [
-          [13_773, "127.0.0.1"],
-          [13_773, "0.0.0.0"],
-          [13_773, "::"],
+          [13_775, "127.0.0.1"],
+          [13_775, "0.0.0.0"],
+          [13_775, "::"],
         ]);
       }),
     );
@@ -335,8 +335,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.deepStrictEqual(probed, [
-          { port: 13_773, role: "server" },
-          { port: 5733, role: "web" },
+          { port: 13_775, role: "server" },
+          { port: 5735, role: "web" },
         ]);
       }),
     );
@@ -345,7 +345,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
   describe("resolveModePortOffsets", () => {
     it.effect("uses a shared fallback offset for dev mode", () =>
       Effect.gen(function* () {
-        const taken = new Set([13773, 5733]);
+        const taken = new Set([13775, 5735]);
         const offsets = yield* resolveModePortOffsets({
           mode: "dev",
           startOffset: 0,
@@ -360,7 +360,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
     it.effect("keeps server offset stable for dev:web and only shifts web offset", () =>
       Effect.gen(function* () {
-        const taken = new Set([5733]);
+        const taken = new Set([5735]);
         const offsets = yield* resolveModePortOffsets({
           mode: "dev:web",
           startOffset: 0,
@@ -375,7 +375,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
     it.effect("shifts only server offset for dev:server", () =>
       Effect.gen(function* () {
-        const taken = new Set([13773]);
+        const taken = new Set([13775]);
         const offsets = yield* resolveModePortOffsets({
           mode: "dev:server",
           startOffset: 0,
@@ -501,7 +501,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         }),
     );
 
-    it.effect("ignores an ambient T3CODE_HOME when no home is resolved", () =>
+    it.effect("ignores an ambient LIGHTNING_CODE_HOME when no home is resolved", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
           mode: "dev",
@@ -517,7 +517,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.T3CODE_HOME, undefined);
+        assert.equal(env.LIGHTNING_CODE_HOME, undefined);
       }),
     );
 
@@ -539,7 +539,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
             devUrl: undefined,
           }).pipe(
             Effect.provideService(HostProcess.HomeDirectory, "/home/dev"),
-            Effect.map((env) => env.T3CODE_HOME),
+            Effect.map((env) => env.LIGHTNING_CODE_HOME),
           );
 
         assert.equal(yield* homeFor("~/t3-dev"), path.join("/home/dev", "t3-dev"));
@@ -549,9 +549,9 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.equal(yield* homeFor("~someone/t3-dev"), path.resolve("~someone/t3-dev"));
         assert.equal(yield* homeFor("relative/t3-dev"), path.resolve("relative/t3-dev"));
         assert.equal(yield* homeFor("/tmp/t3-dev"), path.resolve("/tmp/t3-dev"));
-        // An explicit ~/.t3 would put state in the live userdata; leaving it implicit selects ~/.t3/dev.
-        assert.equal(yield* homeFor("~/.t3"), undefined);
-        assert.equal(yield* homeFor("/home/dev/.t3/"), undefined);
+        // An explicit ~/.lightning-code would put state in the live userdata; leaving it implicit selects ~/.lightning-code/dev.
+        assert.equal(yield* homeFor("~/.lightning-code"), undefined);
+        assert.equal(yield* homeFor("/home/dev/.lightning-code/"), undefined);
       }),
     );
 
@@ -797,15 +797,15 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
             Effect.provide(Layer.mergeAll(emptyConfigLayer, netServiceLayer, spawnerLayer)),
             Effect.provideService(HostProcess.Platform, "linux"),
             Effect.provideService(HostProcess.WorkingDirectory, input.cwd),
-            // No ~/.t3 here, so these runs never seed from this machine's install.
+            // No ~/.lightning-code here, so these runs never seed from this machine's install.
             Effect.provideService(HostProcess.HomeDirectory, NodePath.join(input.cwd, "home")),
             Effect.provideService(
               HostProcess.Environment,
-              input.ambientHome === undefined ? {} : { T3CODE_HOME: input.ambientHome },
+              input.ambientHome === undefined ? {} : { LIGHTNING_CODE_HOME: input.ambientHome },
             ),
           );
 
-          return captured?.T3CODE_HOME;
+          return captured?.LIGHTNING_CODE_HOME;
         });
 
       it.effect("prefers an explicit --home-dir over the worktree default", () =>
@@ -830,11 +830,11 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
             cwd: root,
             ambientHome: "/home/user/.t3",
           });
-          assert.equal(home, path.join(path.resolve(root), ".t3"));
+          assert.equal(home, path.join(path.resolve(root), ".t3", "lightning-code"));
         }).pipe(Effect.scoped),
       );
 
-      it.effect("prefers the worktree .t3 over an ambient T3CODE_HOME", () =>
+      it.effect("prefers the worktree .t3 over an ambient LIGHTNING_CODE_HOME", () =>
         Effect.gen(function* () {
           const path = yield* Path.Path;
           const root = yield* makeWorktree;
@@ -843,17 +843,20 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
             cwd: root,
             ambientHome: "/home/user/.t3",
           });
-          assert.equal(home, path.join(path.resolve(root), ".t3"));
+          assert.equal(home, path.join(path.resolve(root), ".t3", "lightning-code"));
         }).pipe(Effect.scoped),
       );
 
-      it.effect("seeds a worktree database from ~/.t3 only when it has none", () =>
+      it.effect("seeds a worktree database from ~/.lightning-code only when it has none", () =>
         Effect.gen(function* () {
           const path = yield* Path.Path;
           const root = yield* makeWorktree;
           const home = path.join(root, "home");
-          NodeFS.mkdirSync(path.join(home, ".t3", "userdata"), { recursive: true });
-          NodeFS.writeFileSync(path.join(home, ".t3", "userdata", "statev2.sqlite"), "");
+          NodeFS.mkdirSync(path.join(home, ".lightning-code", "userdata"), { recursive: true });
+          NodeFS.writeFileSync(
+            path.join(home, ".lightning-code", "userdata", "statev2.sqlite"),
+            "",
+          );
 
           const spawnedArgs = (seed: boolean | undefined) =>
             Effect.gen(function* () {
@@ -881,11 +884,14 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
           assert.deepStrictEqual(yield* spawnedArgs(false), []);
           const [seedArgs] = yield* spawnedArgs(undefined);
-          assert.includeMembers([...(seedArgs ?? [])], ["--base-dir", path.join(root, ".t3")]);
+          assert.includeMembers(
+            [...(seedArgs ?? [])],
+            ["--base-dir", path.join(root, ".t3", "lightning-code")],
+          );
 
           // Either database means the worktree already has data.
           for (const name of ["state.sqlite", "statev2.sqlite"]) {
-            const file = path.join(root, ".t3", "userdata", name);
+            const file = path.join(root, ".t3", "lightning-code", "userdata", name);
             NodeFS.mkdirSync(path.dirname(file), { recursive: true });
             NodeFS.writeFileSync(file, "");
             assert.deepStrictEqual(yield* spawnedArgs(undefined), []);
@@ -906,7 +912,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
             const path = yield* Path.Path;
             const root = yield* makeWorktree;
             const home = path.join(root, "home");
-            const source = path.join(home, ".t3", "userdata", "statev2.sqlite");
+            const source = path.join(home, ".lightning-code", "userdata", "statev2.sqlite");
             NodeFS.mkdirSync(path.dirname(source), { recursive: true });
             NodeFS.writeFileSync(source, "");
             const spawned: Array<ReadonlyArray<string>> = [];
@@ -968,7 +974,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           }).pipe(Effect.scoped),
       );
 
-      it.effect("falls back to an ambient T3CODE_HOME outside a worktree", () =>
+      it.effect("falls back to an ambient LIGHTNING_CODE_HOME outside a worktree", () =>
         Effect.gen(function* () {
           const path = yield* Path.Path;
           const home = yield* spawnedHome({

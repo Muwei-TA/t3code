@@ -3,6 +3,8 @@ import {
   TrimmedNonEmptyString,
   type ProviderDriverKind,
 } from "@t3tools/contracts";
+import * as Config from "effect/Config";
+import * as Option from "effect/Option";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -24,9 +26,6 @@ import {
   resolveProviderCompatibility,
 } from "./providerCompatibility.ts";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
-
-const MODEL_MANIFEST_URL =
-  "https://raw.githubusercontent.com/pingdotgg/t3code/main/apps/server/src/provider/model-manifest.json";
 
 const MANIFEST_TTL_MS = 60 * 60 * 1000;
 
@@ -207,6 +206,8 @@ const BundledOnlyModelManifest: ModelManifest["Service"] = {
 const layerBundledOnly = Layer.succeed(ModelManifest, BundledOnlyModelManifest);
 
 export const make = Effect.gen(function* () {
+  const url = yield* Config.URL("LIGHTNING_CODE_MODEL_MANIFEST_URL").pipe(Config.option);
+  if (Option.isNone(url)) return BundledOnlyModelManifest;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig;
@@ -254,7 +255,7 @@ export const make = Effect.gen(function* () {
     if (settings !== null && !settings.enableProviderUpdateChecks) return manifest;
 
     lastAttemptMs = now;
-    const fetched = yield* httpClient.get(MODEL_MANIFEST_URL).pipe(
+    const fetched = yield* httpClient.get(url.value.href).pipe(
       Effect.flatMap(HttpClientResponse.filterStatusOk),
       Effect.flatMap((response) => response.json),
       Effect.flatMap((json) => decodeManifest(json)),

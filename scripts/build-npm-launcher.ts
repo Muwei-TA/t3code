@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // GitHub archives avoid npm scanning delays; output <output-dir>/t3/ and publishable t3.tgz.
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -35,11 +36,10 @@ export function npmLauncherPackageManifest(version: string, databaseMigration: n
   return {
     name: NPM_LAUNCHER_PACKAGE_NAME,
     version,
-    description:
-      "T3 Code CLI. Downloads the self-contained executable for this platform from the GitHub Release.",
+    description: `${LIGHTNING_BRAND.baseName} CLI. Downloads the self-contained executable for this platform from the GitHub Release.`,
     license: serverPackageJson.license,
     repository: serverPackageJson.repository,
-    bin: { t3: "./bin/t3.mjs" },
+    bin: { [LIGHTNING_BRAND.cliCommand]: "./bin/t3.mjs" },
     files: ["bin", "dist"],
     engines: { node: ">=20.11" },
     t3code: { databaseMigration },

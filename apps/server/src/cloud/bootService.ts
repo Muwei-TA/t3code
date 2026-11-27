@@ -1,3 +1,4 @@
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import { DESKTOP_UPDATE_RESTART_MARKER_FILE } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Config from "effect/Config";
@@ -57,11 +58,11 @@ export {
   serviceUnitProgramOf as bootServiceProgramOf,
 } from "./serviceProtocol.ts";
 
-const BOOT_SERVICE_NAME = "t3code";
+const BOOT_SERVICE_NAME = LIGHTNING_BRAND.slug;
 export const BOOT_SERVICE_UNIT_FILE = `${BOOT_SERVICE_NAME}.service`;
 // `.service` suffix keeps the label distinct from the desktop app's bundle id
 // (com.t3tools.t3code), so launchd and TCC records never collide.
-export const BOOT_SERVICE_LAUNCHD_LABEL = "com.t3tools.t3code.service";
+export const BOOT_SERVICE_LAUNCHD_LABEL = `${LIGHTNING_BRAND.desktopAppId}.service`;
 export const BOOT_SERVICE_PLIST_FILE = `${BOOT_SERVICE_LAUNCHD_LABEL}.plist`;
 export const BOOT_SERVICE_LOG_FILE = "boot-service.log";
 /** `schtasks /Query /HRESULT` exits with this when the task is not registered. */
@@ -114,7 +115,7 @@ export function renderBootServiceUnit(plan: BootServicePlan): string {
     "[Service]",
     "Type=simple",
     "WorkingDirectory=%h",
-    `Environment=T3CODE_HOME=${quoteSystemdValue(plan.baseDir)}`,
+    `Environment=LIGHTNING_CODE_HOME=${quoteSystemdValue(plan.baseDir)}`,
     ...(plan.installBinDir === undefined
       ? []
       : [`Environment=T3CODE_INSTALL_BIN_DIR=${quoteSystemdValue(plan.installBinDir)}`]),
@@ -174,7 +175,7 @@ export function renderBootServicePlist(
     `  <dict>`,
     `    <key>PATH</key>`,
     `    <string>${escapeXmlText(options.environmentPath)}</string>`,
-    `    <key>T3CODE_HOME</key>`,
+    `    <key>LIGHTNING_CODE_HOME</key>`,
     `    <string>${escapeXmlText(plan.baseDir)}</string>`,
     ...(plan.installBinDir === undefined
       ? []
@@ -312,7 +313,7 @@ const defaultSystemdUnitDir = (path: Path.Path, homeDir: string, xdgConfigHome: 
   );
 
 const scheduledTaskPath = (path: Path.Path, localAppData: string) =>
-  path.join(localAppData, "t3code", BOOT_SERVICE_TASK_FILE);
+  path.join(localAppData, LIGHTNING_BRAND.slug, BOOT_SERVICE_TASK_FILE);
 
 const launchdPlistPath = (path: Path.Path, homeDir: string) =>
   path.join(homeDir, "Library", "LaunchAgents", BOOT_SERVICE_PLIST_FILE);
@@ -681,7 +682,7 @@ export function formatBootServiceProblem(
     case "service-disabled":
       return `The service is not enabled to start automatically. Run \`${commands.install}\` to repair it.`;
     case "service-stopped":
-      return `The service is not running. Check the service log (on Linux, also \`systemctl --user status t3code.service\`), then run \`${commands.install}\`.`;
+      return `The service is not running. Check the service log (on Linux, also \`systemctl --user status ${BOOT_SERVICE_UNIT_FILE}\`), then run \`${commands.install}\`.`;
     case "restart-pending":
       return `A newer version is installed but the service is still running the previous one. Run \`${commands.restart}\` to switch.`;
   }
@@ -1397,7 +1398,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
                       // PowerShell has no inline variable assignment; the launcher takes a flag.
                       recoveryCommand: windows
                         ? `& ${launcher(installedVersion)} __service-launcher --base-dir ${quote(input.baseDir)}`
-                        : `T3CODE_HOME=${quote(input.baseDir)} ${launcher(installedVersion)} __service-launcher`,
+                        : `LIGHTNING_CODE_HOME=${quote(input.baseDir)} ${launcher(installedVersion)} __service-launcher`,
                     }
                   : {},
               );

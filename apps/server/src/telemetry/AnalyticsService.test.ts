@@ -140,10 +140,10 @@ const analyticsLayerWith = (
     Layer.provide(
       ConfigProvider.layer(
         ConfigProvider.fromUnknown({
-          ...(envOptIn === null ? {} : { T3CODE_TELEMETRY_ENABLED: envOptIn }),
+          ...(envOptIn === null ? {} : { LIGHTNING_CODE_TELEMETRY_ENABLED: envOptIn }),
           WSL_DISTRO_NAME: wslDistroName,
-          T3CODE_POSTHOG_KEY: "phc_test_key",
-          T3CODE_POSTHOG_HOST: "http://localhost",
+          LIGHTNING_CODE_POSTHOG_KEY: "phc_test_key",
+          LIGHTNING_CODE_POSTHOG_HOST: "http://localhost",
         }),
       ),
     ),
@@ -289,12 +289,12 @@ it.layer(testLayer)("AnalyticsService test", (it) => {
           });
           yield* analytics.record("test.before-discovery");
           yield* analytics.flush;
-          env.T3CODE_TELEMETRY_ENABLED = "false";
+          env.LIGHTNING_CODE_TELEMETRY_ENABLED = "false";
           delete env.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING;
           assert.deepEqual(yield* analytics.productTelemetryStatus, { envOverride: false });
           yield* analytics.record("test.opted-out");
           yield* analytics.flush;
-          env.T3CODE_TELEMETRY_ENABLED = "true";
+          env.LIGHTNING_CODE_TELEMETRY_ENABLED = "true";
           assert.deepEqual(yield* analytics.productTelemetryStatus, { envOverride: true });
           yield* analytics.record("test.allowed");
           yield* analytics.flush;
@@ -338,35 +338,18 @@ it.layer(testLayer)("AnalyticsService test", (it) => {
   );
 
   it.effect(
-    "clears pending deliveries across an opt-out even if usage data is immediately re-enabled",
+    "preserves the Lightning opt-in requirement when usage data is enabled in settings",
     () =>
       Effect.gen(function* () {
-        const attempts: string[] = [];
-        const client = HttpClient.make((request) => {
-          if (request.body._tag === "Uint8Array") {
-            attempts.push(new TextDecoder().decode(request.body.body));
-          }
-          return respondWithStatus(attempts.length === 1 ? 503 : 204)(request);
-        });
-
+        const { client, batches } = captureBatches(respondWithStatus(204));
         yield* Effect.gen(function* () {
           const analytics = yield* AnalyticsService.AnalyticsService;
           const settings = yield* ServerSettingsService;
-          assert.isFalse(yield* analytics.record("while-disabled"));
           yield* settings.updateSettings({ productTelemetryEnabled: true });
-          assert.isTrue(yield* analytics.record("failed-before-opt-out"));
-          yield* analytics.flush;
-          assert.isTrue(yield* analytics.record("queued-before-opt-out"));
-          yield* settings.updateSettings({ productTelemetryEnabled: false });
-          yield* settings.updateSettings({ productTelemetryEnabled: true });
-          assert.isTrue(yield* analytics.record("after-opt-in"));
+          assert.isFalse(yield* analytics.record("disabled-without-environment-opt-in"));
           yield* analytics.flush;
         }).pipe(Effect.provide(analyticsLayerWith(client, undefined, null)));
-
-        assert.equal(attempts.length, 2);
-        assert.include(attempts[0], "failed-before-opt-out");
-        assert.include(attempts[1], "after-opt-in");
-        assert.notInclude(attempts[1], "before-opt-out");
+        assert.deepEqual(batches, []);
       }),
   );
 
@@ -447,9 +430,9 @@ it.layer(testLayer)("AnalyticsService test", (it) => {
       );
       const layerConfig = ConfigProvider.layer(
         ConfigProvider.fromUnknown({
-          T3CODE_TELEMETRY_ENABLED: true,
-          T3CODE_POSTHOG_KEY: "phc_test_key",
-          T3CODE_POSTHOG_HOST: "http://localhost",
+          LIGHTNING_CODE_TELEMETRY_ENABLED: true,
+          LIGHTNING_CODE_POSTHOG_KEY: "phc_test_key",
+          LIGHTNING_CODE_POSTHOG_HOST: "http://localhost",
           T3CODE_TELEMETRY_FLUSH_BATCH_SIZE: 20,
         }),
       );
@@ -541,7 +524,8 @@ it.layer(testLayer)("AnalyticsService test", (it) => {
   );
 
   it.effect.each([
-    { name: "an explicit false", env: { T3CODE_TELEMETRY_ENABLED: false } },
+    { name: "only enabled in the upstream environment", env: { T3CODE_TELEMETRY_ENABLED: true } },
+    { name: "an explicit false", env: { LIGHTNING_CODE_TELEMETRY_ENABLED: false } },
     { name: "an unset variable, which defaults to off", env: {} },
   ])("does not send batch requests when telemetry is $name", ({ env }) =>
     Effect.gen(function* () {
@@ -557,8 +541,8 @@ it.layer(testLayer)("AnalyticsService test", (it) => {
       const layerConfig = ConfigProvider.layer(
         ConfigProvider.fromUnknown({
           ...env,
-          T3CODE_POSTHOG_KEY: "phc_test_key",
-          T3CODE_POSTHOG_HOST: "http://localhost",
+          LIGHTNING_CODE_POSTHOG_KEY: "phc_test_key",
+          LIGHTNING_CODE_POSTHOG_HOST: "http://localhost",
         }),
       );
       const layerBatchServer = HttpServer.serve(

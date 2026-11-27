@@ -11,6 +11,7 @@ import {
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
@@ -110,6 +111,7 @@ type Handler = (request: Request) => Effect.Effect<Response>;
 const withRoutes = <A, E>(
   use: (handler: Handler, auth: EnvironmentAuth.EnvironmentAuth["Service"]) => Effect.Effect<A, E>,
   linkState = notLinked,
+  env: Record<string, string> = {},
 ) =>
   Effect.gen(function* () {
     const random = yield* SecureRandom.SecureRandom;
@@ -117,7 +119,7 @@ const withRoutes = <A, E>(
     let routerAuth: EnvironmentAuth.EnvironmentAuth["Service"] | undefined;
     const layerRoutes = makeLayerRoutes((auth) => {
       routerAuth = auth;
-    }, linkState);
+    }, linkState).pipe(Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))));
     return yield* Effect.acquireUseRelease(
       Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
       (web) =>
@@ -731,7 +733,11 @@ it.effect(
   "sends an app sign-in on the linked tunnel to the hosted app, and a link to its own page",
   () =>
     Effect.gen(function* () {
-      const handoff = (tunnelHostname: string, peerLink = false) =>
+      const handoff = (
+        tunnelHostname: string,
+        peerLink = false,
+        env: Record<string, string> = {},
+      ) =>
         withRoutes(
           (handler) =>
             Effect.gen(function* () {
@@ -754,11 +760,18 @@ it.effect(
               return { location: response.headers.get("location")!, query: query.toString() };
             }),
           { ...notLinked, linked: true, cloudUserId: "user_1", tunnelHostname },
+          env,
         );
 
-      const onTunnel = yield* handoff("box.example.ts.net");
+      const local = yield* handoff("box.example.ts.net");
+      expect(local.location).toBe(`/connect-agent?${local.query}`);
+      const onTunnel = yield* handoff("box.example.ts.net", false, {
+        T3CODE_HOSTED_APP_URL: "https://lightning.example.test",
+      });
       const hosted = new URL(onTunnel.location);
-      expect(`${hosted.origin}${hosted.pathname}`).toBe("https://app.t3.codes/approve-agent");
+      expect(`${hosted.origin}${hosted.pathname}`).toBe(
+        "https://lightning.example.test/approve-agent",
+      );
       expect(hosted.searchParams.get("environment")).toEqual(expect.any(String));
       hosted.searchParams.delete("environment");
       expect(hosted.searchParams.toString()).toBe(onTunnel.query);

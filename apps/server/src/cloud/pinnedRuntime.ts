@@ -1,3 +1,4 @@
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
@@ -650,11 +651,11 @@ export const findPosixLauncher = Effect.fn("cloud.pinned_runtime.find_posix_laun
       ...(environment["PATH"] ?? "")
         .split(":")
         .filter((directory) => directory.length > 0)
-        .map((directory) => path.resolve(cwd, directory, "t3")),
+        .map((directory) => path.resolve(cwd, directory, LIGHTNING_BRAND.cliCommand)),
       path.join(
         environment["T3CODE_INSTALL_BIN_DIR"] ||
           path.join(yield* HostProcess.HomeDirectory, ".local", "bin"),
-        "t3",
+        LIGHTNING_BRAND.cliCommand,
       ),
       ...recorded.split(/\r?\n/),
     ].filter((candidate) => path.isAbsolute(candidate));
@@ -702,7 +703,8 @@ const shellLauncherTargets = Effect.fn("cloud.pinned_runtime.shell_launcher_targ
   const platform = yield* HostProcess.Platform;
   const environment = yield* HostProcess.Environment;
   const home = yield* HostProcess.HomeDirectory;
-  const launcherName = platform === "win32" ? "t3.cmd" : "t3";
+  const launcherName =
+    platform === "win32" ? `${LIGHTNING_BRAND.cliCommand}.cmd` : LIGHTNING_BRAND.cliCommand;
   const launchersFile = path.join(baseDir, PINNED_RUNTIME_DIR, PINNED_RUNTIME_LAUNCHERS_FILE);
   const recorded = (yield* fs.readFileString(launchersFile).pipe(Effect.orElseSucceed(() => "")))
     .split(/\r?\n/)
@@ -712,7 +714,12 @@ const shellLauncherTargets = Effect.fn("cloud.pinned_runtime.shell_launcher_targ
     ...(environment["PATH"] ?? environment["Path"] ?? "").split(platform === "win32" ? ";" : ":"),
   ]
     .filter((directory) => path.isAbsolute(directory))
-    .map((directory) => path.join(directory, launcherName));
+    .flatMap((directory) =>
+      platform === "win32"
+        ? [path.join(directory, launcherName)]
+        : // Release archives retain the t3 executable. A linked version directory on PATH pins it.
+          [path.join(directory, launcherName), path.join(directory, "t3")],
+    );
   const versionsDir = pinnedRuntimeVersionsDir(path, baseDir);
   const realVersionsDir = yield* fs
     .realPath(versionsDir)

@@ -1,3 +1,4 @@
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import { PositiveInt } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
@@ -162,7 +163,7 @@ const traceSummaryCommand = Command.make("summary", {
   Command.withHandler(
     Effect.fn("cli.trace.summary")(function* (flags) {
       const fs = yield* FileSystem.FileSystem;
-      const envHome = yield* Config.String("T3CODE_HOME").pipe(Config.option);
+      const envHome = yield* Config.String(LIGHTNING_BRAND.homeEnvVar).pipe(Config.option);
       const baseDir = yield* resolveBaseDir(
         Option.getOrUndefined(Option.orElse(flags.baseDir, () => envHome)),
       );

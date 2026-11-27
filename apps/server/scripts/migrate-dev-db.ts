@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
+import { resolveLightningWorktreeHome } from "../src/devHome.ts";
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
 import * as NodeURL from "node:url";
-import { resolveWorktreeT3Home } from "@t3tools/shared/devHome";
+
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -25,7 +27,7 @@ export class MigrateDevDbNotInWorktreeError extends Schema.TaggedError<MigrateDe
   {},
 ) {
   override get message(): string {
-    return "Not inside a linked git worktree. Pass --base-dir to target an isolated .t3 directory.";
+    return "Not inside a linked git worktree. Pass --base-dir to target an isolated data directory.";
   }
 }
 
@@ -34,7 +36,7 @@ export class MigrateDevDbSharedHomeError extends Schema.TaggedError<MigrateDevDb
   {},
 ) {
   override get message(): string {
-    return "Refusing to rebuild the shared ~/.t3 database. Use an isolated --base-dir.";
+    return "Refusing to rebuild the shared application database. Use an isolated --base-dir.";
   }
 }
 
@@ -492,7 +494,9 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
-  const sharedHome = path.resolve(options.sharedHome ?? path.join(NodeOS.homedir(), ".t3"));
+  const sharedHome = path.resolve(
+    options.sharedHome ?? path.join(NodeOS.homedir(), LIGHTNING_BRAND.defaultHomeDirName),
+  );
   const sourcePath = path.resolve(
     input.source ?? path.join(sharedHome, "userdata", "statev2.sqlite"),
   );
@@ -500,7 +504,7 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   const baseDir =
     input.baseDir !== undefined
       ? path.resolve(input.baseDir)
-      : yield* resolveWorktreeT3Home(process.cwd());
+      : yield* resolveLightningWorktreeHome(process.cwd());
   if (baseDir === undefined) {
     return yield* new MigrateDevDbNotInWorktreeError();
   }
@@ -511,11 +515,13 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   if (!(yield* fs.exists(sourcePath))) {
     return yield* new MigrateDevDbSourceMissingError({ sourcePath });
   }
-  const [canonicalBaseDir, canonicalSharedHome] = yield* Effect.all([
+  const upstreamHome = path.join(NodeOS.homedir(), ".t3");
+  const [canonicalBaseDir, canonicalSharedHome, canonicalUpstreamHome] = yield* Effect.all([
     fs.realPath(baseDir).pipe(Effect.orElseSucceed(() => baseDir)),
     fs.realPath(sharedHome).pipe(Effect.orElseSucceed(() => sharedHome)),
+    fs.realPath(upstreamHome).pipe(Effect.orElseSucceed(() => upstreamHome)),
   ]);
-  if (canonicalBaseDir === canonicalSharedHome) {
+  if (canonicalBaseDir === canonicalSharedHome || canonicalBaseDir === canonicalUpstreamHome) {
     return yield* new MigrateDevDbSharedHomeError();
   }
   // Both destination and snapshot are deleted below; reject sources resolving to either.
@@ -635,11 +641,15 @@ export const migrateDevDbCommand = Command.make(
     ),
     baseDir: Flag.String("base-dir").pipe(
       Flag.optional,
-      Flag.withDescription("Isolated .t3 directory. Defaults to the current worktree's .t3."),
+      Flag.withDescription(
+        "Isolated .t3 directory. Defaults to the current worktree's .t3/lightning-code.",
+      ),
     ),
     source: Flag.String("source").pipe(
       Flag.optional,
-      Flag.withDescription("Source database. Defaults to ~/.t3/userdata/statev2.sqlite."),
+      Flag.withDescription(
+        "Source database. Defaults to ~/.lightning-code/userdata/statev2.sqlite.",
+      ),
     ),
   },
   ({ projects, threadsPerProject, baseDir, source }) =>
@@ -666,7 +676,7 @@ export const migrateDevDbCommand = Command.make(
     }),
 ).pipe(
   Command.withDescription(
-    "Rebuild the worktree dev database from a pruned snapshot of the real ~/.t3 data, then run migrations.",
+    "Rebuild the worktree dev database from a pruned snapshot of the real ~/.lightning-code data, then run migrations.",
   ),
 );
 

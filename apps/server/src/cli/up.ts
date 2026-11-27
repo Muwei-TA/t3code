@@ -92,7 +92,7 @@ const readSetup = Effect.fn("cli.up.read_setup")(function* () {
 });
 
 /**
- * The routes `t3 up` starts from. With no route flag it asks about every
+ * The routes `lightning up` starts from. With no route flag it asks about every
  * route, starting a machine with no service from T3 Connect. Any route flag
  * means it asks nothing and keeps the routes not named as they are.
  */
@@ -209,8 +209,8 @@ const formatNextSteps = (routes: Routes, serviceInstalled: boolean, hints: Hints
       ? []
       : [
           serviceInstalled
-            ? "Remote access is off. T3 Code still runs here in the background."
-            : `Remote access is off. Run \`${hints.run}\` to use T3 Code here.`,
+            ? "Remote access is off. Lightning Code still runs here in the background."
+            : `Remote access is off. Run \`${hints.run}\` to use Lightning Code here.`,
         ]),
   ].join("\n");
 
@@ -277,7 +277,7 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
       cause: "routes",
       userMessage: `No terminal. Choose access with ${
         before.connect === null ? "--lan" : "--connect or --lan"
-      }, or use --yes for the default. See \`t3 up --help\`.`,
+      }, or use --yes for the default. See \`lightning up --help\`.`,
     });
   }
   if (routes.connect && !current.connect) yield* requireConnectAllowed;
@@ -314,7 +314,7 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
     const confirmed = yield* Prompt.run(
       Prompt.Confirm({
         message: update
-          ? "Update and restart T3 Code? Running agent turns will stop."
+          ? "Update and restart Lightning Code? Running agent turns will stop."
           : "Apply changes and restart? Running agent turns will stop.",
         initial: true,
       }),
@@ -389,7 +389,7 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
       yield* Console.log(`Keeping installed service version t3@${installedVersion}.`);
     }
     if (update && !interactive) {
-      yield* Console.log("Updating T3 Code. Running agent turns will stop.");
+      yield* Console.log("Updating Lightning Code. Running agent turns will stop.");
     }
     const result = newer
       ? ({ changed: false } as const)
@@ -427,7 +427,7 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
         yield* Console.log(`Run \`${command}\` to turn T3 Connect off.`);
       } else {
         if (!interactive && !stopped) {
-          yield* Console.log("Restarting T3 Code. Running agent turns will stop.");
+          yield* Console.log("Restarting Lightning Code. Running agent turns will stop.");
         }
         const outcome = yield* service.restart.pipe(Effect.tapError(() => rollBack));
         if (outcome === "queued") {
@@ -477,17 +477,17 @@ export const upCommand = Command.make("up", {
   ),
   headless: headlessFlag,
 }).pipe(
-  Command.withShortDescription("Set up remote access and the T3 Code background service."),
+  Command.withShortDescription("Set up remote access and the Lightning Code background service."),
   Command.withDescription(
-    "Set up remote access and the T3 Code background service. Access flags skip the question, and routes not named keep their settings. Without a terminal, a needed restart runs without asking and stops running agent turns.",
+    "Set up remote access and the Lightning Code background service. Access flags skip the question, and routes not named keep their settings. Without a terminal, a needed restart runs without asking and stops running agent turns.",
   ),
   Command.withExamples([
-    { command: "t3 up", description: "Choose remote access." },
-    { command: "t3 up --connect", description: "Turn on T3 Connect. Keep other settings." },
-    { command: "t3 up --lan", description: "Allow LAN access with pairing codes." },
-    { command: "t3 up --no-lan", description: "Stop LAN access." },
-    { command: "t3 up --yes", description: "Take the defaults with no questions." },
-    { command: "t3 status --json", description: "Read the settings from a script." },
+    { command: "lightning up", description: "Choose remote access." },
+    { command: "lightning up --connect", description: "Turn on T3 Connect. Keep other settings." },
+    { command: "lightning up --lan", description: "Allow LAN access with pairing codes." },
+    { command: "lightning up --no-lan", description: "Stop LAN access." },
+    { command: "lightning up --yes", description: "Take the defaults with no questions." },
+    { command: "lightning status --json", description: "Read the settings from a script." },
   ]),
   Command.withHandler((flags) => runCloudCommand(flags, setUp(flags), { quietLogs: true })),
 );
@@ -496,7 +496,7 @@ export const connectCommand = Command.make("connect", {
   ...projectLocationFlags,
   headless: headlessFlag,
 }).pipe(
-  Command.withDescription("Set up T3 Connect for this machine. Same as `t3 up --connect`."),
+  Command.withDescription("Set up T3 Connect for this machine. Same as `lightning up --connect`."),
   Command.withHandler((flags) =>
     runCloudCommand(
       flags,
@@ -538,8 +538,8 @@ export const statusCommand = Command.make("status", {
 }).pipe(
   Command.withDescription("Show service setup and remote access settings."),
   Command.withExamples([
-    { command: "t3 status", description: "Show the settings." },
-    { command: "t3 status --json", description: "Print them for scripts and agents." },
+    { command: "lightning status", description: "Show the settings." },
+    { command: "lightning status --json", description: "Print them for scripts and agents." },
   ]),
   Command.withHandler(
     Effect.fn("cli.status")(function* (flags) {

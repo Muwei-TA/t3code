@@ -1,7 +1,3 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import * as NodeFS from "node:fs";
-import * as NodePath from "node:path";
-
 import { assert, it } from "@effect/vitest";
 
 import {
@@ -11,13 +7,9 @@ import {
   TRIAGE_PLAYBOOK,
 } from "./triagePrompt.ts";
 
-it("stays byte-identical to .github/triage/PLAYBOOK.md", () => {
-  // Older releases fetch the repository playbook.
-  const canonicalPath = NodePath.join(
-    import.meta.dirname,
-    "../../../../.github/triage/PLAYBOOK.md",
-  );
-  assert.equal(TRIAGE_PLAYBOOK, NodeFS.readFileSync(canonicalPath, "utf8"));
+it("uses the installed playbook and the Lightning repository", () => {
+  assert.notMatch(TRIAGE_PLAYBOOK, /pingdotgg|app\.t3\.codes|raw\.githubusercontent\.com/);
+  assert.include(TRIAGE_PLAYBOOK, "https://github.com/Muwei-TA/t3code");
 });
 
 it("launch prompt stays a single argv-safe line naming the prompt file", () => {
@@ -38,7 +30,7 @@ it("context file labels the CLI version as the CLI's, not the user's build", () 
   assert.notInclude(context, "Release tag");
   assert.include(context, "- Triage CLI version: 0.0.42 (");
   assert.include(context, "version 0.0.43-nightly.20260923.2173");
-  assert.notInclude(context, "runs inside T3 Code");
+  assert.notInclude(context, "runs inside Lightning Code");
 });
 
 it("in-app context warns the agent off its own server and points at the clone in progress", () => {
@@ -56,7 +48,7 @@ it("in-app context warns the agent off its own server and points at the clone in
   });
   assert.notInclude(context, "Triage CLI version");
   assert.include(context, "- Started from: T3 Code Desktop version 0.1.1 on macos (");
-  assert.include(context, "## This session runs inside T3 Code");
+  assert.include(context, "## This session runs inside Lightning Code");
   assert.include(context, "/home/u/.t3/source/abc123  (v0.1.1, commit abc123)");
   assert.include(context, "Wait for it instead of\ncloning again.");
 });

@@ -1,3 +1,5 @@
+import { resolveLightningWorktreeHome } from "../devHome.ts";
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import {
   type AuthEnvironmentScope,
   AuthStandardClientScopes,
@@ -5,7 +7,7 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
   PortSchema,
 } from "@t3tools/contracts";
-import { resolveWorktreeT3Home } from "@t3tools/shared/devHome";
+
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { formatHostForUrl, isWildcardHost } from "@t3tools/shared/hostClassification";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
@@ -282,12 +284,12 @@ const discoverPairTarget = Effect.fn("pair.discoverPairTarget")(function* (
     // `.t3` counts. Minting opens the target database with this checkout's
     // migrations, so falling back to the shared home could migrate the live
     // install with unreleased schema.
-    const worktreeHome = yield* resolveWorktreeT3Home(yield* HostProcess.WorkingDirectory);
+    const worktreeHome = yield* resolveLightningWorktreeHome(yield* HostProcess.WorkingDirectory);
     if (worktreeHome !== undefined) {
       bases.push(worktreeHome);
       inLinkedWorktree = true;
     } else {
-      const envHome = yield* Config.String("T3CODE_HOME").pipe(Config.option);
+      const envHome = yield* Config.String(LIGHTNING_BRAND.homeEnvVar).pipe(Config.option);
       bases.push(yield* resolveBaseDir(Option.getOrUndefined(envHome)));
     }
   }
@@ -537,7 +539,7 @@ export const pairCommand = Command.make("pair", {
   tailscaleServePort: tailscaleServePortFlag,
 }).pipe(
   Command.withDescription(
-    "Mint a pairing token for a running T3 Code server and print it as a QR code.",
+    "Mint a pairing token for a running Lightning Code server and print it as a QR code.",
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {

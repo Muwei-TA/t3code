@@ -26,7 +26,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer home
     const home = NodePath.join(root, homeName);
     const version = "1.2.3";
     const target = NodePath.join(home, "runtime/versions", version);
-    const launcher = NodePath.join(root, "bin/t3");
+    const launcher = NodePath.join(root, "bin/lightning");
     try {
       await NodeFSP.mkdir(target, { recursive: true });
       await NodeFSP.writeFile(NodePath.join(target, ".install-complete"), `${version}\n`);
@@ -39,10 +39,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer home
           env: {
             ...process.env,
             HOME: root,
-            T3CODE_HOME: homeName,
+            LIGHTNING_CODE_HOME: homeName,
             T3CODE_VERSION: version,
             T3CODE_INSTALL_BIN_DIR: NodePath.dirname(launcher),
-            T3CODE_RELEASE_BASE_URL: "http://127.0.0.1:1",
+            LIGHTNING_CODE_RELEASE_BASE_URL: "http://127.0.0.1:1",
           },
           encoding: "utf8",
         });
@@ -80,10 +80,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chan
       if (failures-- > 0) return response.writeHead(504).end();
       const url = new URL(request.url ?? "/", "http://fixture");
       const body =
-        url.pathname === "/pingdotgg/t3code/releases/latest" &&
+        url.pathname === "/Muwei-TA/t3code/releases/latest" &&
         request.headers.accept === "application/json"
           ? { tag_name: "v1.2.3" }
-          : url.pathname === "/repos/pingdotgg/t3code/releases"
+          : url.pathname === "/repos/Muwei-TA/t3code/releases"
             ? { "1": nightlies, "2": [{ tag_name: `v${version}` }, { tag_name: "v1.2.3" }] }[
                 url.searchParams.get("page") ?? ""
               ]
@@ -113,10 +113,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chan
               ...process.env,
               T3CODE_VERSION: "",
               T3CODE_CHANNEL: channel,
-              T3CODE_HOME: NodePath.join(root, "home"),
+              LIGHTNING_CODE_HOME: NodePath.join(root, "home"),
               T3CODE_INSTALL_BIN_DIR: NodePath.join(root, "bin"),
               // A wrong version must fail here instead of downloading a real release.
-              T3CODE_RELEASE_BASE_URL: origin,
+              LIGHTNING_CODE_RELEASE_BASE_URL: origin,
             },
             stdio: ["ignore", "pipe", "pipe"],
           });
@@ -164,9 +164,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
                   ...process.env,
                   T3CODE_CHANNEL: "",
                   T3CODE_VERSION: "1.2.3",
-                  T3CODE_HOME: NodePath.join(root, "home"),
+                  LIGHTNING_CODE_HOME: NodePath.join(root, "home"),
                   T3CODE_INSTALL_BIN_DIR: NodePath.join(root, "bin"),
-                  T3CODE_RELEASE_BASE_URL: `http://127.0.0.1:${address.port}`,
+                  LIGHTNING_CODE_RELEASE_BASE_URL: `http://127.0.0.1:${address.port}`,
                 },
                 stdio: ["ignore", "pipe", "pipe"],
               },
@@ -212,9 +212,9 @@ async function installOver(input: {
       ...process.env,
       T3CODE_CHANNEL: "",
       T3CODE_VERSION: "1.2.3",
-      T3CODE_HOME: input.home,
+      LIGHTNING_CODE_HOME: input.home,
       T3CODE_INSTALL_BIN_DIR: input.binDir,
-      T3CODE_RELEASE_BASE_URL: "http://127.0.0.1:9",
+      LIGHTNING_CODE_RELEASE_BASE_URL: "http://127.0.0.1:9",
       ...input.env,
     },
   });
@@ -227,7 +227,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("install.sh t3 
     try {
       const home = NodePath.join(root, "home");
       const binDir = NodePath.join(root, "bin");
-      const link = NodePath.join(binDir, "t3");
+      const link = NodePath.join(binDir, "lightning");
       await NodeFSP.mkdir(binDir, { recursive: true });
 
       await NodeFSP.writeFile(link, "#!/bin/sh\necho mine\n");
@@ -320,7 +320,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("install.sh t3 
       expect(await NodeFSP.readFile(link, "utf8")).toBe(edited);
 
       await NodeFSP.rm(link);
-      await NodeFSP.symlink(NodePath.join(home, "bin/t3"), link);
+      await NodeFSP.symlink(NodePath.join(home, "bin/lightning"), link);
       const overDesktop = await installOver({
         script: "install.sh",
         home: `${home}//`,
@@ -343,7 +343,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")("install.ps1 t3
       // Windows PowerShell 5.1 reads files as ANSI by default and expands wildcards in paths.
       const home = NodePath.join(root, "José", ".t3");
       const binDir = NodePath.join(root, "bin[t3]");
-      const shim = NodePath.join(binDir, "t3.cmd");
+      const shim = NodePath.join(binDir, "lightning.cmd");
       await NodeFSP.mkdir(binDir, { recursive: true });
 
       const desktopShim = '@echo off\r\n"C:\\Program Files\\T3 Code\\T3 Code.exe" "x" %*\r\n';
@@ -354,7 +354,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")("install.ps1 t3
       expect(await NodeFSP.readFile(shim, "utf8")).toBe(desktopShim);
 
       // A hand-edited wrapper may set its own environment; replacing it would drop that.
-      const edited = `@echo off\r\nset "T3CODE_HOME=D:\\other"\r\n"${NodePath.join(home, "runtime", "versions", "1.0.0", "t3.exe")}" %*`;
+      const edited = `@echo off\r\nset "LIGHTNING_CODE_HOME=D:\\other"\r\n"${NodePath.join(home, "runtime", "versions", "1.0.0", "t3.exe")}" %*`;
       await NodeFSP.writeFile(shim, edited, "utf8");
       const wrapper = await installOver({ script: "install.ps1", home, binDir });
       expect(wrapper.code).not.toBe(0);
@@ -380,7 +380,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")("install.ps1 t3
       // Another t3 first on PATH still runs, so the installer names this one in full.
       const otherBin = NodePath.join(root, "other");
       await NodeFSP.mkdir(otherBin);
-      await NodeFSP.writeFile(NodePath.join(otherBin, "t3.cmd"), "@echo off\r\n");
+      await NodeFSP.writeFile(NodePath.join(otherBin, "lightning.cmd"), "@echo off\r\n");
       // Windows spells it Path; a second PATH key would be ambiguous.
       const pathKey =
         Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
@@ -392,7 +392,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")("install.ps1 t3
       });
       expect(shadowed.code, shadowed.output).toBe(0);
       expect(shadowed.output).toContain(
-        `Another t3 at ${NodePath.join(otherBin, "t3.cmd")} runs first`,
+        `Another lightning at ${NodePath.join(otherBin, "lightning.cmd")} runs first`,
       );
 
       // Its own folder on PATH with a trailing separator is already on PATH.
@@ -496,9 +496,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chec
                     ...process.env,
                     PATH: tools,
                     T3CODE_VERSION: version,
-                    T3CODE_HOME: home,
+                    LIGHTNING_CODE_HOME: home,
                     T3CODE_INSTALL_BIN_DIR: NodePath.join(root, "bin"),
-                    T3CODE_RELEASE_BASE_URL: `http://127.0.0.1:${address.port}`,
+                    LIGHTNING_CODE_RELEASE_BASE_URL: `http://127.0.0.1:${address.port}`,
                   },
                   stdio: ["ignore", "pipe", "pipe"],
                 },
@@ -517,7 +517,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chec
               await NodeFSP.readFile(NodePath.join(versions, version, ".install-complete"), "utf8"),
             ).toBe("1.2.3\n");
             expect(
-              NodeChildProcess.execFileSync(NodePath.join(root, "bin/t3"), ["--version"], {
+              NodeChildProcess.execFileSync(NodePath.join(root, "bin/lightning"), ["--version"], {
                 encoding: "utf8",
               }).trim(),
             ).toBe("t3 v1.2.3");
@@ -604,9 +604,9 @@ if (process.env.T3_TEST_INSTALLER === 'first') await fetch(process.env.T3_TEST_O
                 ...process.env,
                 PATH: `${tools}:${process.env.PATH}`,
                 T3CODE_VERSION: version,
-                T3CODE_HOME: NodePath.join(root, "home"),
+                LIGHTNING_CODE_HOME: NodePath.join(root, "home"),
                 T3CODE_INSTALL_BIN_DIR: NodePath.join(root, "bin", id),
-                T3CODE_RELEASE_BASE_URL: origin,
+                LIGHTNING_CODE_RELEASE_BASE_URL: origin,
                 T3_TEST_ORIGIN: origin,
                 T3_TEST_INSTALLER: id,
               },

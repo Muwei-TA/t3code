@@ -245,7 +245,7 @@ const serviceReconcileFlags = {
 
 const serviceInstallCommand = Command.make("install", serviceReconcileFlags).pipe(
   Command.withDescription(
-    "Install T3 Code as a background service for this user. `t3 up` also chooses how your other devices reach it.",
+    "Install Lightning Code as a background service for this user. `lightning up` also chooses how your other devices reach it.",
   ),
   Command.withHandler((flags) =>
     runServiceCommand(
@@ -269,7 +269,7 @@ const serviceInstallCommand = Command.make("install", serviceReconcileFlags).pip
 );
 
 const serviceUpdateCommand = Command.make("update", serviceReconcileFlags).pipe(
-  Command.withDescription("Deprecated. Run `t3 update` to move to a newer release."),
+  Command.withDescription("Deprecated. Run `lightning update` to move to a newer release."),
   Command.unlisted,
   Command.withHandler((flags) =>
     runServiceCommand(
@@ -293,7 +293,7 @@ const serviceUpdateCommand = Command.make("update", serviceReconcileFlags).pipe(
 
 const serviceRestartCommand = Command.make("restart", projectLocationFlags).pipe(
   Command.withDescription(
-    "Restart the background service. Picks up a version installed by `t3 update` that was not restarted at the time.",
+    "Restart the background service. Picks up a version installed by `lightning update` that was not restarted at the time.",
   ),
   Command.withHandler((flags) =>
     runServiceCommand(
@@ -319,7 +319,7 @@ const serviceRestartCommand = Command.make("restart", projectLocationFlags).pipe
 );
 
 const serviceUninstallCommand = Command.make("uninstall", projectLocationFlags).pipe(
-  Command.withDescription("Stop and remove the T3 Code background service."),
+  Command.withDescription("Stop and remove the Lightning Code background service."),
   Command.withHandler((flags) =>
     runServiceCommand(
       flags,
@@ -351,7 +351,7 @@ const serviceUninstallCommand = Command.make("uninstall", projectLocationFlags).
 );
 
 const serviceStatusCommand = Command.make("status", projectLocationFlags).pipe(
-  Command.withDescription("Show whether the T3 Code background service is installed."),
+  Command.withDescription("Show whether the Lightning Code background service is installed."),
   Command.withHandler((flags) =>
     runServiceCommand(
       flags,
@@ -398,7 +398,7 @@ const serviceProtectCommand = Command.make("protect", {
   ),
 }).pipe(
   Command.withDescription(
-    "Protect the T3 Code server from agents under memory pressure (Linux with systemd). Asks for sudo.",
+    "Protect the Lightning Code server from agents under memory pressure (Linux with systemd). Asks for sudo.",
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
@@ -494,7 +494,7 @@ const serviceProtectCommand = Command.make("protect", {
 );
 
 export const serviceCommand = Command.make("service").pipe(
-  Command.withDescription("Manage the T3 Code background service."),
+  Command.withDescription("Manage the Lightning Code background service."),
   Command.withSubcommands([
     serviceInstallCommand,
     serviceRestartCommand,

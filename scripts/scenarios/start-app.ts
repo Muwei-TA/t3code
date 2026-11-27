@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // The app command of e2e.config.ts: starts the dev stack of the checkout it runs in on a fresh
 // T3 home. e2e stops it with a signal, which ends the scope and the processes it started.
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -19,8 +20,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { ScenarioError } from "./shell.ts";
 
-// The dev runner's web port is 5733 plus an offset. Mirror of BASE_WEB_PORT in dev-runner.ts.
-const BASE_WEB_PORT = 5733;
+const BASE_WEB_PORT = LIGHTNING_BRAND.defaultDevWebPort;
 // The replay agent `vp run dev` registers: free, recorded turns through the real adapter.
 const REPLAY = { instanceId: "devReplay", model: "showcase" };
 // Generated text (titles) cannot go to the replay agent: the server swaps an ACP agent for the

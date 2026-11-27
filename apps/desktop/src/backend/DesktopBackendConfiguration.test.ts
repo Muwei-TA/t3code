@@ -86,7 +86,7 @@ function layerEnvironment(
         NodeServices.layer,
         NodeCrypto.layer,
         DesktopConfig.layerTest({
-          T3CODE_HOME: baseDir,
+          LIGHTNING_CODE_HOME: baseDir,
           T3CODE_PORT: "9999",
           T3CODE_MODE: "desktop",
           T3CODE_DESKTOP_LAN_HOST: "192.168.1.50",
@@ -451,7 +451,7 @@ describe("DesktopBackendConfiguration", () => {
             "--exec",
             "env",
             `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${resolvedPath}`,
-            `T3CODE_HOME=${t3Home}`,
+            `LIGHTNING_CODE_HOME=${t3Home}`,
             `${linuxAppRoot}/t3`,
             "--bootstrap-fd",
             "0",
@@ -542,7 +542,7 @@ describe("DesktopBackendConfiguration", () => {
 
   it.effect("resolveWsl does not stage a runtime when the login-shell probe fails", () => {
     const archiveHash = "c".repeat(64);
-    const stagedAppRoot = `/home/test/.t3/wsl-runtime/sha256-${archiveHash}`;
+    const stagedAppRoot = `/home/test/.lightning-code/wsl-runtime/sha256-${archiveHash}`;
     let probeCount = 0;
     const observedNodePtyRoots: string[] = [];
     return withPackagedWslHarness(
@@ -585,7 +585,7 @@ describe("DesktopBackendConfiguration", () => {
   });
 
   it.effect("resolveWsl keeps WSL retryable when the mounted fallback fails transiently", () => {
-    const stagedAppRoot = "/home/test/.t3/wsl-runtime/cache";
+    const stagedAppRoot = "/home/test/.lightning-code/wsl-runtime/cache";
     return withPackagedWslHarness(
       {
         archiveHash: "f".repeat(64),
@@ -749,8 +749,8 @@ describe("DesktopBackendConfiguration", () => {
 
         assert.equal(config.env.OTEL_SDK_DISABLED, "true");
         assert.include((config.env.WSLENV ?? "").split(":"), "OTEL_SDK_DISABLED");
-        assert.equal(config.env.T3CODE_TELEMETRY_ENABLED, "false");
-        assert.include((config.env.WSLENV ?? "").split(":"), "T3CODE_TELEMETRY_ENABLED");
+        assert.equal(config.env.LIGHTNING_CODE_TELEMETRY_ENABLED, "false");
+        assert.include((config.env.WSLENV ?? "").split(":"), "LIGHTNING_CODE_TELEMETRY_ENABLED");
         assert.equal(config.env.OTEL_RESOURCE_ATTRIBUTES, "deployment.environment.name=staging");
         assert.include((config.env.WSLENV ?? "").split(":"), "OTEL_RESOURCE_ATTRIBUTES");
       }).pipe(
@@ -771,7 +771,7 @@ describe("DesktopBackendConfiguration", () => {
         ),
         Effect.provideService(HostProcess.Environment, {
           OTEL_SDK_DISABLED: "true",
-          T3CODE_TELEMETRY_ENABLED: "false",
+          LIGHTNING_CODE_TELEMETRY_ENABLED: "false",
           OTEL_RESOURCE_ATTRIBUTES: "deployment.environment.name=staging",
         }),
       );

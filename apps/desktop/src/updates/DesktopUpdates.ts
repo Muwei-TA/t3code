@@ -1,3 +1,4 @@
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import {
   DESKTOP_UPDATE_RESTART_MARKER_FILE,
   DESKTOP_UPDATE_IN_PROGRESS_MARKER_FILE,
@@ -394,6 +395,7 @@ export const make = Effect.gen(function* () {
   // Any user can set the mock flag, so it never replaces an administrator's update source.
   const mockUpdates = config.mockUpdates && policy.message === null;
 
+  const feedUrl = policy.feedUrl ?? Option.getOrUndefined(config.updateFeedUrl)?.href;
   const appUpdateYmlConfigRef = yield* Ref.make<Option.Option<AppUpdateYmlConfig>>(Option.none());
   const activeUpdateActionRef = yield* Ref.make<Option.Option<UpdateAction>>(Option.none());
   const installRunningBackendsRef = yield* Ref.make<
@@ -474,7 +476,9 @@ export const make = Effect.gen(function* () {
   const hasUpdateFeedConfig = Ref.get(appUpdateYmlConfigRef).pipe(
     Effect.map(
       (appUpdateYmlConfig) =>
-        Option.isSome(appUpdateYmlConfig) || mockUpdates || policy.feedUrl !== undefined,
+        (LIGHTNING_BRAND.autoUpdateEnabledByDefault && Option.isSome(appUpdateYmlConfig)) ||
+        mockUpdates ||
+        feedUrl !== undefined,
     ),
   );
 
@@ -1304,11 +1308,11 @@ export const make = Effect.gen(function* () {
           provider: "generic",
           url: `http://localhost:${config.mockUpdateServerPort}`,
         } as ElectronUpdater.ElectronUpdaterFeedUrl);
-      } else if (policy.feedUrl !== undefined) {
+      } else if (feedUrl !== undefined) {
         // The administrator's mirror replaces the GitHub feed baked into app-update.yml.
         yield* electronUpdater.setFeedURL({
           provider: "generic",
-          url: policy.feedUrl,
+          url: feedUrl,
         } as ElectronUpdater.ElectronUpdaterFeedUrl);
       }
 
