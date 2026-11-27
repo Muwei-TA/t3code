@@ -20,8 +20,6 @@ vi.mock(import("./orchestration"), () => ({
 vi.mock(import("./atom-registry"), () => ({ appAtomRegistry: {} as never }));
 vi.mock(import("../lib/hostedThreadLinkOrigin"), () => ({
   hostedThreadLinkOrigin: undefined,
-  mobileAppScheme: "lightningcode",
-  hostedThreadLinkPrefix: "",
 }));
 vi.mock(import("./projects"), () => ({ environmentProjects: {} as never }));
 vi.mock(import("./server"), () => ({
