@@ -1,5 +1,6 @@
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { LIGHTNING_BRAND } from "./brand.ts";
 import { oauthCallbackUrl } from "./oauthCallback.ts";
 import { providerAuthReturnUrl } from "./providerAuthReturnUrl.ts";
 
@@ -64,8 +65,11 @@ export function codexCallbackUrl(value: string, redirectUri: string, state: stri
   return callback;
 }
 
+const codexAuthScheme = (development: boolean) =>
+  development ? `${LIGHTNING_BRAND.urlScheme}-dev` : LIGHTNING_BRAND.urlScheme;
+
 export function codexAuthHandoffUrl(input: CodexAuthHandoff, development = false) {
-  const url = new URL(`${development ? "t3code-dev" : "t3code"}://auth/codex`);
+  const url = new URL(`${codexAuthScheme(development)}://auth/codex`);
   url.searchParams.set("request", encodeHandoff(input));
   return url.toString();
 }
@@ -75,7 +79,7 @@ export function readCodexAuthHandoff(value: string, development: boolean) {
     const url = new URL(value);
     if (
       value.length > 32_768 ||
-      url.protocol !== (development ? "t3code-dev:" : "t3code:") ||
+      url.protocol !== `${codexAuthScheme(development)}:` ||
       url.host !== "auth" ||
       url.pathname !== "/codex" ||
       url.username ||
@@ -98,7 +102,7 @@ export function codexAuthDeliveryUrl(input: CodexAuthHandoff, callbackUrl: strin
   const request = codexAuthorizationRequest(input.authorizationUrl);
   codexCallbackUrl(callbackUrl, request.redirectUri, request.state);
   const destination = providerAuthReturnUrl(input.returnUrl);
-  if (!destination) throw new Error("Invalid T3 Code return address.");
+  if (!destination) throw new Error(`Invalid ${LIGHTNING_BRAND.baseName} return address.`);
   const url = new URL(destination);
   const delivery = {
     environmentId: input.environmentId,
