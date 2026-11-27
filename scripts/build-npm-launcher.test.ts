@@ -47,45 +47,65 @@ const run = Effect.fn("test.run")(function* (
   return { stdout, stderr, exitCode };
 }, Effect.scoped);
 
-const serveFakeRelease = Effect.fn("test.serveFakeRelease")(function* (
+const serveFakeReleases = Effect.fn("test.serveFakeReleases")(function* (
   root: string,
-  executable = `#!/bin/sh
-if [ -n "$T3CODE_TEST_CALLS" ]; then echo "$*|$T3CODE_NPM_LAUNCHER_PATH" >> "$T3CODE_TEST_CALLS"; fi
-if [ "$1" = "--version" ]; then echo "${VERSION}"; exit 0; fi
-echo "stub $* launcher=$T3CODE_NPM_LAUNCHER_PATH"
-exit 7
-`,
+  releases: ReadonlyArray<{
+    readonly version: string;
+    readonly executable?: string;
+    readonly npmTarball?: Uint8Array;
+  }> = [{ version: VERSION }],
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const key = `${yield* HostProcess.Platform}-${yield* HostProcess.Architecture}`;
-  const stem = `t3-${VERSION}-${key}`;
-  const archiveName = `${stem}.tar.gz`;
-  yield* fs.makeDirectory(path.join(root, "release", stem, "node_modules/native"), {
-    recursive: true,
-  });
-  yield* fs.writeFileString(path.join(root, "release", stem, "t3"), executable);
-  yield* fs.chmod(path.join(root, "release", stem, "t3"), 0o755);
-  const tar = yield* run("tar", ["-czf", archiveName, stem], {
-    cwd: path.join(root, "release"),
-    env: { PATH: (yield* HostProcess.Environment).PATH },
-  });
-  assert.equal(tar.exitCode, 0, tar.stderr);
-  const archive = yield* fs.readFile(path.join(root, "release", archiveName));
-  let checksum = NodeCrypto.createHash("sha256").update(archive).digest("hex");
+  const hostPath = (yield* HostProcess.Environment).PATH;
+  const assets = new Map<string, string | Uint8Array>();
+  for (const { version, executable, npmTarball } of releases) {
+    const stem = `t3-${version}-${key}`;
+    const archiveName = `${stem}.tar.gz`;
+    const releaseDir = path.join(root, "release");
+    const entry = path.join(releaseDir, stem, "t3");
+    yield* fs.makeDirectory(path.join(releaseDir, stem, "node_modules/native"), {
+      recursive: true,
+    });
+    yield* fs.writeFileString(
+      entry,
+      executable ??
+        `#!/bin/sh
+if [ -n "$T3CODE_TEST_CALLS" ]; then echo "$*|$T3CODE_NPM_LAUNCHER_PATH" >> "$T3CODE_TEST_CALLS"; fi
+if [ "$1" = "--version" ]; then echo "${version}"; exit 0; fi
+echo "stub $* launcher=$T3CODE_NPM_LAUNCHER_PATH"
+exit 7
+`,
+    );
+    yield* fs.chmod(entry, 0o755);
+    const tar = yield* run("tar", ["-czf", archiveName, stem], {
+      cwd: releaseDir,
+      env: { PATH: hostPath },
+    });
+    assert.equal(tar.exitCode, 0, tar.stderr);
+    const archive = yield* fs.readFile(path.join(releaseDir, archiveName));
+    const checksum = NodeCrypto.createHash("sha256").update(archive).digest("hex");
+    assets.set(`/v${version}/SHA256SUMS`, `${checksum}  ${archiveName}\n`);
+    assets.set(`/v${version}/${archiveName}`, archive);
+    if (npmTarball !== undefined) assets.set(`/v${version}/t3.tgz`, npmTarball);
+  }
+  let corruptChecksums = false;
   const requests: Array<string> = [];
   const failures: Array<number> = [];
   const server = NodeHttp.createServer((request, response) => {
-    requests.push(request.url ?? "");
+    const url = request.url ?? "";
+    requests.push(url);
     const failure = failures.shift();
+    const asset = assets.get(url);
     if (failure !== undefined) {
       response.writeHead(failure).end("upstream timed out");
-    } else if (request.url === `/v${VERSION}/SHA256SUMS`) {
-      response.end(`${checksum}  ${archiveName}\n`);
-    } else if (request.url === `/v${VERSION}/${archiveName}`) {
-      response.writeHead(200, { "Content-Length": archive.length }).end(archive);
-    } else {
+    } else if (asset === undefined) {
       response.writeHead(404).end();
+    } else if (typeof asset === "string") {
+      response.end(corruptChecksums ? `${"0".repeat(64)}${asset.slice(64)}` : asset);
+    } else {
+      response.writeHead(200, { "Content-Length": asset.length }).end(asset);
     }
   });
   yield* Effect.acquireRelease(
@@ -103,7 +123,7 @@ exit 7
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests,
     corruptChecksum: () => {
-      checksum = "0".repeat(64);
+      corruptChecksums = true;
     },
     failNextRequests: (...statuses: Array<number>) => {
       failures.push(...statuses);
@@ -147,7 +167,7 @@ it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
         assert.equal(unpack.exitCode, 0, unpack.stderr);
         const packageDir = path.join(installed, "package");
 
-        const release = yield* serveFakeRelease(root);
+        const release = yield* serveFakeReleases(root);
         // regression: #32897
         release.failNextRequests(504, 524);
         const home = path.join(root, "home");
@@ -355,6 +375,60 @@ fs.readFileSync = (file, ...rest) => {
         );
       }),
   );
+
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "upgrades a global Lightning CLI in place from a versioned release tarball",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "lightning-npm-upgrade-test-" });
+        const versions = [VERSION, "1.2.4"];
+        const releases = yield* Effect.forEach(versions, (version) =>
+          Effect.gen(function* () {
+            const { tarball } = yield* buildNpmLauncher({
+              version,
+              outputDir: path.join(root, version),
+            });
+            return { version, npmTarball: yield* fs.readFile(tarball) };
+          }),
+        );
+        const release = yield* serveFakeReleases(root, releases);
+        const prefix = path.join(root, "npm prefix");
+        const launcher = path.join(prefix, "bin/lightning");
+        const env = {
+          PATH: (yield* HostProcess.Environment).PATH,
+          LIGHTNING_CODE_HOME: path.join(root, "lightning-home"),
+          LIGHTNING_CODE_RELEASE_BASE_URL: release.baseUrl,
+          npm_config_cache: path.join(root, "npm-cache"),
+          npm_config_userconfig: path.join(root, "user.npmrc"),
+          npm_config_globalconfig: path.join(root, "global.npmrc"),
+          npm_config_registry: release.baseUrl,
+        };
+        for (const version of versions) {
+          const asset = `/v${version}/t3.tgz`;
+          const installed = yield* run(
+            "npm",
+            [
+              "install",
+              "--global",
+              "--prefix",
+              prefix,
+              "--no-audit",
+              "--no-fund",
+              `${release.baseUrl}${asset}`,
+            ],
+            { cwd: root, env },
+          );
+          assert.equal(installed.exitCode, 0, installed.stderr);
+          assert.include(release.requests, asset);
+          const result = yield* run(launcher, ["--version"], { cwd: root, env });
+          assert.equal(result.exitCode, 0, result.stderr);
+          assert.equal(result.stdout.trim(), version);
+        }
+      }),
+  );
+
   it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     "does not publish an unusable release",
     () =>
@@ -372,20 +446,23 @@ fs.readFileSync = (file, ...rest) => {
             version: VERSION,
             outputDir: path.join(root, "out"),
           });
-          const release = yield* serveFakeRelease(root, executable);
+          const release = yield* serveFakeReleases(root, [{ version: VERSION, executable }]);
           const home = path.join(root, "home");
           const dir = path.join(home, "runtime/versions", VERSION);
+          const hangs = executable.includes("trap");
           const probeTimeoutHook = path.join(root, "probe-timeout.mjs");
-          yield* fs.writeFileString(
-            probeTimeoutHook,
-            `import childProcess from "node:child_process";
+          if (hangs) {
+            yield* fs.writeFileString(
+              probeTimeoutHook,
+              `import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 const { spawnSync } = childProcess;
 childProcess.spawnSync = (command, args, options) => spawnSync(command, args,
-  options?.timeout === undefined ? options : { ...options, timeout: 500 });
+  options?.timeout === undefined ? options : { ...options, timeout: 2_000 });
 syncBuiltinESMExports();
 `,
-          );
+            );
+          }
           const env = {
             PATH: (yield* HostProcess.Environment).PATH,
             LIGHTNING_CODE_HOME: home,
@@ -394,18 +471,17 @@ syncBuiltinESMExports();
             T3CODE_TEST_TERM: path.join(root, "probe-term"),
           };
           const launcher = path.join(output.packageDir, "bin/t3.mjs");
-          const failed = yield* run(
-            process.execPath,
-            ["--import", probeTimeoutHook, launcher, "serve"],
-            { cwd: root, env },
-          );
+          const args = hangs
+            ? ["--import", probeTimeoutHook, launcher, "serve"]
+            : [launcher, "serve"];
+          const failed = yield* run(process.execPath, args, { cwd: root, env });
           assert.equal(failed.exitCode, 1, failed.stderr);
           assert.deepStrictEqual(yield* fs.readDirectory(path.dirname(dir)), [], failed.stderr);
           assert.include(failed.stderr, "could not run");
           if (executable.includes("runtime loader failed")) {
             assert.include(failed.stderr, "runtime loader failed");
           }
-          if (executable.includes("trap")) {
+          if (hangs) {
             assert.isTrue(yield* fs.exists(env.T3CODE_TEST_READY));
             assert.isFalse(yield* fs.exists(env.T3CODE_TEST_TERM));
           }

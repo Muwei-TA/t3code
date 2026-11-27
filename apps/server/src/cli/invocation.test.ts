@@ -228,7 +228,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
         expect(installation).toEqual(
           launchedBy
             ? { kind: "t3-launcher", launcher: executable, baseDir: path.join(root, ".t3") }
-            : { kind },
+            : { kind, launch: { node: executable, entry: yield* fs.realPath(entry) } },
         );
         if (launchedBy) {
           const command = yield* resolveHostCliCommand("pair").pipe(...withLaunch);
@@ -352,6 +352,35 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
         launcher,
         baseDir,
       });
+    }),
+  );
+
+  it.effect("finds the recorded Windows launcher without changing another install", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+      const baseDir = path.join(root, "Lightning home");
+      const executable = path.join(baseDir, "runtime/versions/1.2.3/t3.exe");
+      const installed = path.join(root, "custom bin", "lightning.cmd");
+      const otherBin = path.join(root, "other bin");
+      const other = path.join(otherBin, "lightning.cmd");
+      yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+      yield* fs.makeDirectory(path.dirname(installed), { recursive: true });
+      yield* fs.makeDirectory(otherBin);
+      yield* fs.writeFileString(executable, "");
+      yield* fs.writeFileString(installed, `@echo off\r\n"${executable}" %*\r\n`);
+      yield* fs.writeFileString(other, `@echo off\r\nset PROFILE=other\r\n"${executable}" %*\r\n`);
+      yield* fs.writeFileString(path.join(baseDir, "runtime/launchers"), `${installed}\r\n`);
+      const resolve = resolveServerInstallation.pipe(
+        Effect.provideService(HostProcess.ExecutablePath, executable),
+        Effect.provideService(HostProcess.IsExecutable, true),
+        Effect.provideService(HostProcess.Platform, "win32"),
+        Effect.provideService(HostProcess.Environment, { PATH: otherBin }),
+      );
+      expect(yield* resolve).toEqual({ kind: "t3-launcher", launcher: installed, baseDir });
+      yield* fs.remove(installed);
+      expect(yield* resolve).toEqual({ kind: "t3-launcher", launcher: executable, baseDir });
     }),
   );
 

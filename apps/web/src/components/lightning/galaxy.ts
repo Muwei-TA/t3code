@@ -2,6 +2,17 @@ import { observeResize } from "~/lib/observeResize";
 
 // The two orbital planes are painted on resize or palette changes. Their movement is composited.
 const TAU = Math.PI * 2;
+const ORBIT_PALETTE = ["#73bed5", "#aa9de7", "#d8a781", "#e9f3ff"] as const;
+
+function readOrbitPalette(element: Element): readonly [string, string, string, string] {
+  const style = getComputedStyle(element);
+  return [
+    style.getPropertyValue("--orbit-ice").trim() || ORBIT_PALETTE[0],
+    style.getPropertyValue("--orbit-iris").trim() || ORBIT_PALETTE[1],
+    style.getPropertyValue("--orbit-copper").trim() || ORBIT_PALETTE[2],
+    style.getPropertyValue("--orbit-pearl").trim() || ORBIT_PALETTE[3],
+  ];
+}
 
 function seededNoise(seed: number) {
   return () => {
@@ -16,11 +27,7 @@ export function paintOrbit(canvas: HTMLCanvasElement, pixels: number, inner: boo
   canvas.width = canvas.height = pixels;
   const scale = pixels / 1000;
   ctx.setTransform(scale, 0, 0, scale, pixels / 2, pixels / 2);
-  const style = getComputedStyle(canvas);
-  const ice = style.getPropertyValue("--orbit-ice").trim();
-  const iris = style.getPropertyValue("--orbit-iris").trim();
-  const copper = style.getPropertyValue("--orbit-copper").trim();
-  const pearl = style.getPropertyValue("--orbit-pearl").trim();
+  const [ice, iris, copper, pearl] = readOrbitPalette(canvas);
   const next = seededNoise(inner ? 83177 : 95719);
   const count = inner ? 470 : 1800;
   const hazeCount = inner ? 35 : 130;
@@ -116,9 +123,7 @@ export function releaseWarp(host: HTMLElement, anchor: Element | null | undefine
   burst.width = Math.ceil(width * scale);
   burst.height = Math.ceil(height * scale);
   ctx.scale(scale, scale);
-  const style = getComputedStyle(host);
-  const ice = style.getPropertyValue("--orbit-ice");
-  const pearl = style.getPropertyValue("--orbit-pearl");
+  const [ice, , , pearl] = readOrbitPalette(host);
   const next = seededNoise(27163);
   const capsule = anchor?.getBoundingClientRect();
   const bounds = stage.getBoundingClientRect();
@@ -205,12 +210,7 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
   let width = 0;
   let height = 0;
   let dpr = 1;
-  let palette: readonly [string, string, string, string] = [
-    "#73bed5",
-    "#aa9de7",
-    "#d8a781",
-    "#e9f3ff",
-  ];
+  let palette: readonly [string, string, string, string] = ORBIT_PALETTE;
   let stars: SwarmStar[] = [];
 
   let pointerActive = false;
@@ -230,13 +230,7 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
   const isInteractiveCapable = () => hoverMedia.matches && !reducedMedia.matches;
 
   const readPalette = () => {
-    const style = getComputedStyle(host);
-    palette = [
-      style.getPropertyValue("--orbit-ice").trim() || "#73bed5",
-      style.getPropertyValue("--orbit-iris").trim() || "#aa9de7",
-      style.getPropertyValue("--orbit-copper").trim() || "#d8a781",
-      style.getPropertyValue("--orbit-pearl").trim() || "#e9f3ff",
-    ];
+    palette = readOrbitPalette(host);
   };
 
   const seedStars = () => {

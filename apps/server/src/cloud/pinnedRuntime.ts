@@ -593,6 +593,51 @@ const windowsShimTarget = (contents: string) => /^"([^"]+)"/m.exec(contents)?.[1
 export const generatedWindowsShimTarget = (contents: string) =>
   /^@echo off\r?\n"([^"]+)" %\*\s*$/.exec(contents)?.[1];
 
+/** Windows executables see their own path, so locate the installer shim by matching its target. */
+export const findWindowsShim = Effect.fn("cloud.pinned_runtime.find_windows_shim")(function* (
+  executablePath: string,
+  versionsDir?: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const environment = yield* HostProcess.Environment;
+  const windowsShimName = `${LIGHTNING_BRAND.cliCommand}.cmd`;
+  const candidates = [
+    ...(environment["LIGHTNING_CODE_INSTALL_BIN_DIR"]
+      ? [environment["LIGHTNING_CODE_INSTALL_BIN_DIR"]]
+      : []),
+    ...(environment["T3CODE_INSTALL_BIN_DIR"] ? [environment["T3CODE_INSTALL_BIN_DIR"]] : []),
+    ...(environment["PATH"] ?? environment["Path"] ?? "").split(";"),
+  ]
+    .filter((entry) => entry.trim().length > 0)
+    .map((directory) => path.join(directory, windowsShimName));
+  if (versionsDir !== undefined) {
+    const recorded = yield* fs
+      .readFileString(path.join(path.dirname(versionsDir), PINNED_RUNTIME_LAUNCHERS_FILE))
+      .pipe(Effect.orElseSucceed(() => ""));
+    for (const shimPath of recorded.split(/\r?\n/)) {
+      if (
+        path.isAbsolute(shimPath) &&
+        path.basename(shimPath).toLowerCase() === windowsShimName.toLowerCase()
+      ) {
+        candidates.push(shimPath);
+      }
+    }
+  }
+  for (const shimPath of candidates) {
+    const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
+    if (Option.isNone(contents)) continue;
+    const target = generatedWindowsShimTarget(contents.value);
+    if (
+      target !== undefined &&
+      path.resolve(target).toLowerCase() === path.resolve(executablePath).toLowerCase()
+    ) {
+      return shimPath;
+    }
+  }
+  return undefined;
+});
+
 /**
  * The `t3` script the install scripts and `t3 update` write on macOS and Linux. Exec by absolute
  * path: through a symlink, argv0 is the link, and the Cursor SDK looks for its helpers beside it.

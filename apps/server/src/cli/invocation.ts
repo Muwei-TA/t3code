@@ -12,11 +12,15 @@ import { resolveCommandPath } from "@t3tools/shared/shell";
 import packageJson from "../../package.json" with { type: "json" };
 import {
   findPosixLauncher,
+  findWindowsShim,
+  pinnedRuntimeVersionsDir,
   readPosixLauncherTarget,
   resolveLauncherPath,
 } from "../cloud/pinnedRuntime.ts";
 
-const PINNED_RUNTIME_ENTRY = /^(.*)\/runtime\/versions\/[^/]+\/t3$/;
+const PINNED_RUNTIME_ENTRY = /^(.*)\/runtime\/versions\/[^/]+\/t3(?:\.exe)?$/i;
+const pinnedRuntimeHome = (executable: string) =>
+  PINNED_RUNTIME_ENTRY.exec(executable.replaceAll("\\", "/"))?.[1];
 
 export type CliRunner = "npx" | "pnpm dlx" | "bunx";
 
@@ -78,19 +82,26 @@ export const resolveServerInstallation = Effect.gen(function* () {
   const runner = detectCliRunner(entry);
   if (runner !== null && (yield* HostProcess.IsExecutable)) {
     const executable = yield* HostProcess.ExecutablePath;
-    const runtime = PINNED_RUNTIME_ENTRY.exec(
-      executable.replaceAll("\\", "/").replace(/\.exe$/i, ""),
-    );
-    if (runtime) {
+    const home = pinnedRuntimeHome(executable);
+    if (home !== undefined) {
       return {
         kind: "t3-launcher",
         launcher: executable,
-        baseDir: path.normalize(runtime[1] || "/"),
+        baseDir: path.normalize(home || "/"),
       } satisfies ServerInstallation;
     }
   }
-  const runtime = PINNED_RUNTIME_ENTRY.exec(entry);
-  if (runtime) {
+  const runtime = pinnedRuntimeHome(entry);
+  if (platform === "win32" && runtime !== undefined) {
+    const baseDir = path.normalize(runtime || "/");
+    const launcher = yield* findWindowsShim(entry, pinnedRuntimeVersionsDir(path, baseDir));
+    return {
+      kind: "t3-launcher",
+      launcher: launcher ?? entry,
+      baseDir,
+    } satisfies ServerInstallation;
+  }
+  if (runtime !== undefined) {
     const launchedAs = yield* resolveLauncherPath;
     if (launchedAs === undefined) return null;
     const link = yield* fs.readLink(launchedAs).pipe(Effect.option);
@@ -99,7 +110,7 @@ export const resolveServerInstallation = Effect.gen(function* () {
       ? launchedAs
       : yield* findPosixLauncher({
           launchedAs,
-          versionsDir: path.join(runtime[1] || "/", "runtime/versions"),
+          versionsDir: pinnedRuntimeVersionsDir(path, runtime || "/"),
         });
     // None for a runtime started directly, as SSH launches do, or through a copy.
     if (launcher === undefined) return null;
@@ -107,19 +118,25 @@ export const resolveServerInstallation = Effect.gen(function* () {
       ? path.resolve(path.dirname(launcher), link.value)
       : yield* readPosixLauncherTarget(launcher);
     // Keep the home as the launcher spells it; `t3 update` only repoints launchers into that spelling.
-    const linked = target === undefined ? null : PINNED_RUNTIME_ENTRY.exec(target);
-    if (!linked || (yield* fs.realPath(linked[1] || "/")) !== (runtime[1] || "/")) return null;
+    const linked = target === undefined ? undefined : pinnedRuntimeHome(target);
+    if (linked === undefined || (yield* fs.realPath(linked || "/")) !== (runtime || "/"))
+      return null;
     return {
       kind: "t3-launcher",
       launcher,
-      baseDir: linked[1] || "/",
+      baseDir: linked || "/",
     } satisfies ServerInstallation;
   }
   const match = /^(.*)\/lib\/node_modules\/t3\/(?:dist\/bin\.mjs|bin\/t3\.mjs)$/.exec(entry);
   if (!match) {
-    return runner === null
-      ? null
-      : ({ kind: runner === "pnpm dlx" ? "pnpm-dlx" : runner } satisfies ServerInstallation);
+    if (runner === null) return null;
+    const node = yield* HostProcess.ExecutablePath;
+    return {
+      kind: runner === "pnpm dlx" ? "pnpm-dlx" : runner,
+      ...(path.isAbsolute(node) && !(yield* HostProcess.IsExecutable)
+        ? { launch: { node, entry } }
+        : {}),
+    } satisfies ServerInstallation;
   }
   if (platform === "win32") return null;
   const prefix = match[1] || "/";

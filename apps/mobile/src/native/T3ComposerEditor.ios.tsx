@@ -1,3 +1,4 @@
+import { hostedThreadLinkPrefix } from "../lib/hostedThreadLinkOrigin";
 import { PASTED_TEXT_ATTACHMENT_THRESHOLD_BYTES } from "@t3tools/client-runtime/text-paste";
 import { PROVIDER_SEND_TURN_MAX_INPUT_CHARS } from "@t3tools/contracts";
 import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
@@ -117,6 +118,7 @@ interface NativeComposerEditorProps extends ViewProps {
     event: NativePasteTextEvent & NativeSyntheticEvent<{ fragment: string; html: string }>,
   ) => void;
   readonly textPasteThresholdBytes: number;
+  readonly hostedThreadLinkPrefix: string;
   readonly maxInputChars: number;
   readonly onComposerPasteText?: (event: NativePasteTextEvent) => void;
   readonly onComposerFocus?: () => void;
@@ -382,6 +384,7 @@ export function ComposerEditor({
       autoFocus={props.autoFocus ?? false}
       autoCorrect={props.autoCorrect ?? true}
       spellCheck={props.spellCheck ?? true}
+      hostedThreadLinkPrefix={hostedThreadLinkPrefix}
       textPasteThresholdBytes={onPasteText ? PASTED_TEXT_ATTACHMENT_THRESHOLD_BYTES : 0}
       maxInputChars={PROVIDER_SEND_TURN_MAX_INPUT_CHARS}
       style={style as StyleProp<ViewStyle>}

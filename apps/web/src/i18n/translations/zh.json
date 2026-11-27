@@ -2503,6 +2503,7 @@
   "c5422ea828b540ed": "要更新 {servers} 上的 T3 Code 桌面应用吗？它们会在那些机器上关闭并重新启动。",
   "b25472ef70df9b5d": "全部更新",
   "febf4ec3cdcdf372": "已复制更新命令",
+  "c1bcad4fe66893fa": "在 {serverLabel} 上运行 `{command}`，然后从同一安装位置重启。",
   "d54f9303c5795bad": "在 {serverLabel} 上运行 `{command}`，然后按命令输出的说明重启。",
   "3cb4fcae1546e2eb": "无法复制更新命令",
   "c10262062b7f9a5e": "要更新运行 {serverLabel} 的 T3 Code 桌面应用吗？它将在那台机器上关闭并重新启动。",

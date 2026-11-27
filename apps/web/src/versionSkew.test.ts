@@ -39,7 +39,7 @@ describe("versionSkew", () => {
   it("uses the Lightning CLI when there is no installed launcher path", () => {
     expect(manualServerUpdateCommand("0.0.45")).toBe("lightning update 0.0.45");
     expect(manualServerUpdateCommand("0.0.45", { kind: "npm-global", prefix: "/opt/node" })).toBe(
-      "'/opt/node/bin/lightning' update 0.0.45",
+      "npm install --global --prefix '/opt/node' 'https://github.com/Muwei-TA/t3code/releases/download/v0.0.45/t3.tgz'",
     );
     expect(
       manualServerUpdateCommand(
@@ -52,6 +52,12 @@ describe("versionSkew", () => {
         "windows",
       ),
     ).toBe("& 'C:\\Program Files\\Lightning\\t3.exe' update --base-dir 'C:\\Data' 0.0.45");
+    expect(
+      manualServerUpdateCommand("0.0.45", {
+        kind: "npx",
+        launch: { node: "/opt/local/bin/node", entry: "/cache with spaces/_npx/cli/bin.mjs" },
+      }),
+    ).toBe("'/opt/local/bin/node' '/cache with spaces/_npx/cli/bin.mjs' update 0.0.45");
   });
   beforeEach(() => {
     branding.APP_VERSION = "0.0.34";

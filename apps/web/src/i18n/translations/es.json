@@ -2499,6 +2499,7 @@
   "c5422ea828b540ed": "¿Actualizar las apps de escritorio de T3 Code en {servers}? Se cerrarán y se volverán a abrir en esas máquinas.",
   "b25472ef70df9b5d": "Actualizar todo",
   "febf4ec3cdcdf372": "Comando de actualización copiado",
+  "c1bcad4fe66893fa": "Ejecuta `{command}` en {serverLabel} y reinicia desde la misma ubicación de instalación.",
   "d54f9303c5795bad": "Ejecuta `{command}` en {serverLabel} y sigue las instrucciones de reinicio que aparecen.",
   "3cb4fcae1546e2eb": "No se pudo copiar el comando de actualización",
   "c10262062b7f9a5e": "¿Actualizar la app de escritorio de T3 Code que ejecuta {serverLabel}? Se cerrará y se volverá a abrir en esa máquina.",

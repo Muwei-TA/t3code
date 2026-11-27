@@ -24,6 +24,9 @@ const mocks = vi.hoisted(() => ({
   sequence: 0,
 }));
 vi.mock("expo", () => ({ requireNativeModule: vi.fn() }));
+vi.mock("./hostedThreadLinkOrigin", () => ({
+  hostedThreadLinkOrigin: "https://lightning.example",
+}));
 vi.mock("expo-file-system", () => ({
   File: class {
     size = 42;
@@ -400,7 +403,7 @@ describe("mobile context clipboard imports", () => {
 
   it("pastes a thread link as a chip only where the destination's agent reads its machine", async () => {
     const text = [
-      "https://app.t3.codes/threads/destination/local-thread",
+      "https://lightning.example/threads/destination/local-thread",
       "<t3-thread://v2/source/foreign-thread>",
     ].join(" ");
     const result = await importComposerContextClipboard(

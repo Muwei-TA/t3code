@@ -323,13 +323,19 @@ export function ServerUpdateAction({
       toastManager.add({
         type: "success",
         title: gt("Update command copied"),
-        description: gt(
-          "Run `{command}` on {serverLabel}, then follow the restart instructions it prints.",
-          {
-            command,
-            serverLabel,
-          },
-        ),
+        description:
+          installation?.kind === "npm-global"
+            ? gt("Run `{command}` on {serverLabel}, then restart from the same install location.", {
+                command,
+                serverLabel,
+              })
+            : gt(
+                "Run `{command}` on {serverLabel}, then follow the restart instructions it prints.",
+                {
+                  command,
+                  serverLabel,
+                },
+              ),
       });
     },
     onError: (error) => {

@@ -2499,6 +2499,7 @@
   "c5422ea828b540ed": "Atualizar os apps para desktop do T3 Code em {servers}? Eles serão fechados e reabertos nessas máquinas.",
   "b25472ef70df9b5d": "Atualizar tudo",
   "febf4ec3cdcdf372": "Comando de atualização copiado",
+  "c1bcad4fe66893fa": "Execute `{command}` em {serverLabel} e reinicie a partir do mesmo local de instalação.",
   "d54f9303c5795bad": "Execute `{command}` em {serverLabel} e siga as instruções de reinicialização exibidas.",
   "3cb4fcae1546e2eb": "Não foi possível copiar o comando de atualização",
   "c10262062b7f9a5e": "Atualizar o app para desktop do T3 Code que executa {serverLabel}? Ele será fechado e reaberto nessa máquina.",

@@ -7,6 +7,7 @@ import type {
 } from "@t3tools/contracts";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
+import { cliReleaseAssetUrl } from "@t3tools/shared/cliRelease";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import * as Schema from "effect/Schema";
 import { msg } from "gt-react";
@@ -118,8 +119,12 @@ export function manualServerUpdateCommand(
     return `${windows ? "& " : ""}${quote(installation.launcher)} update --base-dir ${quote(installation.baseDir)} ${targetVersion}`;
   }
   if (installation?.kind === "npm-global") {
-    const launcher = `${installation.prefix.replace(/\/+$/, "")}/bin/${LIGHTNING_BRAND.cliCommand}`;
-    return `${quote(launcher)} update ${targetVersion}`;
+    const tarball = cliReleaseAssetUrl(targetVersion, "t3.tgz");
+    return `npm install --global --prefix ${quote(installation.prefix)} ${quote(tarball)}`;
+  }
+  if (installation?.launch) {
+    const { node, entry } = installation.launch;
+    return `${windows ? "& " : ""}${quote(node)} ${quote(entry)} update ${targetVersion}`;
   }
   return `${LIGHTNING_BRAND.cliCommand} update ${targetVersion}`;
 }

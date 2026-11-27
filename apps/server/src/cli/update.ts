@@ -26,6 +26,7 @@ import * as BootService from "../cloud/bootService.ts";
 import {
   ensurePinnedRuntimeInstalled,
   findPosixLauncher,
+  findWindowsShim,
   generatedWindowsShimTarget,
   launcherOwnsVersionsDir,
   isUnpublishedRelease,
@@ -227,51 +228,6 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
     ),
   );
   return Option.some(launcher);
-});
-
-/** Windows executables see their own path, so locate the installer shim by matching its target. */
-export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(function* (
-  executablePath: string,
-  versionsDir?: string,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const environment = yield* HostProcess.Environment;
-  const windowsShimName = `${LIGHTNING_BRAND.cliCommand}.cmd`;
-  const candidates = [
-    ...(environment["LIGHTNING_CODE_INSTALL_BIN_DIR"]
-      ? [environment["LIGHTNING_CODE_INSTALL_BIN_DIR"]]
-      : []),
-    ...(environment["T3CODE_INSTALL_BIN_DIR"] ? [environment["T3CODE_INSTALL_BIN_DIR"]] : []),
-    ...(environment["PATH"] ?? environment["Path"] ?? "").split(";"),
-  ]
-    .filter((entry) => entry.trim().length > 0)
-    .map((directory) => path.join(directory, windowsShimName));
-  if (versionsDir !== undefined) {
-    const recorded = yield* fs
-      .readFileString(path.join(path.dirname(versionsDir), "launchers"))
-      .pipe(Effect.orElseSucceed(() => ""));
-    for (const shimPath of recorded.split(/\r?\n/)) {
-      if (
-        path.isAbsolute(shimPath) &&
-        path.basename(shimPath).toLowerCase() === windowsShimName.toLowerCase()
-      ) {
-        candidates.push(shimPath);
-      }
-    }
-  }
-  for (const shimPath of candidates) {
-    const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
-    if (Option.isNone(contents)) continue;
-    const target = generatedWindowsShimTarget(contents.value);
-    if (
-      target !== undefined &&
-      path.resolve(target).toLowerCase() === path.resolve(executablePath).toLowerCase()
-    ) {
-      return shimPath;
-    }
-  }
-  return undefined;
 });
 
 const updateFlags = {

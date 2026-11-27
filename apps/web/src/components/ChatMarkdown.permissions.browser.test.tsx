@@ -205,9 +205,15 @@ it.each(["[Docs](https://example.com/docs)", "[Readme](docs/readme.md)"])(
     await using screen = await renderMarkdown(text);
     screen.anchor().focus();
     await userEvent.keyboard("{Shift>}{F10}{/Shift}");
-    await vi.waitFor(() => expect(state.choose.mock.lastCall?.[2]).toBe("keyboard"));
+    await vi.waitFor(() => {
+      expect(state.choose).toHaveBeenCalledTimes(1);
+      expect(state.choose.mock.lastCall?.[2]).toBe("keyboard");
+    });
     await userEvent.click(screen.anchor(), { button: "right" });
-    await vi.waitFor(() => expect(state.choose.mock.lastCall?.[2]).toBe("mouse"));
+    await vi.waitFor(() => {
+      expect(state.choose).toHaveBeenCalledTimes(2);
+      expect(state.choose.mock.lastCall?.[2]).toBe("mouse");
+    });
   },
 );
 

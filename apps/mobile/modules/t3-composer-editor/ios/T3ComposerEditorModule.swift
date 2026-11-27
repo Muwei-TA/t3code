@@ -4,11 +4,6 @@ import UIKit
 enum T3ComposerClipboard {
   static let fragmentType = "app.t3.context-fragment"
 
-  // Pasted thread links become chips in JS; packages/shared/src/threadLinks.ts parses them.
-  static func hasThreadLink(_ text: String) -> Bool {
-    text.contains("t3-thread://v2/") || text.contains("https://app.t3.codes/threads/")
-  }
-
   static func write(text: String, fragment: String) {
     var items: [String: Any] = ["public.utf8-plain-text": text]
     if let data = fragment.data(using: .utf8),
@@ -57,6 +52,9 @@ public class T3ComposerEditorModule: Module {
       }
       Prop("themeJson") { (view: T3ComposerEditorView, themeJson: String) in
         view.setThemeJson(themeJson)
+      }
+      Prop("hostedThreadLinkPrefix") { (view: T3ComposerEditorView, prefix: String) in
+        view.setHostedThreadLinkPrefix(prefix)
       }
       Prop("clipboardFragment") { (view: T3ComposerEditorView, fragment: String) in
         view.setClipboardFragment(fragment)

@@ -16,6 +16,7 @@ import * as BootService from "../cloud/bootService.ts";
 import {
   findPosixLauncher,
   generatedWindowsShimTarget,
+  findWindowsShim,
   isVersionExecutable,
   pinnedRuntimeVersionsDir,
   readPosixLauncherTarget,
@@ -24,7 +25,6 @@ import {
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import * as CliService from "./service.ts";
 import { awaitDetachedSpawn } from "../process/windowsVerbatimSpawn.ts";
-import { findWindowsShim } from "./update.ts";
 
 export class CliUninstallError extends Schema.TaggedError<CliUninstallError>()(
   "CliUninstallError",
@@ -54,7 +54,7 @@ export const findOwnedLauncher = Effect.fn("cli.uninstall.find_launcher")(functi
   const platform = yield* HostProcess.Platform;
   if (input.launchedAs === undefined) return undefined;
   if (platform === "win32") {
-    const shimPath = yield* findWindowsShim(input.launchedAs);
+    const shimPath = yield* findWindowsShim(input.launchedAs, input.versionsDir);
     if (shimPath === undefined) return undefined;
     const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
     const target = Option.isSome(contents) ? generatedWindowsShimTarget(contents.value) : undefined;

@@ -2499,6 +2499,7 @@
   "c5422ea828b540ed": "Uppdatera T3 Code-skrivbordsapparna på {servers}? De stängs och startas om på de datorerna.",
   "b25472ef70df9b5d": "Uppdatera alla",
   "febf4ec3cdcdf372": "Uppdateringskommandot kopierades",
+  "c1bcad4fe66893fa": "Kör `{command}` på {serverLabel} och starta sedan om från samma installationsplats.",
   "d54f9303c5795bad": "Kör `{command}` på {serverLabel} och följ sedan instruktionerna för omstart.",
   "3cb4fcae1546e2eb": "Kunde inte kopiera uppdateringskommandot",
   "c10262062b7f9a5e": "Uppdatera T3 Code-skrivbordsappen som kör {serverLabel}? Den stängs och startas om på den datorn.",

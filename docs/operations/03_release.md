@@ -45,6 +45,12 @@ Windows packages the bundled server and its unpacked native modules in `resource
 
 ## One-time credentials setup
 
+### Lightning Code release assets
+
+When publishing a Lightning Code release from this fork, attach the version-matched `t3.tgz`
+from `node scripts/build-npm-launcher.ts --version <version>` alongside the CLI archives.
+The Web and Desktop update command uses this asset to upgrade the npm launcher at its installed prefix.
+
 ### npm OIDC trusted publishing
 
 Configure `t3` on npm with GitHub Actions Trusted Publishing for `.github/workflows/release.yml` (the workflow publishes only the `t3` launcher tarball via `npm publish --provenance`).
