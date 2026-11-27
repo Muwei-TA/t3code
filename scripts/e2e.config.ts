@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { mobile, type DeviceProvider } from "@e2e-dev/mobile";
 import { web } from "@e2e-dev/web";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { MOBILE_APP_IDENTITIES } from "@t3tools/shared/mobileBrand";
 import { createAgentDeviceClient } from "agent-device";
 import type { E2EConfig } from "e2e";
 import * as Effect from "effect/Effect";
@@ -177,7 +178,7 @@ export default {
         session: "t3-scenarios",
       }),
       app: {
-        bundleId: "com.t3tools.t3code.dev",
+        bundleId: MOBILE_APP_IDENTITIES.development.identifier,
         // Metro starts after the server listens, so it answering means both are up.
         readyUrl: `http://127.0.0.1:${MOBILE.metroPort}/status`,
         command: {

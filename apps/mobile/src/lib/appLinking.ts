@@ -1,4 +1,12 @@
 import type { NavigationState, PartialState } from "@react-navigation/native";
+import { MOBILE_APP_IDENTITIES } from "@t3tools/shared/mobileBrand";
+
+const APP_SCHEMES = new Set([
+  ...Object.values(MOBILE_APP_IDENTITIES).map(({ scheme }) => scheme),
+  "t3code",
+  "t3code-dev",
+  "t3code-preview",
+]);
 
 /**
  * The Expo dev client launches the app via
@@ -9,10 +17,11 @@ import type { NavigationState, PartialState } from "@react-navigation/native";
 export function shouldHandleAppLink(url: string, cloudConfigured: boolean): boolean {
   // Only the route: a thread link's ?prompt= may mention either lifecycle URL.
   const route = url.split(/[?#]/)[0] ?? "";
+  const emptyScheme = /^([a-z][\w+.-]*):\/*$/i.exec(route)?.[1]?.toLowerCase();
   return (
     !route.includes("expo-development-client") &&
     !route.includes("://expo-sharing") &&
-    !/^t3code(-dev|-preview)?:\/*$/.test(url) &&
+    !(emptyScheme && APP_SCHEMES.has(emptyScheme)) &&
     (cloudConfigured || !CLOUD_ONLY_LINK_PATH.test(route))
   );
 }

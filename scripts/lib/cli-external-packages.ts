@@ -43,6 +43,8 @@ export function isRuntimeExternalCliDependency(id: string): boolean {
 
 /** Use neverBundle: false from alwaysBundle means no opinion and leaves transitive packages bundled. */
 export function isExternalCliDependency(id: string): boolean {
+  // The standalone bundle inlines its Zod imports. Cursor still loads its staged copy.
+  if (id === "zod" || id.startsWith("zod/")) return false;
   return isRuntimeExternalCliDependency(id);
 }
 

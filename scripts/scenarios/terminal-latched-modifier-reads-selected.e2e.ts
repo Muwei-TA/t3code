@@ -1,3 +1,4 @@
+import { MOBILE_APP_IDENTITIES } from "@t3tools/shared/mobileBrand";
 import { expect } from "e2e";
 
 import { MOBILE } from "../e2e.config.ts";
@@ -16,8 +17,9 @@ test(
     const environment = await runPromise(
       environmentId(`http://${MOBILE.host}:${MOBILE.serverPort}`),
     );
-    await device.openLink(`t3code-dev://threads/${environment}/${threadId}/terminal`, {
-      app: "com.t3tools.t3code.dev",
+    const { identifier, scheme } = MOBILE_APP_IDENTITIES.development;
+    await device.openLink(`${scheme}://threads/${environment}/${threadId}/terminal`, {
+      app: identifier,
     });
     await device.alert("accept").catch(() => {});
 

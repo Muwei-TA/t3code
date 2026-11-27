@@ -1,7 +1,7 @@
 import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
+import { TRIAGE_CLI_COMMAND } from "./triageCommand";
 
-const FALLBACK_TRIAGE_COMMAND = `npx ${LIGHTNING_BRAND.cliCommand} triage`;
 const DOWNLOAD_URL = LIGHTNING_BRAND.downloadUrl;
 const ISSUE_URL = `${LIGHTNING_BRAND.repositoryUrl}/issues/new`;
 const LAST_FAILURE_KEY = "t3code:boot-failed-at";
@@ -24,20 +24,18 @@ function launcherCommand(launcherPath: string) {
     : `'${launcherPath.replaceAll("'", `'"'"'`)}'`;
 }
 
-/** Desktop can run its bundled launcher without Node; everything else falls back to npx. */
+/** Desktop can use its bundled launcher even when it is outside the shell's PATH. */
 export async function resolveTriageCommand(bridge: DesktopBridge | undefined) {
   try {
     const state = await bridge?.cliCommand.getState();
     // Windows reports onPath from its PATH entry alone; only an existing launcher proves it runs.
     if (state?.launcherPath) {
-      return state.onPath
-        ? `${LIGHTNING_BRAND.cliCommand} triage`
-        : `${launcherCommand(state.launcherPath)} triage`;
+      return state.onPath ? TRIAGE_CLI_COMMAND : `${launcherCommand(state.launcherPath)} triage`;
     }
   } catch (error) {
     console.warn("Could not read the desktop CLI state.", error);
   }
-  return FALLBACK_TRIAGE_COMMAND;
+  return TRIAGE_CLI_COMMAND;
 }
 
 /** The update button only appears when the desktop updater has a newer build to offer. */
@@ -296,7 +294,7 @@ export function showBootError(error: unknown) {
   const updateNote = element("p", { id: "boot-error-update-note", hidden: true });
   if (bridge) mountUpdateButton(bridge, update, updateNote, announce);
 
-  const command = element("code", { textContent: FALLBACK_TRIAGE_COMMAND });
+  const command = element("code", { textContent: TRIAGE_CLI_COMMAND });
   const copyCommand = element("button", {
     className: "boot-error-icon",
     type: "button",

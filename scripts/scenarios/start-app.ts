@@ -7,6 +7,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NetService from "@t3tools/shared/Net";
+import { MOBILE_APP_IDENTITIES } from "@t3tools/shared/mobileBrand";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -218,7 +219,16 @@ const startApp = Effect.fn("startApp")(function* (input: {
   const metro = yield* start({
     cwd: path.join(checkout, "apps/mobile"),
     command: "npx",
-    args: ["expo", "start", "--dev-client", "--scheme", "t3code-dev", "--lan", "--port", metroPort],
+    args: [
+      "expo",
+      "start",
+      "--dev-client",
+      "--scheme",
+      MOBILE_APP_IDENTITIES.development.scheme,
+      "--lan",
+      "--port",
+      metroPort,
+    ],
     env: {
       ...env,
       APP_VARIANT: "development",

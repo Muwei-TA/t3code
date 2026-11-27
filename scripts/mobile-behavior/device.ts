@@ -8,6 +8,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeWS from "@effect/platform-node/NodeWS";
+import { MOBILE_APP_IDENTITIES } from "@t3tools/shared/mobileBrand";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
@@ -29,8 +30,7 @@ export class DeviceError extends Schema.TaggedError<DeviceError>()("DeviceError"
   message: Schema.String,
 }) {}
 
-export const APP_ID = "com.t3tools.t3code.dev";
-export const SCHEME = "t3code-dev";
+export const { identifier: APP_ID, scheme: SCHEME } = MOBILE_APP_IDENTITIES.development;
 
 export interface ProbeState {
   readonly route: {

@@ -1,4 +1,4 @@
-import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
+import { MOBILE_APP_IDENTITIES } from "@t3tools/shared/mobileBrand";
 import { readHostedPairingRequest } from "@t3tools/shared/remote";
 import * as Schema from "effect/Schema";
 import { msg } from "gt-react-native";
@@ -75,9 +75,7 @@ export function parsePairingUrl(url: string): { host: string; code: string } {
 }
 
 const MOBILE_PAIRING_SCHEMES = new Set([
-  `${LIGHTNING_BRAND.urlScheme}:`,
-  `${LIGHTNING_BRAND.urlScheme}-dev:`,
-  `${LIGHTNING_BRAND.urlScheme}-preview:`,
+  ...Object.values(MOBILE_APP_IDENTITIES).map(({ scheme }) => `${scheme}:`),
   "t3code:",
 ]);
 

@@ -64,7 +64,7 @@ async function download(url, file) {
         shown = step;
         const percent = total ? ` ${step}%` : "";
         process.stderr.write(
-          `\r\x1b[2Kt3: downloading Lightning Code ${version}${percent} (${(received / 1048576).toFixed(1)} MB)`,
+          `\r\x1b[2Klightning: downloading Lightning Code ${version}${percent} (${(received / 1048576).toFixed(1)} MB)`,
         );
       }
     }
@@ -153,7 +153,7 @@ function publish(staging, dir) {
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
     throw new Error(
-      `another t3 is installing ${version}. If none is running, delete ${lock} and try again.`,
+      `another lightning is installing ${version}. If none is running, delete ${lock} and try again.`,
       { cause: error },
     );
   }
@@ -249,7 +249,7 @@ function executableError(key, detail) {
 }
 
 function fail(error) {
-  process.stderr.write(`t3: ${error.message}\n`);
+  process.stderr.write(`lightning: ${error.message}\n`);
   process.exit(1);
 }
 

@@ -7,8 +7,8 @@
 #   T3CODE_CHANNEL           release train to follow: stable, nightly, or preview
 #                            (default: stable; preview is a maintainers' test train)
 #   T3CODE_VERSION           exact version to install (overrides T3CODE_CHANNEL)
-#   LIGHTNING_CODE_HOME              T3 home directory (default: ~\.t3)
-#   T3CODE_INSTALL_BIN_DIR   where t3.exe is linked (default: ~\.local\bin)
+#   LIGHTNING_CODE_HOME              Lightning home directory (default: ~\.lightning-code)
+#   T3CODE_INSTALL_BIN_DIR   where lightning.cmd is installed (default: ~\.local\bin)
 #   LIGHTNING_CODE_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
 #
 # The archive is unpacked into $LIGHTNING_CODE_HOME\runtime\versions\<version>, the
@@ -24,7 +24,7 @@ $binDir = if ($env:T3CODE_INSTALL_BIN_DIR) { $env:T3CODE_INSTALL_BIN_DIR } else 
 $binDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($binDir)
 
 function Fail([string] $message) {
-  Write-Error "t3 install: $message"
+  Write-Error "lightning install: $message"
   exit 1
 }
 
@@ -170,7 +170,7 @@ if (-not $version) {
   $version = $tag.Substring(1)
 }
 if ($version -match '-preview\.') {
-  Write-Warning "t3 $version is a preview build. Preview builds are cut by maintainers from unreleased branches to exercise the release pipeline. They can be broken, receive no fixes, and are never offered as updates. Set T3CODE_CHANNEL=stable (the default) for a supported build."
+  Write-Warning "Lightning Code $version is a preview build. Preview builds are cut by maintainers from unreleased branches to exercise the release pipeline. They can be broken, receive no fixes, and are never offered as updates. Set T3CODE_CHANNEL=stable (the default) for a supported build."
   if ($channel -ne "preview" -and -not $env:T3CODE_VERSION) {
     Fail "refusing a preview build that was not explicitly requested"
   }
@@ -197,7 +197,7 @@ if ((Test-Path $marker) -and ((Get-Content $marker -Raw).Trim() -eq $version)) {
     } catch {
       $status = $_.Exception.Response.StatusCode.value__
       if ($status -eq 404) {
-        Fail "t3 $version has no release archive for win32-$arch; releases before the self-contained CLI can only be installed with 'npm install -g t3@$version'"
+        Fail "Lightning Code $version has no release archive for win32-$arch"
       }
       throw
     }
@@ -233,7 +233,7 @@ if ((Test-Path $marker) -and ((Get-Content $marker -Raw).Trim() -eq $version)) {
   }
 }
 
-Step "Setting up the t3 command..."
+Step "Setting up the lightning command..."
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 $shim = Join-Path $binDir "lightning.cmd"
 # Replace only a shim that runs a version in this home; never the desktop app's or another t3.
@@ -250,7 +250,7 @@ if (Test-Path -LiteralPath $shim) {
   $owned = $existingTarget.StartsWith($ownedPrefix, [System.StringComparison]::OrdinalIgnoreCase) -and
     ($existingTarget.Substring($ownedPrefix.Length) -match '^[^\\/]+\\t3\.exe$')
   if (-not $owned) {
-    Fail "another t3 is already at $shim. Remove it and run this again, or run $(Join-Path $targetDir 't3.exe') directly."
+    Fail "another lightning is already at $shim. Remove it and run this again, or run $(Join-Path $targetDir 't3.exe') directly."
   }
 }
 # UTF-8 without a BOM: cmd.exe reads the shim as-is, and ASCII would corrupt

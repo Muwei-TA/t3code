@@ -8,8 +8,8 @@
 #   T3CODE_CHANNEL           release train to follow: stable, nightly, or preview
 #                            (default: stable; preview is a maintainers' test train)
 #   T3CODE_VERSION           exact version to install (overrides T3CODE_CHANNEL)
-#   LIGHTNING_CODE_HOME              T3 home directory (default: ~/.lightning-code)
-#   T3CODE_INSTALL_BIN_DIR   where the `t3` command goes (default: ~/.local/bin)
+#   LIGHTNING_CODE_HOME              Lightning home directory (default: ~/.lightning-code)
+#   T3CODE_INSTALL_BIN_DIR   where the `lightning` command goes (default: ~/.local/bin)
 #   LIGHTNING_CODE_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
 #
 # The archive is unpacked into $LIGHTNING_CODE_HOME/runtime/versions/<version>, the
@@ -36,7 +36,7 @@ while [ "${bin_dir%/}" != "$bin_dir" ] && [ "$bin_dir" != / ]; do bin_dir="${bin
 case "$bin_dir" in /*) ;; *) bin_dir="$PWD/$bin_dir" ;; esac
 
 fail() {
-  printf '\nt3 install: %s\n' "$1" >&2
+  printf '\nlightning install: %s\n' "$1" >&2
   exit 1
 }
 
@@ -171,7 +171,7 @@ case "$(uname -m)" in
   *) fail "unsupported architecture $(uname -m)" ;;
 esac
 if [ "${platform}-${arch}" = darwin-x64 ]; then
-  fail "there is no t3 CLI for Intel Macs. Install the desktop app from https://github.com/Muwei-TA/t3code/releases, or run a server from source: https://github.com/${repo}/blob/main/docs/user/install.md#intel-macs"
+  fail "there is no Lightning CLI for Intel Macs. Install the desktop app from https://github.com/Muwei-TA/t3code/releases, or run a server from source: https://github.com/${repo}/blob/main/docs/user/install.md#intel-macs"
 fi
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 if command -v sha256sum >/dev/null 2>&1; then
@@ -242,12 +242,12 @@ else
   fetch_status=0
   fetch "${base_url}/v${version}/SHA256SUMS" "${staging}/SHA256SUMS" || fetch_status=$?
   if [ "$fetch_status" -eq 44 ]; then
-    fail "t3 ${version} has no release archive for ${platform}-${arch}; releases before the self-contained CLI can only be installed with \`npm install -g t3@${version}\`"
+    fail "Lightning Code ${version} has no release archive for ${platform}-${arch}"
   elif [ "$fetch_status" -ne 0 ]; then
     fail "could not download the release checksums"
   fi
   expected="$(grep " \*\{0,1\}${archive}\$" "${staging}/SHA256SUMS" | cut -d' ' -f1)"
-  [ -n "$expected" ] || fail "t3 ${version} has no release archive for ${platform}-${arch}"
+  [ -n "$expected" ] || fail "Lightning Code ${version} has no release archive for ${platform}-${arch}"
   download "${base_url}/v${version}/${archive}" "${staging}/${archive}" || fail "could not download ${archive}"
 
   step "Verifying the download..."
@@ -267,7 +267,7 @@ else
   trap - EXIT
 fi
 
-step "Setting up the t3 command..."
+step "Setting up the lightning command..."
 mkdir -p "$bin_dir"
 # Exec by absolute path: through a symlink, argv0 is the link, and the Cursor SDK looks for its
 # helpers beside it. t3 update and t3 install write the same script.
@@ -325,7 +325,7 @@ if [ -e "${bin_dir}/lightning" ] || [ -L "${bin_dir}/lightning" ]; then
       owned=true
     fi
   fi
-  "$owned" || fail "another t3 is already at ${bin_dir}/lightning. Remove it and run this again, or run ${target_dir}/t3 directly."
+  "$owned" || fail "another lightning is already at ${bin_dir}/lightning. Remove it and run this again, or run ${target_dir}/t3 directly."
 fi
 launcher_tmp="$(mktemp "${bin_dir}/.t3.XXXXXX")"
 trap 'rm -f "$launcher_tmp"' EXIT

@@ -17,6 +17,7 @@ import {
   WsRpcGroup,
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
+import { MOBILE_APP_IDENTITIES } from "@t3tools/shared/mobileBrand";
 import * as Console from "effect/Console";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
@@ -85,7 +86,9 @@ const connectInspector = Effect.fn("measure.connectInspector")(function* (metro:
   const targets = yield* http
     .get(`${metro}/json/list`)
     .pipe(Effect.flatMap(HttpClientResponse.schemaBodyJson(InspectorTargets)));
-  const target = targets.find((entry) => entry.appId.startsWith("com.t3tools.t3code"));
+  const target = targets.find((entry) =>
+    Object.values(MOBILE_APP_IDENTITIES).some(({ identifier }) => entry.appId === identifier),
+  );
   if (!target)
     return yield* new MeasureError({ message: `No T3 Code app is attached to Metro at ${metro}.` });
   // Expo closes inspector sockets unless Origin matches Metro's advertised URL; pass that URL as --metro.
@@ -352,7 +355,7 @@ const command = Command.make(
       Flag.optional,
     ),
     metro: Flag.String("metro").pipe(Flag.withDefault("http://127.0.0.1:8081")),
-    scheme: Flag.String("scheme").pipe(Flag.withDefault("t3code-dev")),
+    scheme: Flag.String("scheme").pipe(Flag.withDefault(MOBILE_APP_IDENTITIES.development.scheme)),
     runs: Flag.Int("runs").pipe(Flag.withDefault(3)),
     window: Flag.Int("window").pipe(
       Flag.withDescription("Seconds to record; defaults to 12 for a reply and 6 for --route."),

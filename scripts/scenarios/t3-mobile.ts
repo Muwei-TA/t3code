@@ -2,6 +2,7 @@
 // opens the dev client paired with the scenario's server.
 import { test as base } from "@e2e-dev/mobile";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { MOBILE_APP_IDENTITIES, MOBILE_DEV_IOS_ARTIFACT } from "@t3tools/shared/mobileBrand";
 import { expect } from "e2e";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
@@ -11,8 +12,7 @@ import { APP_DIR, MOBILE, MOBILE_T3_HOME } from "../e2e.config.ts";
 import { run, ScenarioError } from "./shell.ts";
 import { makeState, runPromise, type T3State } from "./t3.ts";
 
-const APP_ID = "com.t3tools.t3code.dev";
-const SCHEME = "t3code-dev";
+const { identifier: APP_ID, scheme: SCHEME } = MOBILE_APP_IDENTITIES.development;
 
 export interface MobileT3 extends T3State {
   /** Installs the dev client if the device lacks it, loads it from Metro, and pairs it. */
@@ -36,7 +36,7 @@ const devClientPath = Effect.gen(function* () {
     yield* HostProcess.HomeDirectory,
     ".cache/t3code/native-clients/artifacts/ios/development",
     fingerprint,
-    "T3CodeDev.app",
+    MOBILE_DEV_IOS_ARTIFACT,
   );
 });
 

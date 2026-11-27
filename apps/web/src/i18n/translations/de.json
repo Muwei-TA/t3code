@@ -2270,23 +2270,6 @@
   "c65de112b48a66ed": "Kopplungslink hinzufügen",
   "bc8ab792af1d656f": "Auf deinem Computer ausführen:",
   "0ba14e4e920cfa00": "Oder lade die Desktop-App herunter",
-  "0e79b7a6508a6286": "Dann",
-  "363b9991fa23d36b": [
-    "Überspringe die Installation, wenn du ",
-    {
-      "t": "code",
-      "i": 1,
-      "c": "t3"
-    },
-    " bereits hast. Wenn",
-    " ",
-    {
-      "t": "code",
-      "i": 2,
-      "c": "t3"
-    },
-    " nach der Installation nicht gefunden wird, füge den Ordner, den das Installationsprogramm nennt, zu deinem PATH hinzu."
-  ],
   "87b24d00c08f54bb": "Tastenkürzel-Datei kann nicht geöffnet werden",
   "0ee16208cbfcdbf4": "Unbekannter Fehler beim Öffnen der Datei.",
   "9e20856550715c74": [
@@ -4980,6 +4963,7 @@
   "5ba22a660758e453": "Das Limit für Anhänge ist erreicht.",
   "181933312b23cb0c": "Der Entwurf hat diesen Anhang abgelehnt (Duplikat oder Limit für Anhänge erreicht).",
   "df02c1d51d158d32": "Antwortmodell für diesen Thread wechseln",
+  "724baefb1716842b": "MCP servers",
   "929781439a221aae": "Eine Nebenfrage in einem neuen Nebenchat stellen",
   "378c3404c430fc05": "Wie /side",
   "8ce7ee2a95c49bdb": "Eine neue Sitzung starten; frühere Nachrichten bleiben sichtbar",
@@ -6037,6 +6021,8 @@
   "f36faf18ea4b130a": "Paste a link or describe the change",
   "c042797cf356651e": "Add a project on this server to open an agent thread.",
   "619181f6a1b73fe7": "Open thread with instructions",
+  "7a4492e0fa79dca2": "Tools (MCP)",
+  "13acfdd2e7f96433": "Connect an environment to configure portable MCP servers and harness extensions.",
   "c614a41c7aa71164": "Conditional native",
   "f67d0170cde760bb": "Gateway",
   "f43b2a530d418624": "Hybrid",
@@ -6045,10 +6031,13 @@
   "61d3e5d50ac89d1c": "No native AGENTS.md",
   "7f4e9affebdf1126": "Native tool hooks",
   "5ea6906a9dc1b825": "Gateway & lifecycle",
-  "877e407e292f137b": "Create Hook with Agent",
+  "b31222510bd5d6ea": "Skills & Plugins",
   "43fbda290c4d7393": "Edit with Agent",
   "ef42298248058528": "Add with Agent",
-  "13acfdd2e7f96433": "Connect an environment to configure portable MCP servers and harness extensions.",
+  "4e5f1c0e990db46f": "Hooks",
+  "877e407e292f137b": "Create Hook with Agent",
+  "c9eafd03dec510c7": "Modes",
+  "8cf8658120885e30": "Portable Memory",
   "b739cb13af449fca": "CLI migration preserves skill files and executable permissions. Sync flags binary files as unscannable-binary when it cannot check them for secrets.",
   "b6f319cedd309b03": "Harness",
   "008ad7d6219755cd": "Sync & Migration",
@@ -6059,8 +6048,6 @@
   "893d27f47cdeebb9": "The server returned a partial file tree.",
   "1429a64f16526b00": "File read access is required.",
   "a08dfffb58eed789": "Loading file…",
-  "b31222510bd5d6ea": "Skills & Plugins",
-  "7a4492e0fa79dca2": "Tools (MCP)",
   "6bad24dc338be059": "Context & Roles",
   "c916ffa7d2f1cf1b": "Guardrails",
   "94ab4591ce101233": "Der Kommentar konnte nicht gepostet werden",
@@ -6191,6 +6178,10 @@
   "c9cae7bac5f42342": "Mehr laden",
   "54f59582f641cbaf": "Issues",
   "01e7836447bcad93": "Mir zugewiesene Issues",
+  "1a07e4d043f5df4e": "Verbindungen",
+  "683dc8c4b42d1a89": "Harness",
+  "752fa31f9a4b7702": "Disconnected",
+  "935f2a074b265463": "Local workspace",
   "3a883fbaed8d7561": "App",
   "3cc7159b902f36ec": "Zugriff",
   "a6615c82020deb59": "Verbinden",
@@ -6403,6 +6394,7 @@
   ],
   "216ab7514aea1d61": "Ohne Agenten starten",
   "501ce2d99da8bfd1": "Richte einen Agenten ein, um zu starten.",
+  "e29409ae107f57b1": "Anonymous usage data is sent only when enabled.",
   "dc099484b76a9526": [
     "T3 Code sendet anonyme Nutzungsdaten nur, wenn sie aktiviert sind. Siehe die",
     " ",
@@ -8070,15 +8062,15 @@
       "v": "v"
     }
   ],
-  "d0e747ae0c4f68a5": "t3 konnte nicht installiert werden",
-  "ba3ac338f36cba74": "t3 konnte nicht entfernt werden",
-  "9c942b53b58119b8": "t3 konnte nicht zu PATH hinzugefügt werden",
-  "dbd9a279df913da0": "Ein anderes t3 unter {path} wird in einem neuen Terminal zuerst ausgeführt. Entferne es, um das von T3 Code zu verwenden.",
-  "20a48e388fd71c1d": "Die CLI von T3 Code als `t3` in jedem Terminal ausführen.",
+  "a20b66761ab8743d": "{command} konnte nicht installiert werden",
+  "2d8c72d1fbb24ccd": "{command} konnte nicht entfernt werden",
+  "5231206d848f0f51": "{command} konnte nicht zu PATH hinzugefügt werden",
+  "74c0bd0b60c1b4e1": "Ein anderes {command} unter {path} wird in einem neuen Terminal zuerst ausgeführt. Entferne es, um das von T3 Code zu verwenden.",
+  "e2bc9a831c257fbf": "Die CLI von T3 Code als `{command}` in jedem Terminal ausführen.",
   "4f6e93011ef2da6f": "Installiert unter {path}. Öffne ein neues Terminal, um es zu verwenden.",
   "371ca438cf467125": "Installiert unter {path} und in {file} zu PATH hinzugefügt. Öffne ein neues Terminal, um es zu verwenden.",
   "fd3eece9d1a7ea38": "Installiert unter {path}, das noch nicht in deinem PATH ist.",
-  "5fff98fa978bd008": "Installiert unter {path}, das noch nicht in deinem PATH ist. Füge den Ordner zu deinem PATH hinzu, um `t3` auszuführen.",
+  "8567db625e5549ae": "Installiert unter {path}, das noch nicht in deinem PATH ist. Füge den Ordner zu deinem PATH hinzu, um `{command}` auszuführen.",
   "dc06294dd4078b00": "Entfernen",
   "b707d919dbf0222a": "Installieren",
   "9a284b5893dc04a2": "OpenRouter-Modell",
@@ -8840,7 +8832,6 @@
   "df1b3dddecd4659f": "Dateien löschen, die nur im Ziel vorhanden sind",
   "ad36b814f6a09f97": "Bestätigen und übertragen",
   "682cc6348b64e626": "Failed to refresh Harness library",
-  "683dc8c4b42d1a89": "Harness",
   "ceee7a38b04806df": "Angepasster integrierter Modus",
   "3ee0fccb20600705": "Propose plan",
   "10f1a7a0f8a9c900": "MCP · {id}",
@@ -8983,7 +8974,6 @@
   "3c55c1bc971ab639": "Stored under ~/.t3/harness/modes/*.md and projected across all providers.",
   "1e88c5f19afe621a": "Save Mode",
   "cf34fc4aae4c9d49": "Read instructions",
-  "8cf8658120885e30": "Portable Memory",
   "3cc30b3af2b72eb4": "Search memory",
   "08c507d1999563c7": "Could not save memory note",
   "876e7a8c229f3d07": "Unpin",
@@ -9169,41 +9159,6 @@
   "60b069c909226eb0": "Erkanntes Tool hinzufügen",
   "b5cbec89930470c9": "Import from CLI",
   "e6e4b713eaf4d497": "Add MCP server",
-  "97388c061a394481": [
-    "Configure MCP servers once in",
-    " ",
-    {
-      "t": "code",
-      "i": 1,
-      "c": {
-        "i": 2,
-        "k": "_gt_value_2",
-        "v": "v"
-      }
-    },
-    " ",
-    "and reuse them across every provider through the isolated ",
-    {
-      "t": "code",
-      "i": 3,
-      "c": "/mcp/harness"
-    },
-    " ",
-    "gateway. Use ",
-    {
-      "t": "code",
-      "i": 4,
-      "c": "${secret:NAME}"
-    },
-    " or",
-    " ",
-    {
-      "t": "code",
-      "i": 5,
-      "c": "${secret:provider:ref}"
-    },
-    " for credentials."
-  ],
   "4247e5730988f6a9": "Restricted by organization policy",
   "3f28feb80259d963": [
     {
@@ -9268,6 +9223,41 @@
   "e9459149a38c95c1": "Revoke trust",
   "32111e0efc4c768e": "Erneut anmelden",
   "e2dd98f1b8c413c4": "Anmeldung trennen",
+  "97388c061a394481": [
+    "Configure MCP servers once in",
+    " ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": {
+        "i": 2,
+        "k": "_gt_value_2",
+        "v": "v"
+      }
+    },
+    " ",
+    "and reuse them across every provider through the isolated ",
+    {
+      "t": "code",
+      "i": 3,
+      "c": "/mcp/harness"
+    },
+    " ",
+    "gateway. Use ",
+    {
+      "t": "code",
+      "i": 4,
+      "c": "${secret:NAME}"
+    },
+    " or",
+    " ",
+    {
+      "t": "code",
+      "i": 5,
+      "c": "${secret:provider:ref}"
+    },
+    " for credentials."
+  ],
   "7a45e9a9f2f0b41d": "Genehmige den Zugriff im Browser. Falls sich die Rückrufseite nicht öffnet, füge ihre Adresse hier ein.",
   "52d4be6f6cd63137": [
     "MCP diagnostics: ",
@@ -9333,14 +9323,40 @@
   ],
   "7e2e8bec840689a3": "Trust & enable",
   "9fb072ea040d84bf": "Retry loading Harness",
-  "0b27489e18ff9300": [
-    "Saved to your portable ",
+  "e331cad6483bf496": [
+    "Configure MCP servers once in",
+    " ",
     {
       "t": "code",
       "i": 1,
-      "c": "~/.t3/harness/harness.json"
+      "c": {
+        "i": 2,
+        "k": "_gt_value_2",
+        "v": "v"
+      }
     },
-    " and available to every provider."
+    " ",
+    "and reuse them across every provider through the isolated ",
+    {
+      "t": "code",
+      "i": 3,
+      "c": "/mcp/harness"
+    },
+    " ",
+    "gateway. Use ",
+    {
+      "t": "code",
+      "i": 4,
+      "c": "${secret:NAME}"
+    },
+    " or ",
+    {
+      "t": "code",
+      "i": 5,
+      "c": "${secret:provider:ref}"
+    },
+    " ",
+    "for credentials."
   ],
   "78ade2037b60c8f0": "Server ID",
   "e4c938ffecbcc0f9": "Transport",
@@ -9789,10 +9805,11 @@
   "0be6b2546df12f66": "Stoppen",
   "7dbd7e8943e8931f": "Mikrofon wird geöffnet…",
   "efa31f38b611e912": "Diese Aufnahme konnte nicht abgespielt werden. Versuch erneut aufzunehmen.",
-  "0cebac0a2a6bdc99": "iPhone und iPad",
   "d797c9687a256a50": "Verbinde dich von deinem Smartphone oder Tablet mit deinem Server.",
-  "c21858dee1b62639": "{store}-Link",
+  "e5e10738cd1b6d83": "Mobilgerät einrichten",
+  "30340cddf36f92fa": "Mobilgerät einrichten",
   "cdcdc54a444a3636": "Mit der Kamera deines Smartphones scannen.",
+  "eb576a5feda7b535": "Öffnen",
   "73da41e93823fd71": [
     "Wir raten davon ab, mehrere ",
     {
@@ -11021,7 +11038,6 @@
   "126a28a1ad4b2d57": "Verbinde eine Umgebung, um ihr Modell für Textgenerierung zu wählen.",
   "5fe5a45199fa9c07": "Keine Anbieter für Textgenerierung verfügbar.",
   "99ceba64591c9257": "Diagnose anzeigen",
-  "eb576a5feda7b535": "Öffnen",
   "66647e8c8123a51f": "Richtlinie anzeigen",
   "6d59e1e516e53d17": "Lizenzen anzeigen",
   "941d08db15f62d17": "Archiviert",
@@ -12556,7 +12572,6 @@
   "f2bf529f85e05494": "Freigabe & Zugriff",
   "7cf24feddad00a5e": "Präferenzen",
   "58058320796d28f6": "Code",
-  "1a07e4d043f5df4e": "Verbindungen",
   "d8cd577c915539bd": "{label}-Konten und -Token",
   "a5ea998202be1fbc": "{label}-Anmeldedaten",
   "8f636f473e42e657": "alle lokalen dateien nicht committete änderungen bearbeitet verfolgt ignoriert env build-ausgabe bereinigung aufräumen",
@@ -12669,10 +12684,10 @@
   "0c5fc3b5e41e1956": "generierte thread-titel prompt benutzerdefiniert stil benennung umbenennen neu generieren",
   "a83570bcb45d8fa1": "info nach updates suchen herunterladen installieren upgrade version",
   "d65bdf6748801734": "release-kanal stabil latest nightly vorabversion",
-  "0767c794edea8f03": "t3-Befehl",
+  "7a761ec0d7eb5be7": "{command}-Befehl",
   "46dd4dc08c1e552f": "cli terminal shell pfad installieren kommandozeile",
   "86479042bae0e2db": "Mobile App",
-  "dc2a999ca67ccf31": "telefon tablet iPhone iPad iOS Android App Store Google Play QR",
+  "dc2a999ca67ccf31": "phone tablet iPhone iPad iOS Android App Store Google Play QR",
   "6310b97b04ef239f": "Willkommensseite",
   "df9fa3a9cb004b9b": "onboarding einrichtung erster start erste schritte agenten import projekte",
   "3188bc3b3c4508bc": "Datenschutzerklärung",
@@ -12753,10 +12768,7 @@
   "ff679e74f97044e6": "Geheimnisanbieter hinzufügen",
   "ddd5990f613aebb4": "neu 1password tresor op cli konto",
   "c1b7649ac731ed07": "Plugins",
-  "724baefb1716842b": "MCP servers",
   "e095b15447afbb6f": "Rules & AGENTS.md",
-  "c9eafd03dec510c7": "Modes",
-  "4e5f1c0e990db46f": "Hooks",
   "ce19cbab7a347f89": "Approvals",
   "d7ace0fcb370d8b1": "CLI Import / Export",
   "b9b1dccabd2ed00d": "Archivierte Threads",
@@ -12790,7 +12802,7 @@
   "9c73aa0c2e2b4e7d": "Tastenkürzel wählen",
   "300a948f90c4d75c": "Zurück",
   "2a50e229df85d553": "Vorwärts",
-  "8aa6404c8018ea67": "T3 Code Startseite",
+  "bcdd5a1286c75b62": "{app} home",
   "8e9626aa27cb188a": "Issues",
   "9d2fc1003e82feb1": "Nutzung",
   "20283eb1dd6119f9": "{count, plural, one {{count} Anhang} other {{count} Anhänge}}",

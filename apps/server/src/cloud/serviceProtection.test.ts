@@ -228,6 +228,65 @@ it.effect("lowers no score before the manager default is in place, and undoes in
   );
 });
 
+it.effect.each([false, true])(
+  "undoes Lightning's legacy service drop-in with current drop-in present=%s",
+  (hasCurrent) => {
+    const home = temporaryDirectory();
+    return Effect.gen(function* () {
+      const plan = ServiceProtection.protectionPlan({
+        uid: 1000,
+        userUnitDir: NodePath.join(home, "user"),
+        remoteAccessUnits: ["ssh.service"],
+        systemUnitDir: NodePath.join(home, "system"),
+      });
+      const legacy = ({ path, contents }: ServiceProtection.DropIn) => {
+        const file = path.replace(/[^/]+$/, "90-t3code-protect.conf");
+        NodeFS.mkdirSync(NodePath.dirname(file), { recursive: true });
+        NodeFS.writeFileSync(file, contents);
+        return file;
+      };
+      const shared = [...plan.system, plan.managerDefaults, ...plan.user.slice(0, -1)].map(legacy);
+      const service = plan.user.at(-1)!;
+      const legacyLightning = legacy(service);
+      const legacyUpstream = legacy({
+        ...service,
+        path: service.path.replace("lightning-code.service", "t3code.service"),
+      });
+      if (hasCurrent) NodeFS.writeFileSync(service.path, service.contents);
+
+      const state = yield* ServiceProtection.readProtection(NodePath.join(home, "user"));
+      expect(state?.setByProtect).toBe(true);
+
+      const installed = yield* ServiceProtection.installedProtection(plan);
+      expect(installed.user.map(({ path }) => path)).toEqual(
+        hasCurrent ? [service.path, legacyLightning] : [legacyLightning],
+      );
+      expect(installed.system).toEqual([]);
+      expect(installed.managerDefaults).toBeUndefined();
+      expect(installed.retainedLegacy.map(({ path }) => path)).toEqual(shared);
+      yield* ServiceProtection.removeProtection(installed);
+
+      expect([legacyLightning, service.path].some(NodeFS.existsSync)).toBe(false);
+      expect([...shared, legacyUpstream].every(NodeFS.existsSync)).toBe(true);
+      const remaining = yield* ServiceProtection.installedProtection(plan);
+      expect(remaining).toMatchObject({ system: [], user: [], managerDefaults: undefined });
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(home, { recursive: true, force: true }))),
+      Effect.provideService(
+        ProcessRunner.ProcessRunner,
+        runner(
+          "ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/lightning-code.service\nMainPID=0\n",
+        ),
+      ),
+      Effect.provideService(
+        ChildProcessSpawner.ChildProcessSpawner,
+        fakeSudo(1, () => {}),
+      ),
+      Effect.provide(NodeServices.layer),
+    );
+  },
+);
+
 it.effect("counts memory.min as protection and names the first cgroup that grants none", () => {
   const root = temporaryDirectory();
   const controlGroup = [

@@ -186,11 +186,19 @@ it("transitions composer telemetry across waiting, typing, sending, running, and
   await using screen = await render(composer(false));
   const host = screen.container.querySelector('[data-slot="composer-host"]')!;
   const disc = screen.container.querySelector(".lightning-orbit-disc")!;
-  await vi.waitFor(() => expect(getComputedStyle(disc).animationPlayState).toBe("running"));
+  await vi.waitFor(() =>
+    expect(disc.closest("[data-lightning-cosmic-backdrop]")?.getAttribute("style")).toContain(
+      "--visible-animation-state: running",
+    ),
+  );
+  expect(getComputedStyle(disc).animationPlayState).toBe("paused");
   const input = screen.container.querySelector("input")!;
   const form = input.form!;
   using _timers = fakeTimers();
   expect(host.getAttribute("data-lightning-composer-state")).toBe("waiting");
+  for (const band of screen.container.querySelectorAll(".lightning-wave-band")) {
+    expect(getComputedStyle(band).animationPlayState).toBe("paused");
+  }
   await act(() => input.focus());
   expect(host.getAttribute("data-lightning-composer-state")).toBe("typing");
   await act(() => input.blur());
@@ -249,12 +257,16 @@ it("pauses offscreen telemetry and respects reduced motion", async () => {
     await vi.waitFor(() =>
       expect(getComputedStyle(rim, "::before").animationPlayState).toBe("running"),
     );
-    await vi.waitFor(() => expect(getComputedStyle(orbit).animationPlayState).toBe("running"));
+    expect(getComputedStyle(orbit).animationPlayState).toBe("paused");
     const sky = orbit.closest("[data-lightning-cosmic-backdrop]")!;
     const swarm = sky.querySelector<HTMLCanvasElement>(".lightning-orbit-swarm")!;
     expect(swarm.width).toBeGreaterThan(0);
     movePointer(sky.parentElement!);
     await vi.waitFor(() => expect(sky.hasAttribute("data-orbit-focus")).toBe(true));
+    await vi.waitFor(() => expect(getComputedStyle(orbit).animationPlayState).toBe("running"));
+    await vi.waitFor(() => expect(getComputedStyle(orbit).animationPlayState).toBe("paused"), {
+      timeout: 2500,
+    });
     sky.parentElement!.dispatchEvent(
       new PointerEvent("pointerdown", {
         bubbles: true,

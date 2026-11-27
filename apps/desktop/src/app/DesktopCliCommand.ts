@@ -31,8 +31,7 @@ export class DesktopCliCommandError extends Schema.TaggedError<DesktopCliCommand
 
 const userCandidates = (home: string) => [`${home}/.local/bin`, `${home}/bin`];
 
-// Older builds also linked into these macOS folders. Such a link is found, updated in place, and
-// removed, but no new link goes there.
+// Older builds also linked into these macOS folders. Fresh installs only use the user folders.
 const knownLocations = (home: string, platform: NodeJS.Platform) =>
   platform === "darwin"
     ? [...userCandidates(home), "/opt/homebrew/bin", "/usr/local/bin"]
@@ -89,13 +88,17 @@ export const make = Effect.gen(function* () {
   const windows = environment.platform === "win32";
   const launcher = DesktopCliShim.launcherPath(environment);
   const binDirectory = path.dirname(launcher);
+  const commandLocations = knownLocations(environment.homeDirectory, environment.platform);
+  const legacyCommandLinks = windows
+    ? []
+    : commandLocations.map((directory) => path.join(directory, "t3"));
   const ownedPathMarker = path.join(environment.stateDir, "cli-command-path-entry");
   const firstLaunchMarker = path.join(environment.stateDir, "cli-command-first-launch");
 
   const fail = (message: string) => new DesktopCliCommandError({ message });
   const exists = (target: string) => fs.exists(target).pipe(Effect.orElseSucceed(() => false));
   // Read before this launch writes either one: an app that ran before left its launcher or
-  // settings. Its user may have removed t3 or chosen another, so only Settings installs there.
+  // settings. Its user may have removed the command, so only Settings installs there.
   const freshInstall =
     !(yield* exists(launcher)) && !(yield* exists(environment.desktopSettingsPath));
   const writableDirectory = (directory: string) =>
@@ -105,9 +108,10 @@ export const make = Effect.gen(function* () {
     );
 
   const isOurLink = Effect.fn("DesktopCliCommand.isOurLink")(
-    function* (link: string) {
-      yield* fs.readLink(link);
-      // The launcher is a few KB; never read a large binary another `t3` links to.
+    function* (link: string, expectedTarget?: string) {
+      const target = yield* fs.readLink(link);
+      if (expectedTarget !== undefined && target !== expectedTarget) return false;
+      // The launcher is a few KB; skip large files a command may link to.
       const info = yield* fs.stat(link);
       if (info.type !== "File" || Number(info.size) > 16_384) return false;
       const content = yield* fs.readFileString(link);
@@ -115,6 +119,20 @@ export const make = Effect.gen(function* () {
     },
     Effect.orElseSucceed(() => false),
   );
+
+  // The old name is shared with upstream. The shim marker and the exact target identify our link.
+  const ownedLegacyLinks = Effect.filter(legacyCommandLinks, (link) => isOurLink(link, launcher));
+
+  const removeOwnedLink = Effect.fn("DesktopCliCommand.removeOwnedLink")(function* (
+    link: string,
+    expectedTarget?: string,
+  ) {
+    if (yield* isOurLink(link, expectedTarget)) {
+      yield* fs
+        .remove(link, { force: true })
+        .pipe(Effect.mapError(() => fail(`Could not remove ${link}.`)));
+    }
+  });
 
   // PATH can reach the regular launcher directly; removal still requires isOurLink.
   const runsOurLauncher = Effect.fn("DesktopCliCommand.runsOurLauncher")(
@@ -201,7 +219,7 @@ export const make = Effect.gen(function* () {
         ? Option.some(launcher)
         : Option.none<string>();
     }
-    for (const directory of knownLocations(environment.homeDirectory, environment.platform)) {
+    for (const directory of commandLocations) {
       const link = path.join(directory, LIGHTNING_BRAND.cliCommand);
       if (yield* isOurLink(link)) return Option.some(link);
     }
@@ -241,7 +259,7 @@ export const make = Effect.gen(function* () {
     }
     const launcherPath = (yield* exists(launcher)) ? launcher : null;
     const found = yield* installedAt;
-    // Our link into another T3 home is not this app's command; Install updates it in place.
+    // Install can take over a link from another Lightning Code home.
     const installed =
       windows || (Option.isSome(found) && (yield* leadsHere(found.value)))
         ? found
@@ -254,8 +272,7 @@ export const make = Effect.gen(function* () {
     const onPath = windows
       ? Option.isSome(installed)
       : Option.isSome(first) && (yield* runsOurLauncher(first.value));
-    // Only a folder missing from PATH, with no other t3 first: with one, the added folder (last
-    // on PATH) would still not run this t3.
+    // Adding a folder at the end of PATH only helps when no other command runs first.
     const setup =
       onPath ||
       Option.isSome(shadowedBy) ||
@@ -265,7 +282,7 @@ export const make = Effect.gen(function* () {
         : startupLine(installed.value);
     return {
       supported: true,
-      installedPath: Option.getOrNull(installed),
+      installedPath: Option.getOrUndefined(installed) ?? (yield* ownedLegacyLinks)[0] ?? null,
       onPath,
       launcherPath,
       ...shadow,
@@ -296,7 +313,13 @@ export const make = Effect.gen(function* () {
     ),
   );
 
-  const install: DesktopCliCommand["Service"]["install"] = Effect.gen(function* () {
+  const removeLegacyLinks = (links: ReadonlyArray<string>) =>
+    Effect.forEach(links, (link) => removeOwnedLink(link, launcher), { discard: true });
+
+  const installCommand = Effect.fn("desktop.cliCommand.install")(function* (
+    legacyLinks: ReadonlyArray<string>,
+    allowTakeover: boolean,
+  ) {
     if (!environment.isPackaged) {
       return yield* fail(`The ${LIGHTNING_BRAND.cliCommand} command needs an installed app.`);
     }
@@ -321,11 +344,19 @@ export const make = Effect.gen(function* () {
       }
       return yield* state;
     }
-    const candidates = userCandidates(environment.homeDirectory);
+    const candidates = [
+      ...legacyLinks.map((link) => path.dirname(link)),
+      ...userCandidates(environment.homeDirectory),
+    ];
     const replaced = Option.getOrUndefined(yield* installedAt);
     if (replaced !== undefined) {
-      const target = yield* fs.readLink(replaced).pipe(Effect.option);
-      if (Option.getOrUndefined(target) === launcher) return yield* state;
+      if (yield* leadsHere(replaced)) {
+        yield* removeLegacyLinks(legacyLinks);
+        return yield* state;
+      }
+      if (!allowTakeover) {
+        return yield* fail(`Another Lightning Code installation owns the command at ${replaced}.`);
+      }
     }
     const shadowedBy = yield* foreignFirstOnPath;
     // Our own link into another home runs first too; it is the one this install updates.
@@ -372,12 +403,18 @@ export const make = Effect.gen(function* () {
       if (replaced !== undefined && replaced !== link) {
         yield* fs.remove(replaced).pipe(Effect.ignore);
       }
+      yield* removeLegacyLinks(legacyLinks);
       return yield* state;
     }
     return yield* fail(
       `Another ${LIGHTNING_BRAND.cliCommand} command is already in ~/.local/bin and ~/bin, or neither is writable. Run the launcher directly at ${launcher}.`,
     );
-  }).pipe(Effect.withSpan("desktop.cliCommand.install"));
+  });
+
+  const commandPermit = yield* Semaphore.make(1);
+  const install: DesktopCliCommand["Service"]["install"] = Effect.gen(function* () {
+    return yield* installCommand(yield* ownedLegacyLinks, true);
+  }).pipe(commandPermit.withPermits(1));
 
   const uninstall: DesktopCliCommand["Service"]["uninstall"] = Effect.gen(function* () {
     // A first launch put off for the shell PATH must not bring back what the user removed.
@@ -391,14 +428,12 @@ export const make = Effect.gen(function* () {
       }
       return yield* state;
     }
-    for (const directory of knownLocations(environment.homeDirectory, environment.platform)) {
-      const link = path.join(directory, LIGHTNING_BRAND.cliCommand);
-      if (yield* isOurLink(link)) {
-        yield* fs.remove(link).pipe(Effect.mapError(() => fail(`Could not remove ${link}.`)));
-      }
+    for (const directory of commandLocations) {
+      yield* removeOwnedLink(path.join(directory, LIGHTNING_BRAND.cliCommand));
     }
+    yield* removeLegacyLinks(legacyCommandLinks);
     return yield* state;
-  }).pipe(Effect.withSpan("desktop.cliCommand.uninstall"));
+  }).pipe(commandPermit.withPermits(1), Effect.withSpan("desktop.cliCommand.uninstall"));
 
   // One at a time, so Settings and onboarding cannot both append the line.
   const addToPathPermit = yield* Semaphore.make(1);
@@ -440,7 +475,13 @@ export const make = Effect.gen(function* () {
 
   const installOnFirstLaunch: DesktopCliCommand["Service"]["installOnFirstLaunch"] = Effect.gen(
     function* () {
-      if (!environment.isPackaged || (yield* exists(firstLaunchMarker))) return;
+      if (!environment.isPackaged) return;
+      const legacyLinks = yield* ownedLegacyLinks;
+      if (legacyLinks.length > 0) {
+        yield* installCommand(legacyLinks, false);
+        return;
+      }
+      if (yield* exists(firstLaunchMarker)) return;
       // Mark first so a failed or removed install is never retried behind the user's back.
       yield* fs.writeFileString(firstLaunchMarker, "");
       if (!freshInstall) {
@@ -479,13 +520,14 @@ export const make = Effect.gen(function* () {
           }
         }
       }
-      const installed = yield* install;
+      const installed = yield* installCommand([], false);
       yield* logInfo(`installed the ${LIGHTNING_BRAND.cliCommand} command on first launch`, {
         installedPath: installed.installedPath,
         onPath: installed.onPath,
       });
     },
   ).pipe(
+    commandPermit.withPermits(1),
     // Our own messages are short and name only paths; anything else is logged as a category.
     Effect.catch((error) =>
       logWarning(`did not install the ${LIGHTNING_BRAND.cliCommand} command on first launch`, {

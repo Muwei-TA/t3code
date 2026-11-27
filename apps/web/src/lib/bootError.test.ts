@@ -51,20 +51,20 @@ describe("resolveTriageCommand", () => {
     ).resolves.toBe("& 'C:\\Users\\Jo O''Neil\\.lightning-code\\bin\\lightning.cmd' triage");
   });
 
-  it("falls back to npx without a usable desktop launcher", async () => {
+  it("uses the installed command without a usable desktop launcher", async () => {
     using _warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    await expect(resolveTriageCommand(undefined)).resolves.toBe("npx lightning triage");
-    await expect(resolveTriageCommand({} as DesktopBridge)).resolves.toBe("npx lightning triage");
+    await expect(resolveTriageCommand(undefined)).resolves.toBe("lightning triage");
+    await expect(resolveTriageCommand({} as DesktopBridge)).resolves.toBe("lightning triage");
     await expect(resolveTriageCommand(desktopWith(async () => notOnPath(null)))).resolves.toBe(
-      "npx lightning triage",
+      "lightning triage",
     );
     const staleWindowsPathEntry = { ...notOnPath(null), supported: true, onPath: true };
     await expect(
       resolveTriageCommand(desktopWith(async () => staleWindowsPathEntry)),
-    ).resolves.toBe("npx lightning triage");
+    ).resolves.toBe("lightning triage");
     await expect(
       resolveTriageCommand(desktopWith(() => Promise.reject(new Error("ipc closed")))),
-    ).resolves.toBe("npx lightning triage");
+    ).resolves.toBe("lightning triage");
   });
 });
 

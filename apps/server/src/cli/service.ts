@@ -6,6 +6,7 @@ import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { Command, Flag, GlobalFlag, Prompt } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
@@ -438,15 +439,24 @@ const serviceProtectCommand = Command.make("protect", {
                 remoteAccessUnits: ServiceProtection.REMOTE_ACCESS_UNITS,
               }),
             );
-            if (installed === undefined) {
-              return yield* Console.log(
-                `${LIGHTNING_BRAND.baseName} service protection is not set up.`,
+            if (installed.retainedLegacy.length > 0) {
+              yield* Console.log(
+                [
+                  "Keeping legacy drop-ins shared by other installations or users:",
+                  ...installed.retainedLegacy.map(({ path }) => `  ${path}`),
+                  "If you can verify that Lightning Code alone added these files and no other user or service relies on them, remove them and reload both managers with `sudo systemctl daemon-reload` and `systemctl --user daemon-reload`. Restart the affected services to apply any changed OOM scores.",
+                ].join("\n"),
               );
+            }
+            const dropIns = [...installed.system, ...installed.user];
+            if (installed.managerDefaults !== undefined) dropIns.push(installed.managerDefaults);
+            if (dropIns.length === 0) {
+              return yield* Console.log(`No ${LIGHTNING_BRAND.baseName} drop-ins to remove.`);
             }
             yield* Console.log(
               [
                 "Removes:",
-                ...[...installed.system, ...installed.user, installed.managerDefaults].map(
+                ...dropIns.map(
                   ({ path, shared }) =>
                     `  ${path}${shared === true ? " (kept while another user is protected)" : ""}`,
                 ),
@@ -457,8 +467,11 @@ const serviceProtectCommand = Command.make("protect", {
             )
               return;
             yield* ServiceProtection.removeProtection(installed);
+            const baseDirOption = Option.isNone(flags.baseDir)
+              ? ""
+              : ` ${BootService.formatBootServiceBaseDirOption(flags.baseDir.value)}`;
             return yield* Console.log(
-              `Removed ${LIGHTNING_BRAND.baseName} service protection. The server's OOM score returns to normal after \`${LIGHTNING_BRAND.cliCommand} service restart\`.`,
+              `Removed ${LIGHTNING_BRAND.baseName} service protection drop-ins. Run \`${LIGHTNING_BRAND.cliCommand} service restart${baseDirOption}\` to apply the service's remaining OOM settings.`,
             );
           }
 

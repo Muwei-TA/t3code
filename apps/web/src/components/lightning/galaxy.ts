@@ -331,6 +331,7 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
   };
 
   const stopLoop = () => {
+    host.removeAttribute("data-orbit-swarm-active");
     if (rafId !== 0) {
       window.cancelAnimationFrame(rafId);
       rafId = 0;
@@ -346,13 +347,13 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
 
   const step = (now: number) => {
     if (!isRunnable()) {
-      rafId = 0;
+      stopLoop();
       return;
     }
     if (!width || !height) {
       resize();
       if (!width || !height) {
-        rafId = 0;
+        stopLoop();
         return;
       }
     }
@@ -481,13 +482,13 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
         s.vy = 0;
       }
       renderIdle();
-      rafId = 0;
+      stopLoop();
       return;
     }
 
     if (pointerActive && scatterBurst <= 0.01 && stillMs >= STATIONARY_SETTLE_MS) {
       // Keep the gathered constellation halo frozen on screen and sleep RAF until cursor moves again.
-      rafId = 0;
+      stopLoop();
       return;
     }
 
@@ -496,6 +497,7 @@ export function attachStarSwarm(host: HTMLElement, canvas: HTMLCanvasElement): (
 
   const ensureLoop = () => {
     if (!isRunnable() || rafId !== 0) return;
+    host.setAttribute("data-orbit-swarm-active", "");
     lastTime = 0;
     rafId = window.requestAnimationFrame(step);
   };

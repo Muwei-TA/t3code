@@ -1,5 +1,6 @@
 import type { NavigationState, PartialState } from "@react-navigation/native";
 import { CommonActions, StackActions } from "@react-navigation/native";
+import { resolveRemotePairingTarget, setPairingTokenOnUrl } from "@t3tools/shared/remote";
 import { Atom } from "effect/reactivity";
 
 import { findLinkedRoute, updateLinkedRoute } from "../../lib/appLinking";
@@ -38,6 +39,7 @@ export function autoConnectReport(
 
 // The pairing form is mounted both as a root sheet and inside the settings sheet.
 const PAIRING_FORM_ROUTES = ["ConnectionsNew", "SettingsEnvironmentNew"];
+export const connectionsNewLinking = { path: "connections/new", alias: ["pair"] };
 
 function isAutoConnectFlag(value: unknown): boolean {
   return value === "1" || value === "true";
@@ -70,18 +72,47 @@ async function connect(pairingUrl: string) {
   });
 }
 
-/**
- * `routeFor` makes a pairing an "Add route" to a saved environment, which skips the guard against
- * a pairing taking over that environment's id. Only in-app navigation may set it, never a link.
- */
-export function withoutPairingTarget(
+export function preparePairingFormLink(
   state: PartialState<NavigationState> | undefined,
+  path: string,
 ): PartialState<NavigationState> | undefined {
   return updateLinkedRoute(state, PAIRING_FORM_ROUTES, (route) => {
-    if (route.params === undefined || !("routeFor" in route.params)) return route;
-    const { routeFor: _routeFor, ...params } = route.params as { readonly routeFor?: unknown };
-    return { ...route, params };
+    const params = (route.params ?? {}) as {
+      readonly routeFor?: unknown;
+      readonly pairingLinkUrl?: unknown;
+      readonly pairingUrl?: unknown;
+    };
+    if (route.name === "ConnectionsNew" && isManualPairingPath(path)) {
+      // CLI links supply prefill only. Discard query parameters that can change how pairing runs.
+      const { path: _path, ...form } = route;
+      const pairingLinkUrl =
+        typeof params.pairingUrl === "string" ? validatedPairingLinkUrl(params.pairingUrl) : "";
+      return { ...form, params: { pairingLinkUrl } };
+    }
+    if (!("routeFor" in params) && !("pairingLinkUrl" in params)) return route;
+    // Only in-app navigation may add a route to an existing environment.
+    const { routeFor: _routeFor, pairingLinkUrl: _pairingLinkUrl, ...trustedParams } = params;
+    return { ...route, params: trustedParams };
   });
+}
+
+function isManualPairingPath(path: string): boolean {
+  const pathname = path.split("?")[0]?.replace(/^\/+|\/+$/g, "") ?? "";
+  try {
+    return connectionsNewLinking.alias.includes(decodeURIComponent(pathname));
+  } catch {
+    return false;
+  }
+}
+
+function validatedPairingLinkUrl(pairingUrl: string): string {
+  try {
+    const target = resolveRemotePairingTarget({ pairingUrl });
+    const origin = new URL(target.httpBaseUrl).origin;
+    return setPairingTokenOnUrl(new URL(origin), target.credential).href;
+  } catch {
+    return "";
+  }
 }
 
 /**

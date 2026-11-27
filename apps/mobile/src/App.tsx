@@ -2,6 +2,7 @@ import { installPermissionUpdateNotice } from "./features/connection/permissionU
 import { installComposerAttachmentUploads } from "./state/composer-attachment-uploads";
 import { installThreadOutboxDelivery } from "./state/threadOutboxDelivery";
 import * as Linking from "expo-linking";
+import Constants from "expo-constants";
 import * as SplashScreen from "expo-splash-screen";
 import { requireNativeModule } from "expo";
 import { useLocale } from "gt-react-native";
@@ -20,7 +21,7 @@ import {
   type NavigationState,
 } from "@react-navigation/native";
 import { pipe } from "effect/Function";
-import { DEFAULT_HOSTED_APP_URL } from "@t3tools/shared/connectAuth";
+import { MOBILE_APP_IDENTITIES } from "@t3tools/shared/mobileBrand";
 
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { ProjectChipIconRasterizer } from "./native/ProjectChipIconImages";
@@ -61,8 +62,8 @@ import { hasCloudPublicConfig } from "./features/cloud/publicConfig";
 import { takeScheduledTaskNewLink } from "./features/settings/scheduled-task-editor-state";
 import {
   pairingFormLinkAction,
+  preparePairingFormLink,
   startDevAutoConnect,
-  withoutPairingTarget,
 } from "./features/connection/devAutoConnect";
 import {
   resolvePendingNewTaskPromptLink,
@@ -131,19 +132,18 @@ function getAppStateFromPath(path: string, options: Parameters<typeof getStateFr
     (state) => restoreSettingsLinkState(state, settingsLinkPage()),
     takeThreadPromptLink,
     takeNewTaskPromptLink,
-    withoutPairingTarget,
+    (state) => preparePairingFormLink(state, path),
     startDevAutoConnect,
     takeScheduledTaskNewLink,
   );
 }
 
+const hostedThreadLinkOrigin: unknown = Constants.expoConfig?.extra?.hostedThreadLinkOrigin;
 const appLinking = {
   prefixes: [
     Linking.createURL("/"),
-    "t3code://",
-    "t3code-dev://",
-    "t3code-preview://",
-    DEFAULT_HOSTED_APP_URL,
+    ...Object.values(MOBILE_APP_IDENTITIES).map(({ scheme }) => `${scheme}://`),
+    ...(typeof hostedThreadLinkOrigin === "string" ? [hostedThreadLinkOrigin] : []),
   ],
   config: { initialRouteName: "Home" },
   filter: (url: string) => shouldHandleAppLink(url, hasCloudPublicConfig()),

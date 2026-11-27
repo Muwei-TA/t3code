@@ -563,21 +563,24 @@ const withoutTerminals = Effect.acquireRelease(
     }),
 );
 
-it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
+it.layer(NodeServices.layer)("lightning update with a background service", (it) => {
   it.effect("names the version a service with a pending restart still runs", () =>
     Effect.gen(function* () {
       yield* withoutTerminals;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
+      const baseDir = path.join(root, "Lightning home");
       const version = packageJson.version;
       const runtime = pinnedRuntimePaths(path, baseDir, version, "linux");
       yield* fs.makeDirectory(runtime.versionDir, { recursive: true });
       yield* fs.writeFileString(runtime.entryPath, "");
       yield* fs.writeFileString(runtime.sentinelPath, `${version}\n`);
+      const launcher = path.join(root, "lightning");
+      yield* fs.symlink(runtime.entryPath, launcher);
       const unitPath = path.join(baseDir, "lightning-code.service");
       const logPath = path.join(baseDir, "boot-service.log");
-      // An earlier `t3 update` pointed the service at this version without restarting it.
+      // An earlier update pointed the service at this version without restarting it.
       const service = Layer.mock(BootService.BootService, {
         status: Effect.succeed<BootService.BootServiceStatus>({
           supported: true,
@@ -610,6 +613,7 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
 
       const output = yield* runUpdate({
         baseDir,
+        includeBaseDirInHint: true,
         logsDir: baseDir,
         databasePath: path.join(baseDir, "statev2.sqlite"),
         serverRuntimeStatePath: path.join(baseDir, "server-runtime.json"),
@@ -632,12 +636,16 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
             Layer.fresh(TestConsole.layer),
           ),
         ),
+        Effect.provideService(HostProcess.InvokedAs, launcher),
+        Effect.provideService(HostProcess.IsExecutable, true),
       );
 
+      assert.include(output, `Run lightning --base-dir '${baseDir}' to get started.`);
       assert.include(
         output,
-        `Background service still running the version before ${version}. Run \`t3 service restart\` when you are ready to switch it to ${version}.`,
+        `Background service still running the version before ${version}. Run \`lightning service restart --base-dir '${baseDir}'\` when you are ready to switch it to ${version}.`,
       );
+      assert.include(output, `or run \`lightning service restart --base-dir '${baseDir}'\` later.`);
     }).pipe(
       Effect.provideService(HostProcess.Platform, "linux"),
       Effect.provideService(HostProcess.Environment, { PATH: "" }),
@@ -683,7 +691,7 @@ it.layer(NodeServices.layer)("t3 update checks the database before switching", (
       launcherProtocol: 3,
       preflight: preflightOutput("", 1),
       failure:
-        "t3@0.1.8 could not confirm it supports this database (its check exited with code 1), so t3 did not switch to it.",
+        "Lightning Code 0.1.8 could not confirm it supports this database (its check exited with code 1), so the launcher stayed on the current version.",
     },
     {
       // Newer builds keep accepting the current launcher protocol, which may drop 3.

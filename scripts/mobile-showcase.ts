@@ -15,6 +15,7 @@ import * as NodePath from "node:path";
 import * as NodeProcess from "node:process";
 import * as NodeURL from "node:url";
 
+import { MOBILE_APP_IDENTITIES } from "@t3tools/shared/mobileBrand";
 import { PNG } from "pngjs";
 
 import showcaseConfig, {
@@ -38,8 +39,8 @@ import {
 
 const REPO_ROOT = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 const MOBILE_ROOT = NodePath.join(REPO_ROOT, "apps/mobile");
-const ANDROID_PACKAGE = "com.t3tools.t3code";
-const APP_SCHEME = "t3code";
+const { identifier: BUNDLE_ID, scheme: APP_SCHEME, appName } = MOBILE_APP_IDENTITIES.production;
+const IOS_TARGET = appName.replaceAll(" ", "");
 // Manifest flags update expo-dev-launcher preferences before loading, hiding dev chrome in captures.
 const DEV_CLIENT_LAUNCH_FLAGS = "disableOnboarding=1&disableFab=1&disableAutoLaunch=1";
 const IOS_READY_FILENAME = "T3ShowcaseReadyScene";
@@ -47,7 +48,7 @@ const SERVER_HOST = "0.0.0.0";
 const IOS_SIMULATOR_ARCH = NodeProcess.arch === "arm64" ? "arm64" : "x86_64";
 const IOS_APP_PATH = NodePath.join(
   MOBILE_ROOT,
-  ".showcase/ios-derived-data/Build/Products/Debug-iphonesimulator/T3Code.app",
+  `.showcase/ios-derived-data/Build/Products/Debug-iphonesimulator/${IOS_TARGET}.app`,
 );
 const ANDROID_APK_PATH = NodePath.join(
   MOBILE_ROOT,
@@ -774,9 +775,9 @@ async function buildIos(): Promise<string> {
     "xcodebuild",
     [
       "-workspace",
-      NodePath.join(MOBILE_ROOT, "ios/T3Code.xcworkspace"),
+      NodePath.join(MOBILE_ROOT, "ios", `${IOS_TARGET}.xcworkspace`),
       "-scheme",
-      "T3Code",
+      IOS_TARGET,
       "-configuration",
       "Debug",
       "-sdk",
@@ -983,7 +984,7 @@ async function ensureIosFullScreenAppsMode(udid: string): Promise<void> {
 
 async function iosAppContainer(udid: string): Promise<string> {
   return (
-    await commandOutput("xcrun", ["simctl", "get_app_container", udid, ANDROID_PACKAGE, "data"])
+    await commandOutput("xcrun", ["simctl", "get_app_container", udid, BUNDLE_ID, "data"])
   ).trim();
 }
 
@@ -1064,7 +1065,7 @@ async function presentIosLockScreen(udid: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = NodeChildProcess.execFile(
       "xcrun",
-      ["simctl", "push", udid, ANDROID_PACKAGE, "-"],
+      ["simctl", "push", udid, BUNDLE_ID, "-"],
       { cwd: REPO_ROOT },
       (error) => (error ? reject(error) : resolve()),
     );
@@ -1159,7 +1160,7 @@ async function captureIos(
   }
   await normalizeIosSimulator(capture.appearance, simulator.udid);
   if (appPath) {
-    await runCommand("xcrun", ["simctl", "uninstall", simulator.udid, ANDROID_PACKAGE]).catch(
+    await runCommand("xcrun", ["simctl", "uninstall", simulator.udid, BUNDLE_ID]).catch(
       () => undefined,
     );
     await runCommand("xcrun", ["simctl", "install", simulator.udid, appPath]);
@@ -1182,7 +1183,7 @@ async function captureIos(
       "launch",
       ...(terminateRunningProcess ? ["--terminate-running-process"] : []),
       simulator.udid,
-      ANDROID_PACKAGE,
+      BUNDLE_ID,
       "--initialUrl",
       metroUrl,
       "--showcasePairingUrl",
@@ -1266,7 +1267,7 @@ async function snoozeAndroidSystemNotifications(serial: string): Promise<void> {
   const keys = (await adbOutput(serial, ["shell", "cmd", "notification", "list"]))
     .split("\n")
     .map((line) => line.trim())
-    .filter((key) => key.includes("|") && !key.includes(`|${ANDROID_PACKAGE}|`));
+    .filter((key) => key.includes("|") && !key.includes(`|${BUNDLE_ID}|`));
   for (const key of keys) {
     // adb joins shell args with spaces, so the key needs quoting for the pipes.
     await runAdb(serial, ["shell", `cmd notification snooze --for 3600000 '${key}'`]);
@@ -1378,7 +1379,7 @@ async function waitForAndroidShowcaseScene(
     const readyScene = await adbOutput(serial, [
       "shell",
       "run-as",
-      ANDROID_PACKAGE,
+      BUNDLE_ID,
       "cat",
       "files/t3-showcase-ready",
     ]).catch(() => "");
@@ -1391,7 +1392,7 @@ async function waitForAndroidShowcaseScene(
 async function writeAndroidShowcaseScene(serial: string, scene: ShowcaseScene): Promise<void> {
   await runAdb(serial, [
     "shell",
-    `run-as ${ANDROID_PACKAGE} sh -c 'mkdir -p files && rm -f files/t3-showcase-ready && printf %s ${scene} > files/t3-showcase-scene'`,
+    `run-as ${BUNDLE_ID} sh -c 'mkdir -p files && rm -f files/t3-showcase-ready && printf %s ${scene} > files/t3-showcase-scene'`,
   ]);
 }
 
@@ -1406,7 +1407,7 @@ async function prepareAndroidShowcaseApp(serial: string): Promise<void> {
   const encodedPreferences = Buffer.from(preferences).toString("base64");
   await runAdb(serial, [
     "shell",
-    `run-as ${ANDROID_PACKAGE} sh -c 'mkdir -p shared_prefs && printf %s ${encodedPreferences} | base64 -d > shared_prefs/expo.modules.devmenu.sharedpreferences.xml'`,
+    `run-as ${BUNDLE_ID} sh -c 'mkdir -p shared_prefs && printf %s ${encodedPreferences} | base64 -d > shared_prefs/expo.modules.devmenu.sharedpreferences.xml'`,
   ]);
 }
 
@@ -1449,12 +1450,12 @@ async function captureAndroid(
   if (apkPath) {
     await runAdb(serial, ["install", "-r", apkPath]);
   }
-  await runAdb(serial, ["shell", "pm", "clear", ANDROID_PACKAGE]);
+  await runAdb(serial, ["shell", "pm", "clear", BUNDLE_ID]);
   await runAdb(serial, [
     "shell",
     "pm",
     "grant",
-    ANDROID_PACKAGE,
+    BUNDLE_ID,
     "android.permission.POST_NOTIFICATIONS",
   ]);
   await prepareAndroidShowcaseApp(serial);
@@ -1479,7 +1480,7 @@ async function captureAndroid(
     "--es",
     "showcaseTheme",
     capture.theme,
-    ANDROID_PACKAGE,
+    BUNDLE_ID,
   ]);
   for (const [sceneIndex, scene] of capture.scenes.entries()) {
     if (sceneIndex > 0) await writeAndroidShowcaseScene(serial, scene);

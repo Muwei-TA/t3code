@@ -686,7 +686,13 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
 
     const path = yield* Path.Path;
     const staticRoot = path.resolve(staticDir);
-    const staticRequestPath = url.value.pathname === "/" ? "/index.html" : url.value.pathname;
+    const requestPath = url.value.pathname;
+    const staticRequestPath =
+      requestPath === "/"
+        ? "/index.html"
+        : requestPath === "/.well-known/apple-app-site-association"
+          ? `${requestPath}.json`
+          : requestPath;
     const rawStaticRelativePath = staticRequestPath.replace(/^[/\\]+/, "");
     const hasRawLeadingParentSegment = rawStaticRelativePath.startsWith("..");
     const staticRelativePath = path.normalize(rawStaticRelativePath).replace(/^[/\\]+/, "");
@@ -719,6 +725,12 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
 
     let opened = yield* openStaticFile(filePath);
     if (!opened) {
+      if (
+        staticRequestPath === "/.well-known/apple-app-site-association.json" ||
+        staticRequestPath === "/.well-known/assetlinks.json"
+      ) {
+        return HttpServerResponse.text("Not Found", { status: 404 });
+      }
       filePath = path.resolve(staticRoot, "index.html");
       opened = yield* openStaticFile(filePath);
       if (!opened) {

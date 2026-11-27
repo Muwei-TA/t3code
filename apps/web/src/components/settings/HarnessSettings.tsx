@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -82,6 +83,7 @@ import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useSearchableSetting } from "./settingsSearch";
 
 const decodeServerId = Schema.decodeUnknownOption(HarnessMcpServerId);
+const defaultHarnessConfigPath = `~/${LIGHTNING_BRAND.defaultHomeDirName}/harness/harness.json`;
 
 function parseKeyValueLines(raw: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -971,7 +973,7 @@ export function EnvironmentHarnessMcpSection({
             <T>
               Configure MCP servers once in{" "}
               <code>
-                <Var>{snapshot?.configPath ?? "~/.lightning-code/harness/harness.json"}</Var>
+                <Var>{snapshot?.configPath ?? defaultHarnessConfigPath}</Var>
               </code>{" "}
               and reuse them across every provider through the isolated <code>/mcp/harness</code>{" "}
               gateway. Use <code>{"${secret:NAME}"}</code> or{" "}
@@ -1485,22 +1487,15 @@ function McpServerEditorForm({
       <DialogHeader>
         <DialogTitle>{initial ? gt("Edit MCP server") : gt("Add portable MCP server")}</DialogTitle>
         <DialogDescription>
-          {configPath ? (
-            <T>
-              Configure MCP servers once in{" "}
-              <code>
-                <Var>{configPath}</Var>
-              </code>{" "}
-              and reuse them across every provider through the isolated <code>/mcp/harness</code>{" "}
-              gateway. Use <code>{"${secret:NAME}"}</code> or{" "}
-              <code>{"${secret:provider:ref}"}</code> for credentials.
-            </T>
-          ) : (
-            <T>
-              Saved to your portable <code>~/.t3/harness/harness.json</code> and available to every
-              provider.
-            </T>
-          )}
+          <T>
+            Configure MCP servers once in{" "}
+            <code>
+              <Var>{configPath ?? defaultHarnessConfigPath}</Var>
+            </code>{" "}
+            and reuse them across every provider through the isolated <code>/mcp/harness</code>{" "}
+            gateway. Use <code>{"${secret:NAME}"}</code> or <code>{"${secret:provider:ref}"}</code>{" "}
+            for credentials.
+          </T>
         </DialogDescription>
       </DialogHeader>
       <DialogPanel>

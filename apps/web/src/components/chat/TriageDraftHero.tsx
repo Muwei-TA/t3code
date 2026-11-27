@@ -1,6 +1,6 @@
 import { msg, T, Var } from "gt-react";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { TRIAGE_CLI_COMMAND } from "~/hooks/useStartTriage";
+import { TRIAGE_CLI_COMMAND } from "~/lib/triageCommand";
 
 import { InlineButton } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";

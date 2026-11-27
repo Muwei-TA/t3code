@@ -205,6 +205,85 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
     }),
   );
 
+  it.effect("migrates the old desktop command after first launch", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.makeTempDirectoryScoped();
+      const directory = path.join(home, "bin");
+      const otherDirectory = path.join(home, ".local", "bin");
+      const baseDir = path.join(home, ".lightning-code");
+      const command = yield* commandIn({ home, env: { PATH: `${directory}:${otherDirectory}` } });
+      const launcher = path.join(baseDir, "bin", "lightning");
+      const legacy = path.join(directory, "t3");
+      const modern = path.join(directory, "lightning");
+      const upstream = path.join(otherDirectory, "t3");
+      const upstreamLauncher = path.join(home, ".t3", "bin", "t3");
+      for (const folder of [
+        directory,
+        otherDirectory,
+        path.dirname(launcher),
+        path.dirname(upstreamLauncher),
+      ]) {
+        yield* fs.makeDirectory(folder, { recursive: true });
+      }
+      yield* fs.writeFileString(path.join(baseDir, "userdata", "cli-command-first-launch"), "");
+      yield* fs.writeFileString(launcher, `#!/bin/sh\n# ${DesktopCliShim.MARKER}\n`, {
+        mode: 0o755,
+      });
+      yield* fs.writeFileString(upstreamLauncher, "#!/bin/sh\n# Written by T3 Code\n", {
+        mode: 0o755,
+      });
+      yield* fs.symlink(launcher, legacy);
+      yield* fs.symlink(upstreamLauncher, upstream);
+
+      yield* command.installOnFirstLaunch;
+      expect(yield* command.state).toMatchObject({ installedPath: modern, onPath: true });
+      expect(yield* fs.readLink(modern)).toBe(launcher);
+      expect(Option.isNone(yield* fs.readLink(legacy).pipe(Effect.option))).toBe(true);
+      expect(yield* fs.readLink(upstream)).toBe(upstreamLauncher);
+
+      yield* command.uninstall;
+      yield* command.installOnFirstLaunch;
+      expect((yield* command.state).installedPath).toBeNull();
+      expect(yield* fs.readLink(upstream)).toBe(upstreamLauncher);
+    }),
+  );
+
+  it.effect("can remove the old desktop command when migration is blocked", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.makeTempDirectoryScoped();
+      const directory = path.join(home, ".local", "bin");
+      const baseDir = path.join(home, ".lightning-code");
+      const command = yield* commandIn({ home, env: { PATH: directory } });
+      const launcher = path.join(baseDir, "bin", "lightning");
+      const legacy = path.join(directory, "t3");
+      const foreign = path.join(directory, "lightning");
+      yield* fs.makeDirectory(directory, { recursive: true });
+      yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
+      yield* fs.writeFileString(launcher, `#!/bin/sh\n# ${DesktopCliShim.MARKER}\n`, {
+        mode: 0o755,
+      });
+      yield* fs.writeFileString(foreign, "#!/bin/sh\n", { mode: 0o755 });
+      yield* fs.symlink(launcher, legacy);
+
+      yield* command.installOnFirstLaunch;
+      expect(yield* command.state).toMatchObject({ installedPath: legacy, shadowedBy: foreign });
+      expect(yield* fs.readLink(legacy)).toBe(launcher);
+      expect((yield* command.uninstall).installedPath).toBeNull();
+      expect(Option.isNone(yield* fs.readLink(legacy).pipe(Effect.option))).toBe(true);
+      expect(yield* fs.readFileString(foreign)).toBe("#!/bin/sh\n");
+
+      yield* fs.writeFileString(launcher, "#!/bin/sh\n");
+      yield* fs.symlink(launcher, legacy);
+      yield* command.installOnFirstLaunch;
+      yield* command.uninstall;
+      expect(yield* fs.readLink(legacy)).toBe(launcher);
+    }),
+  );
+
   it.effect("finds and removes a link left by a previous home", () =>
     Effect.gen(function* () {
       const env: NodeJS.ProcessEnv = { PATH: "", SHELL: "/bin/zsh" };

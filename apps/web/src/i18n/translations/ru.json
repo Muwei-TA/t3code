@@ -2270,23 +2270,6 @@
   "c65de112b48a66ed": "Добавить ссылку для сопряжения",
   "bc8ab792af1d656f": "Выполните на компьютере:",
   "0ba14e4e920cfa00": "Или скачайте десктопное приложение",
-  "0e79b7a6508a6286": "Затем",
-  "363b9991fa23d36b": [
-    "Пропустите установку, если у вас уже есть ",
-    {
-      "t": "code",
-      "i": 1,
-      "c": "t3"
-    },
-    ". Если после установки",
-    " ",
-    {
-      "t": "code",
-      "i": 2,
-      "c": "t3"
-    },
-    " не находится, добавьте в PATH папку, которую назвал установщик."
-  ],
   "87b24d00c08f54bb": "Не удалось открыть файл сочетаний клавиш",
   "0ee16208cbfcdbf4": "Неизвестная ошибка при открытии файла.",
   "9e20856550715c74": [
@@ -4977,6 +4960,7 @@
   "5ba22a660758e453": "Достигнут лимит вложений.",
   "181933312b23cb0c": "Черновик отклонил это вложение (дубликат или достигнут лимит вложений).",
   "df02c1d51d158d32": "Сменить модель ответа для этого треда",
+  "724baefb1716842b": "MCP servers",
   "929781439a221aae": "Задать побочный вопрос в новом боковом чате",
   "378c3404c430fc05": "То же, что /side",
   "8ce7ee2a95c49bdb": "Начать новый сеанс; предыдущие сообщения останутся видны",
@@ -6036,6 +6020,8 @@
   "f36faf18ea4b130a": "Paste a link or describe the change",
   "c042797cf356651e": "Add a project on this server to open an agent thread.",
   "619181f6a1b73fe7": "Open thread with instructions",
+  "7a4492e0fa79dca2": "Tools (MCP)",
+  "13acfdd2e7f96433": "Connect an environment to configure portable MCP servers and harness extensions.",
   "c614a41c7aa71164": "Conditional native",
   "f67d0170cde760bb": "Gateway",
   "f43b2a530d418624": "Hybrid",
@@ -6044,10 +6030,13 @@
   "61d3e5d50ac89d1c": "No native AGENTS.md",
   "7f4e9affebdf1126": "Native tool hooks",
   "5ea6906a9dc1b825": "Gateway & lifecycle",
-  "877e407e292f137b": "Create Hook with Agent",
+  "b31222510bd5d6ea": "Skills & Plugins",
   "43fbda290c4d7393": "Edit with Agent",
   "ef42298248058528": "Add with Agent",
-  "13acfdd2e7f96433": "Connect an environment to configure portable MCP servers and harness extensions.",
+  "4e5f1c0e990db46f": "Hooks",
+  "877e407e292f137b": "Create Hook with Agent",
+  "c9eafd03dec510c7": "Modes",
+  "8cf8658120885e30": "Portable Memory",
   "b739cb13af449fca": "CLI migration preserves skill files and executable permissions. Sync flags binary files as unscannable-binary when it cannot check them for secrets.",
   "b6f319cedd309b03": "Harness",
   "008ad7d6219755cd": "Sync & Migration",
@@ -6058,8 +6047,6 @@
   "893d27f47cdeebb9": "The server returned a partial file tree.",
   "1429a64f16526b00": "File read access is required.",
   "a08dfffb58eed789": "Loading file…",
-  "b31222510bd5d6ea": "Skills & Plugins",
-  "7a4492e0fa79dca2": "Tools (MCP)",
   "6bad24dc338be059": "Context & Roles",
   "c916ffa7d2f1cf1b": "Guardrails",
   "94ab4591ce101233": "Не удалось опубликовать комментарий",
@@ -6190,6 +6177,10 @@
   "c9cae7bac5f42342": "Загрузить ещё",
   "54f59582f641cbaf": "Issues",
   "01e7836447bcad93": "Issues, назначенные мне",
+  "1a07e4d043f5df4e": "Подключения",
+  "683dc8c4b42d1a89": "Harness",
+  "752fa31f9a4b7702": "Disconnected",
+  "935f2a074b265463": "Local workspace",
   "3a883fbaed8d7561": "Приложение",
   "3cc7159b902f36ec": "Доступ",
   "a6615c82020deb59": "Подключение",
@@ -6404,6 +6395,7 @@
   ],
   "216ab7514aea1d61": "Начать без агента",
   "501ce2d99da8bfd1": "Настройте одного агента, чтобы начать.",
+  "e29409ae107f57b1": "Anonymous usage data is sent only when enabled.",
   "dc099484b76a9526": [
     "T3 Code отправляет анонимные данные об использовании только при включении. См.",
     " ",
@@ -8069,15 +8061,15 @@
       "v": "v"
     }
   ],
-  "d0e747ae0c4f68a5": "Не удалось установить t3",
-  "ba3ac338f36cba74": "Не удалось удалить t3",
-  "9c942b53b58119b8": "Не удалось добавить t3 в PATH",
-  "dbd9a279df913da0": "В новом терминале первым запускается другой t3 из {path}. Удалите его, чтобы использовать t3 от T3 Code.",
-  "20a48e388fd71c1d": "Запускайте CLI T3 Code как `t3` из любого терминала.",
+  "a20b66761ab8743d": "Не удалось установить {command}",
+  "2d8c72d1fbb24ccd": "Не удалось удалить {command}",
+  "5231206d848f0f51": "Не удалось добавить {command} в PATH",
+  "74c0bd0b60c1b4e1": "В новом терминале первым запускается другой {command} из {path}. Удалите его, чтобы использовать {command} от T3 Code.",
+  "e2bc9a831c257fbf": "Запускайте CLI T3 Code как `{command}` из любого терминала.",
   "4f6e93011ef2da6f": "Установлено в {path}. Откройте новый терминал, чтобы использовать.",
   "371ca438cf467125": "Установлено в {path} и добавлено в PATH в {file}. Откройте новый терминал, чтобы использовать.",
   "fd3eece9d1a7ea38": "Установлено в {path}, но этот путь ещё не в PATH.",
-  "5fff98fa978bd008": "Установлено в {path}, но этот путь ещё не в PATH. Добавьте его папку в PATH, чтобы запускать `t3`.",
+  "8567db625e5549ae": "Установлено в {path}, но этот путь ещё не в PATH. Добавьте его папку в PATH, чтобы запускать `{command}`.",
   "dc06294dd4078b00": "Удалить",
   "b707d919dbf0222a": "Установить",
   "9a284b5893dc04a2": "Модель OpenRouter",
@@ -8840,7 +8832,6 @@
   "df1b3dddecd4659f": "Удалить файлы, которые есть только в целевой среде",
   "ad36b814f6a09f97": "Подтвердить и отправить",
   "682cc6348b64e626": "Failed to refresh Harness library",
-  "683dc8c4b42d1a89": "Harness",
   "ceee7a38b04806df": "Встроенный режим переопределён",
   "3ee0fccb20600705": "Propose plan",
   "10f1a7a0f8a9c900": "MCP · {id}",
@@ -8983,7 +8974,6 @@
   "3c55c1bc971ab639": "Stored under ~/.t3/harness/modes/*.md and projected across all providers.",
   "1e88c5f19afe621a": "Save Mode",
   "cf34fc4aae4c9d49": "Read instructions",
-  "8cf8658120885e30": "Portable Memory",
   "3cc30b3af2b72eb4": "Search memory",
   "08c507d1999563c7": "Could not save memory note",
   "876e7a8c229f3d07": "Unpin",
@@ -9169,41 +9159,6 @@
   "60b069c909226eb0": "Добавить обнаруженный инструмент",
   "b5cbec89930470c9": "Import from CLI",
   "e6e4b713eaf4d497": "Add MCP server",
-  "97388c061a394481": [
-    "Configure MCP servers once in",
-    " ",
-    {
-      "t": "code",
-      "i": 1,
-      "c": {
-        "i": 2,
-        "k": "_gt_value_2",
-        "v": "v"
-      }
-    },
-    " ",
-    "and reuse them across every provider through the isolated ",
-    {
-      "t": "code",
-      "i": 3,
-      "c": "/mcp/harness"
-    },
-    " ",
-    "gateway. Use ",
-    {
-      "t": "code",
-      "i": 4,
-      "c": "${secret:NAME}"
-    },
-    " or",
-    " ",
-    {
-      "t": "code",
-      "i": 5,
-      "c": "${secret:provider:ref}"
-    },
-    " for credentials."
-  ],
   "4247e5730988f6a9": "Restricted by organization policy",
   "3f28feb80259d963": [
     {
@@ -9268,6 +9223,41 @@
   "e9459149a38c95c1": "Revoke trust",
   "32111e0efc4c768e": "Войти снова",
   "e2dd98f1b8c413c4": "Отключить вход",
+  "97388c061a394481": [
+    "Configure MCP servers once in",
+    " ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": {
+        "i": 2,
+        "k": "_gt_value_2",
+        "v": "v"
+      }
+    },
+    " ",
+    "and reuse them across every provider through the isolated ",
+    {
+      "t": "code",
+      "i": 3,
+      "c": "/mcp/harness"
+    },
+    " ",
+    "gateway. Use ",
+    {
+      "t": "code",
+      "i": 4,
+      "c": "${secret:NAME}"
+    },
+    " or",
+    " ",
+    {
+      "t": "code",
+      "i": 5,
+      "c": "${secret:provider:ref}"
+    },
+    " for credentials."
+  ],
   "7a45e9a9f2f0b41d": "Разрешите доступ в браузере. Если страница обратного вызова не открывается, вставьте сюда её адрес.",
   "52d4be6f6cd63137": [
     "MCP diagnostics: ",
@@ -9333,14 +9323,40 @@
   ],
   "7e2e8bec840689a3": "Trust & enable",
   "9fb072ea040d84bf": "Retry loading Harness",
-  "0b27489e18ff9300": [
-    "Saved to your portable ",
+  "e331cad6483bf496": [
+    "Configure MCP servers once in",
+    " ",
     {
       "t": "code",
       "i": 1,
-      "c": "~/.t3/harness/harness.json"
+      "c": {
+        "i": 2,
+        "k": "_gt_value_2",
+        "v": "v"
+      }
     },
-    " and available to every provider."
+    " ",
+    "and reuse them across every provider through the isolated ",
+    {
+      "t": "code",
+      "i": 3,
+      "c": "/mcp/harness"
+    },
+    " ",
+    "gateway. Use ",
+    {
+      "t": "code",
+      "i": 4,
+      "c": "${secret:NAME}"
+    },
+    " or ",
+    {
+      "t": "code",
+      "i": 5,
+      "c": "${secret:provider:ref}"
+    },
+    " ",
+    "for credentials."
   ],
   "78ade2037b60c8f0": "Server ID",
   "e4c938ffecbcc0f9": "Transport",
@@ -9789,10 +9805,11 @@
   "0be6b2546df12f66": "Стоп",
   "7dbd7e8943e8931f": "Открытие микрофона…",
   "efa31f38b611e912": "Не удалось воспроизвести запись. Попробуйте записать снова.",
-  "0cebac0a2a6bdc99": "iPhone и iPad",
   "d797c9687a256a50": "Подключайтесь к серверу с телефона или планшета.",
-  "c21858dee1b62639": "Ссылка на {store}",
+  "e5e10738cd1b6d83": "Настройка мобильного приложения",
+  "30340cddf36f92fa": "Настройка мобильного приложения",
   "cdcdc54a444a3636": "Отсканируйте камерой телефона.",
+  "eb576a5feda7b535": "Открыть",
   "73da41e93823fd71": [
     "Мы не рекомендуем управлять несколькими аккаунтами ",
     {
@@ -11023,7 +11040,6 @@
   "126a28a1ad4b2d57": "Подключите окружение, чтобы выбрать его модель генерации текста.",
   "5fe5a45199fa9c07": "Нет доступных провайдеров генерации текста.",
   "99ceba64591c9257": "Открыть диагностику",
-  "eb576a5feda7b535": "Открыть",
   "66647e8c8123a51f": "Открыть политику",
   "6d59e1e516e53d17": "Открыть лицензии",
   "941d08db15f62d17": "В архиве",
@@ -12555,7 +12571,6 @@
   "f2bf529f85e05494": "Общий доступ",
   "7cf24feddad00a5e": "Параметры",
   "58058320796d28f6": "Код",
-  "1a07e4d043f5df4e": "Подключения",
   "d8cd577c915539bd": "Аккаунты и токен {label}",
   "a5ea998202be1fbc": "Учётные данные {label}",
   "8f636f473e42e657": "любые локальные файлы незакоммиченные изменения изменённые отслеживаемые файлы игнорируемые env сборка вывод очистка",
@@ -12668,10 +12683,10 @@
   "0c5fc3b5e41e1956": "генерируемые заголовки тредов промпт свой стиль именование переименовать сгенерировать заново",
   "a83570bcb45d8fa1": "о приложении проверить обновления скачать установить обновить релиз",
   "d65bdf6748801734": "канал выпусков стабильный latest nightly предварительный",
-  "0767c794edea8f03": "Команда t3",
+  "7a761ec0d7eb5be7": "Команда {command}",
   "46dd4dc08c1e552f": "cli терминал оболочка путь установка командная строка",
   "86479042bae0e2db": "Мобильное приложение",
-  "dc2a999ca67ccf31": "телефон планшет iPhone iPad iOS Android App Store Google Play QR",
+  "dc2a999ca67ccf31": "phone tablet iPhone iPad iOS Android App Store Google Play QR",
   "6310b97b04ef239f": "Страница приветствия",
   "df9fa3a9cb004b9b": "онбординг настройка первый запуск начало работы агенты импорт проекты",
   "3188bc3b3c4508bc": "Политика конфиденциальности",
@@ -12752,10 +12767,7 @@
   "ff679e74f97044e6": "Добавить провайдер секретов",
   "ddd5990f613aebb4": "новое хранилище 1password op cli аккаунт",
   "c1b7649ac731ed07": "Plugins",
-  "724baefb1716842b": "MCP servers",
   "e095b15447afbb6f": "Rules & AGENTS.md",
-  "c9eafd03dec510c7": "Modes",
-  "4e5f1c0e990db46f": "Hooks",
   "ce19cbab7a347f89": "Approvals",
   "d7ace0fcb370d8b1": "CLI Import / Export",
   "b9b1dccabd2ed00d": "Архивные треды",
@@ -12789,7 +12801,7 @@
   "9c73aa0c2e2b4e7d": "Выбрать сочетание",
   "300a948f90c4d75c": "Назад",
   "2a50e229df85d553": "Вперёд",
-  "8aa6404c8018ea67": "Главная T3 Code",
+  "bcdd5a1286c75b62": "{app} home",
   "8e9626aa27cb188a": "Issues",
   "9d2fc1003e82feb1": "Использование",
   "20283eb1dd6119f9": "{count, plural, one {{count} вложение} few {{count} вложения} many {{count} вложений} other {{count} вложения}}",

@@ -30,6 +30,14 @@ type PackageManifest = typeof PackageManifest.Type;
 const decodeManifest = Schema.decodeUnknownSync(Schema.fromJsonString(PackageManifest));
 
 describe("shouldBundleCliDependency", () => {
+  it("bundles server Zod imports while staging Zod for the external Cursor SDK", () => {
+    assert.isTrue(shouldBundleCliDependency("zod"));
+    assert.isTrue(shouldBundleCliDependency("zod/v4"));
+    assert.deepStrictEqual(selectCliRuntimeExternalDependencies({ zod: "4.0.0" }), {
+      zod: "4.0.0",
+    });
+  });
+
   it("leaves native addons and their dlopen wrappers external", () => {
     for (const id of [
       "node-pty",
