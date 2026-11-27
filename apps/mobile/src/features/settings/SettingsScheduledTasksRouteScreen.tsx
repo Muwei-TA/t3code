@@ -910,8 +910,13 @@ function TaskForm({
       runtimeMode:
         clampManagedRuntimeMode(config?.managedPolicy, draft.runtimeMode) ?? draft.runtimeMode,
       interactionMode:
-        draft.modeId === "plan" ? "plan" : (draft.task?.interactionMode ?? "default"),
-      ...(draft.modeId ? { modeId: HarnessModeId.make(draft.modeId) } : {}),
+        availableModes.find((mode) => mode.id === draft.modeId)?.baseInteractionMode ??
+        (draft.modeId === "plan"
+          ? "plan"
+          : draft.modeId && draft.modeId === draft.task?.modeId
+            ? draft.task.interactionMode
+            : "default"),
+      modeId: draft.modeId ? HarnessModeId.make(draft.modeId) : null,
       creationSource: draft.task?.creationSource ?? "mobile",
     };
     submissionPending.current = true;

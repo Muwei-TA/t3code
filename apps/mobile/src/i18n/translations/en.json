@@ -3828,6 +3828,7 @@
   "b20ba7a878e26da1": "Import from CLIs",
   "3911e52e7e538d70": "{count} invalid harness entry skipped in harness.json.",
   "464010ee13105dcc": "{count} tools",
+  "13ff8a942c8dcce0": "Plugin: {id}",
   "2cf284a7b130b411": "Sign in again",
   "4681c4c9541539a4": "Sign in",
   "b69f16a17e170ccc": "Disconnect sign-in",

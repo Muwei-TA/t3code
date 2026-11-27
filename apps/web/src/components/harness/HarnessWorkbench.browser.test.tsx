@@ -4,6 +4,7 @@ import {
   HarnessHooksSnapshot,
   HarnessPluginsSnapshot,
   HarnessMemorySnapshot,
+  HarnessMcpSnapshot,
 } from "@t3tools/contracts";
 import {
   createMemoryHistory,
@@ -18,6 +19,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { render } from "../../../test/render";
 import { SidebarProvider } from "../ui/sidebar";
+import { redirectLegacyHarness } from "./harnessNavigation";
 import { HarnessWorkbench } from "./HarnessWorkbench";
 
 const environmentId = EnvironmentId.make("test-server");
@@ -62,6 +64,42 @@ const fixture = Schema.decodeSync(HarnessLibrarySnapshot)({
     },
   ],
 });
+const mcp = Schema.decodeSync(HarnessMcpSnapshot)({
+  harnessDir: "/harness",
+  configPath: "/harness/harness.json",
+  workspaceRoot: "/repo",
+  servers: [
+    {
+      id: "demo-server",
+      scope: "user",
+      pluginId: "tools",
+      config: {
+        enabled: true,
+        transport: { type: "http", url: "https://example.invalid" },
+        injectionMode: "gateway",
+        approvalPolicy: "auto-read",
+      },
+      configDigest: "abc",
+      effectiveEnabled: true,
+      state: "idle",
+      toolCount: 0,
+      tools: [],
+      estimatedToolListBytes: 0,
+      lastError: null,
+      needsTrustConfirmation: false,
+      trustReason: null,
+      requiresSecretAccess: false,
+      trustDigest: null,
+      repoRoot: null,
+      overriddenByProject: false,
+      stderrLinesCount: 0,
+    },
+  ],
+  invalidEntries: [],
+  managedPolicyAllowsHarness: true,
+  managedPolicyAllowsStdio: true,
+  managedPolicyOrganization: null,
+});
 const proposals = Schema.decodeSync(HarnessHooksSnapshot)({
   hooksPath: "/harness/hooks.json",
   managedPolicyAllowsHarness: true,
@@ -72,7 +110,8 @@ const proposals = Schema.decodeSync(HarnessHooksSnapshot)({
       source: "user",
       enabled: false,
       pendingApproval: true,
-      target: { type: "command", command: "review" },
+      configDigest: "reviewed-config",
+      target: { type: "command", command: "review", args: ["with spaces"] },
     },
   ],
 });
@@ -148,6 +187,7 @@ vi.mock(import("../../state/harness"), async (original) => {
         ...actual.harnessEnvironment.readSkillFile,
         permissionAtom: () => Atom.make(true),
       },
+      listMcpQuery: () => success(mcp),
       libraryQuery: () => success(fixture),
       pluginsQuery: () => success(plugins),
       memoryQuery: () => success(memory),
@@ -158,7 +198,7 @@ vi.mock(import("../../state/harness"), async (original) => {
           Effect.succeed({
             ...proposals,
             hooks: proposals.hooks.map((hook) =>
-              hook.id === input.id && input.enabled
+              hook.id === input.id && input.enabled && input.expectedDigest === hook.configDigest
                 ? { ...hook, enabled: true, pendingApproval: false }
                 : hook,
             ),
@@ -194,12 +234,19 @@ it("reads the selected package member in project scope and approves a pending ho
   const harness = createRoute({
     getParentRoute: () => chat,
     path: "harness",
-    validateSearch: (search) => ({ tab: search.tab }),
+    validateSearch: (search) => ({ tab: search.tab, machine: search.machine }),
     component: HarnessWorkbench,
   });
+  const legacy = createRoute({
+    getParentRoute: () => chat,
+    path: "settings/harness",
+    beforeLoad: ({ location }) => redirectLegacyHarness(location),
+  });
   const router = createRouter({
-    routeTree: root.addChildren([chat.addChildren([harness])]),
-    history: createMemoryHistory({ initialEntries: ["/harness?tab=context#harness-memory"] }),
+    routeTree: root.addChildren([chat.addChildren([harness, legacy])]),
+    history: createMemoryHistory({
+      initialEntries: ["/settings/harness?tab=skills&machine=test-server#harness-memory"],
+    }),
   });
   await using screen = await render(
     <SidebarProvider>
@@ -209,8 +256,18 @@ it("reads the selected package member in project scope and approves a pending ho
   ); // Workbench tabs navigate inside the named Harness route.
   await expect.element(screen.getByRole("button", { name: "Delete Layout note" })).toBeVisible();
   await expect.poll(() => router.state.location.hash).toBe("");
-  expect(router.state.location.search).toMatchObject({ tab: "context" });
-  await screen.getByRole("link", { name: "Skills & Plugins" }).click();
+  expect(router.state.location.search).toMatchObject({ tab: "context", machine: "test-server" });
+  await screen.getByRole("link", { name: "Tools (MCP)" }).click();
+  await expect
+    .element(screen.getByRole("switch", { name: "Toggle demo-server" }))
+    .not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("button", { name: "Edit demo-server" }))
+    .not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("button", { name: "Remove demo-server" }))
+    .not.toBeInTheDocument();
+  await screen.getByRole("link", { name: "Plugin: tools" }).click();
   await expect.element(screen.getByText("Host CLI · Conditional native")).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Remove Project helper" })).toBeVisible();
   await screen.getByRole("button", { name: "Inspect files" }).click();
@@ -225,6 +282,7 @@ it("reads the selected package member in project scope and approves a pending ho
   await expect.element(screen.getByRole("button", { name: "Delete Layout note" })).toBeVisible();
   await screen.getByRole("link", { name: "Guardrails" }).click();
   await expect.element(screen.getByText("Pending hook proposal")).toBeVisible();
+  await expect.element(screen.getByText(JSON.stringify(["review", "with spaces"]))).toBeVisible();
   await screen.getByRole("button", { name: "Approve & Enable" }).click();
   await expect.element(screen.getByText("Pending hook proposal")).not.toBeInTheDocument();
   await expect.element(screen.getByRole("switch")).toBeChecked();

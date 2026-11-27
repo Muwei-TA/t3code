@@ -36,6 +36,8 @@ import { HttpRouter, HttpServer } from "effect/http";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as Workflows from "../workflows/Workflows.ts";
+import * as WorkflowRuntime from "../workflows/WorkflowRuntime.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
@@ -766,6 +768,15 @@ describe("HarnessMcpHttpServer", () => {
         }).pipe(
           Layer.provideMerge(McpSessionRegistry.layer),
           Layer.provideMerge(gatewayLayer),
+          Layer.provide(
+            Layer.effectContext(
+              WorkflowRuntime.make(
+                Effect.succeed(() => Layer.succeed(Workflows.Workflows, Workflows.off)),
+                path.join(tempRoot, "deployment", "ship.yaml"),
+                Effect.succeed(false),
+              ),
+            ),
+          ),
           Layer.provideMerge(libraryLayer),
           Layer.provideMerge(NodeHttpServer.layerTest),
           Layer.provide(
@@ -869,6 +880,12 @@ describe("HarnessMcpHttpServer", () => {
                 name,
                 arguments: { ...args, action },
               });
+              if (name === "harness_manage_workflow" && action === "delete") {
+                expect(output.result.isError).toBe(true);
+                expect(output.result.content?.[0]?.text).toContain("alone");
+                expect(yield* fs.exists(path.join(tempRoot, "deployment", "ship.yaml"))).toBe(true);
+                continue;
+              }
               expect(output.result.isError, output.result.content?.[0]?.text).not.toBe(true);
             }
           }

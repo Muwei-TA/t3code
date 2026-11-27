@@ -223,6 +223,27 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
           expect(yield* fs.readFileString(scriptCopy)).toBe("echo ok");
           expect((yield* fs.stat(scriptCopy)).mode & 0o111).toBe(0o111);
 
+          const rescanned = (yield* importer.scan(repoRoot))
+            .find((src) => src.source === "codex")!
+            .candidates.find((candidate) => candidate.id === codexCand.id)!;
+          expect(rescanned.conflict).toBe("exists_identical");
+          const overwrite = importer.apply({
+            overwriteExisting: true,
+            workspaceRoot: repoRoot,
+            items: [
+              {
+                source: "codex",
+                kind: "skill",
+                id: codexCand.id,
+                expectedExistingDigest: TrimmedNonEmptyString.make(rescanned.existingDigest!),
+              },
+            ],
+          });
+          yield* fs.writeFileString(scriptCopy, "local changes");
+          expect((yield* overwrite.pipe(Effect.flip)).detail).toContain("changed since preview");
+          expect(yield* fs.readFileString(scriptCopy)).toBe("local changes");
+          yield* fs.writeFileString(scriptCopy, "echo ok");
+          expect((yield* overwrite).importedKeys).toHaveLength(1);
           expect(applied.importedKeys).toHaveLength(4);
           expect(applied.snapshot.skills.some((s) => s.id === "codex-helper")).toBe(true);
           expect(applied.snapshot.skills.some((s) => s.id === "agy-perf")).toBe(true);
@@ -315,8 +336,16 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
           yield* fs.writeFile(asset, Uint8Array.from([0, 255, 128]));
           yield* fs.chmod(asset, 0o755);
           // 1. Codex preview redacts literal header secret + rejects drifted planDigest
+          yield* fs.writeFileString(
+            path.join(path.dirname(asset), "notes.txt"),
+            "private attachment body",
+          );
           const codexPreview = yield* exporter.preview({ target: "codex" });
           const codexTomlFile = codexPreview.files.find((f) => f.targetPath === codexConfigPath);
+          const attachment = codexPreview.files.find((file) => file.relativePath === "notes.txt");
+          expect(attachment).toMatchObject({ bytes: 23, executable: false });
+          expect(attachment?.previewSnippet).toBe("notes.txt · 23 B");
+          expect(JSON.stringify(codexPreview)).not.toContain("private attachment body");
           expect(codexTomlFile).toBeDefined();
           expect(codexTomlFile?.previewSnippet).not.toContain("super-secret-xyz");
 
@@ -336,6 +365,19 @@ describe("HarnessLibraryImporter & HarnessExporter", () => {
           const exportedAsset = path.join(homeDir, ".codex", "skills", "ship-check", "asset.bin");
           expect(Array.from(yield* fs.readFile(exportedAsset))).toEqual([0, 255, 128]);
           expect((yield* fs.stat(exportedAsset)).mode & 0o111).toBe(0o111);
+          yield* fs.writeFileString(exportedAsset, "first local edit");
+          const previewUpdate = yield* exporter.preview({ target: "codex", sections: ["skills"] });
+          const applyUpdate = exporter.apply({
+            target: "codex",
+            sections: ["skills"],
+            planDigest: TrimmedNonEmptyString.make(previewUpdate.planDigest),
+          });
+          yield* fs.writeFileString(exportedAsset, "later local edit");
+          expect((yield* applyUpdate.pipe(Effect.flip)).code).toBe("invalid_config");
+          expect(yield* fs.readFileString(exportedAsset)).toBe("later local edit");
+          yield* fs.writeFileString(exportedAsset, "first local edit");
+          yield* fs.chmod(exportedAsset, 0o644);
+          expect((yield* applyUpdate.pipe(Effect.flip)).code).toBe("invalid_config");
           const writtenToml = yield* fs.readFileString(codexConfigPath);
           expect(writtenToml).toContain('model = "gpt-5.4"');
           expect(writtenToml).toContain("[mcp_servers.docs]");

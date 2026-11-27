@@ -9149,6 +9149,7 @@
   "c8f10d28dead0ebb": "Pending approval",
   "464010ee13105dcc": "{count} tools",
   "abab777b3bbc4b03": "0 of {count} discovered tools match the current filter.",
+  "13ff8a942c8dcce0": "Plugin: {id}",
   "ac7bdcfed0826a47": "Connect or restart {id}",
   "93f0a54678cc1595": "View logs for {id}",
   "c7fdce5691d7bfeb": "OAuth callback address",

@@ -986,8 +986,9 @@ function EnvironmentHarnessSection({
                                 {server.id}
                               </Text>
                               <Text className="text-xs text-foreground-muted">
-                                {server.config.transport.type.toUpperCase()} · {server.scope} ·{" "}
-                                {server.state} · {gt("{count} tools", { count: server.toolCount })}
+                                {server.config.transport.type.toUpperCase()} ·{" "}
+                                {server.pluginId ?? server.scope} · {server.state} ·{" "}
+                                {gt("{count} tools", { count: server.toolCount })}
                               </Text>
                               {server.config.pendingApproval || server.needsTrustConfirmation ? (
                                 <Text className="font-t3-semibold text-foreground">
@@ -1006,13 +1007,21 @@ function EnvironmentHarnessSection({
                                 </Text>
                               ) : null}
                             </View>
-                            {server.config.pendingApproval && server.scope === "user" ? (
+                            {server.pluginId ? (
+                              <Button
+                                label={gt("Plugin: {id}", { id: server.pluginId })}
+                                onPress={() => setActiveTab("plugins")}
+                              />
+                            ) : null}
+                            {server.config.pendingApproval &&
+                            !server.pluginId &&
+                            server.scope === "user" ? (
                               <Button
                                 label={gt("Approve & Enable")}
                                 disabled={!canTrustServer || busyId === server.id}
                                 onPress={() => void commitToggleEnabled(server, true)}
                               />
-                            ) : server.scope === "user" ? (
+                            ) : !server.pluginId && server.scope === "user" ? (
                               <Switch
                                 value={server.config.enabled}
                                 disabled={
@@ -1094,7 +1103,7 @@ function EnvironmentHarnessSection({
                                 onPress={() => void handleOpenLogs(server)}
                               />
                             ) : null}
-                            {server.scope === "user" ? (
+                            {!server.pluginId && server.scope === "user" ? (
                               <Button
                                 label={server.config.pendingApproval ? gt("Reject") : gt("Remove")}
                                 tone="secondary"

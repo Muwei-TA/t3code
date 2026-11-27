@@ -351,9 +351,13 @@ export function SettingsHarnessPluginsHooksPanel({
                   >
                     {hook.id}
                   </Text>
-                  <Text className="text-2xs text-foreground-muted" numberOfLines={1}>
+                  <Text className="text-2xs text-foreground-muted">
                     {hook.event} · {hook.target.type}
                     {hook.pluginId ? ` · ${hook.pluginId}` : ""}
+                    {"\n"}
+                    {hook.target.type === "command"
+                      ? JSON.stringify([hook.target.command, ...(hook.target.args ?? [])])
+                      : hook.target.url}
                   </Text>
                   {hook.source === "user" &&
                   !canOperateTerminal &&
@@ -376,7 +380,11 @@ export function SettingsHarnessPluginsHooksPanel({
                       setBusyId(hook.id);
                       await setHookEnabled({
                         environmentId,
-                        input: { id: hook.id, enabled: true },
+                        input: {
+                          id: hook.id,
+                          enabled: true,
+                          ...(hook.configDigest ? { expectedDigest: hook.configDigest } : {}),
+                        },
                       });
                       setBusyId(null);
                       hooksQuery.refresh();
@@ -393,7 +401,14 @@ export function SettingsHarnessPluginsHooksPanel({
                     onValueChange={(enabled) => {
                       void (async () => {
                         setBusyId(hook.id);
-                        await setHookEnabled({ environmentId, input: { id: hook.id, enabled } });
+                        await setHookEnabled({
+                          environmentId,
+                          input: {
+                            id: hook.id,
+                            enabled,
+                            ...(hook.configDigest ? { expectedDigest: hook.configDigest } : {}),
+                          },
+                        });
                         setBusyId(null);
                         hooksQuery.refresh();
                       })();

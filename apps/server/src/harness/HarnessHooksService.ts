@@ -1,4 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalFetch:off -- Spawns user-configured command and HTTP hooks with explicit abort/kill deadlines.
+import * as NodeCrypto from "node:crypto";
+import { stableStringify } from "@t3tools/shared/relaySigning";
 import * as NodeChildProcess from "node:child_process";
 import {
   type EnvironmentAuthorizationError,
@@ -39,6 +41,10 @@ const HooksConfigFileSchema = Schema.Struct({
 });
 
 const decodeHooksConfigFile = Schema.decodeUnknownOption(HooksConfigFileSchema);
+
+function hookDigest(hook: HarnessHookDefinition) {
+  return NodeCrypto.createHash("sha256").update(stableStringify(hook)).digest("hex");
+}
 
 function clampTimeoutMs(timeoutMs: number | undefined): number {
   const raw = timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS;
@@ -410,7 +416,7 @@ export const layer = Layer.effect(
       const hooks = yield* allHooks();
       return {
         hooksPath: hooksFilePath(),
-        hooks,
+        hooks: hooks.map((hook) => ({ ...hook, configDigest: hookDigest(hook) })),
         managedPolicyAllowsHarness: policy.allowsHarness,
       } satisfies HarnessHooksSnapshot;
     });
@@ -581,6 +587,16 @@ export const layer = Layer.effect(
           return yield* new HarnessError({
             code: "not_found",
             detail: `Hook "${input.id}" was not found.`,
+          });
+        }
+        if (
+          input.enabled &&
+          (found.pendingApproval || input.expectedDigest !== undefined) &&
+          input.expectedDigest !== hookDigest(found)
+        ) {
+          return yield* new HarnessError({
+            code: "invalid_config",
+            detail: "Review the current hook configuration before enabling it.",
           });
         }
         if (input.enabled && found.target.type === "command") yield* authorizeCommand;

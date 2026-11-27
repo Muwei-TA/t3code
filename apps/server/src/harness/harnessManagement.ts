@@ -20,6 +20,8 @@ import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type { ProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
+import type { WorkflowDefinitions } from "../workflows/WorkflowRuntime.ts";
+import { compileAndValidateDeclarativeWorkflow } from "./DeclarativeWorkflowCompiler.ts";
 import { getDeliveryMatrix } from "./deliveryMatrix.ts";
 import type { HarnessLibraryStore } from "./HarnessLibraryStore.ts";
 import type { HarnessHooksService } from "./HarnessHooksService.ts";
@@ -134,6 +136,7 @@ export const callManagementTool = Effect.fn("Harness.callManagementTool")(functi
   lib: HarnessLibraryStore["Service"],
   services: {
     path: Path.Path;
+    definitions: Option.Option<WorkflowDefinitions["Service"]>;
     store: Option.Option<HarnessStore["Service"]>;
     instances: Option.Option<ProviderInstanceRegistry["Service"]>;
     plugins: Option.Option<PluginHost["Service"]>;
@@ -163,7 +166,12 @@ export const callManagementTool = Effect.fn("Harness.callManagementTool")(functi
         rules: library.rules.map((r) => r.id),
         commands: library.commands.map((c) => c.id),
         modes: library.modes.map((m) => m.id),
-        workflows: yield* lib.listWorkflows(),
+        workflows:
+          library.managedPolicyAllowsHarness && Option.isSome(services.definitions)
+            ? (yield* services.definitions.value.read).files
+                .map((file) => file.name)
+                .filter((name) => /\.ya?ml$/iu.test(name))
+            : [],
         plugins: plugins.map(({ id, trustStatus, enabled }) => ({ id, trustStatus, enabled })),
         hooks: hooks.map(({ id, enabled, pendingApproval }) => ({ id, enabled, pendingApproval })),
         mcpServers: config.servers.map(({ id, effectiveEnabled, config }) => ({
@@ -232,7 +240,30 @@ export const callManagementTool = Effect.fn("Harness.callManagementTool")(functi
     }
     case "harness_manage_workflow": {
       const request = yield* decode(workflow, args);
-      return yield* lib.manageWorkflow({ ...request, workspaceRoot });
+      if (Option.isNone(services.definitions)) return yield* unavailable;
+      const library = yield* snapshot;
+      if (!library.managedPolicyAllowsHarness)
+        return yield* new HarnessError({
+          code: "policy_denied",
+          detail: "Managed policy disables portable harness extensions.",
+        });
+      const fileName = request.id + ".yaml";
+      const definitions = services.definitions.value;
+      const yaml = request.yaml ?? "";
+      if (request.action === "upsert") {
+        const validation = compileAndValidateDeclarativeWorkflow(
+          yaml,
+          new Set(library.modes.map((m) => m.id)),
+        );
+        if (!validation.valid)
+          return yield* invalid(validation.issues.map((issue) => issue.message).join(" "));
+      }
+      const result = yield* request.action === "upsert"
+        ? definitions.save(fileName, yaml)
+        : definitions.remove(fileName);
+      if (!result.changed)
+        return yield* invalid(result.problems.map((problem) => problem.message).join(" "));
+      return result;
     }
     case "harness_propose_mcp": {
       if (Option.isNone(services.store)) return yield* unavailable;

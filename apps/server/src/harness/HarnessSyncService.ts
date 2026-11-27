@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Runs git commands on an isolated sync checkout and secret-safety scans on portable harness files.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
-import * as NodeFS from "node:fs";
+import type * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import {
@@ -44,11 +44,13 @@ import {
   PORTABLE_MCP_FILE,
   readPortableMcpCatalog,
 } from "./HarnessPortableMcpCatalog.ts";
+import { loadPackage, MAX_PACKAGE_BYTES, packageDigest, readPackageFile } from "./skillPackage.ts";
 import { resolveSecretRecord } from "./HarnessSecrets.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 import * as McpGateway from "./McpGateway.ts";
 import {
-  assertContainedNoSymlinks,
+  readContainedFile,
+  replaceDirectory,
   safeReadFileUtf8,
   safeRemoveFile,
   safeWriteFileAtomic,
@@ -61,10 +63,6 @@ const MAX_SYNC_BUNDLE_BYTES = 2 * 1024 * 1024;
 const MAX_SYNC_BUNDLE_FILES = 512;
 const PORTABLE_MCP_GIT_CONFIG = "t3harness.portableMcpServers";
 const REDACTED_PREVIEW = "***";
-const SAFE_READ_FLAGS =
-  NodeFS.constants.O_RDONLY |
-  (NodeFS.constants.O_NOFOLLOW ?? 0) |
-  (NodeFS.constants.O_NONBLOCK ?? 0);
 const PENDING_PULL_BASES_FILE = "t3-harness-pull-bases.json";
 
 const ALLOWLIST_DIRS = ["rules", "commands", "modes", "memory", "skills"] as const;
@@ -235,6 +233,11 @@ function gitBlobHash(content: Buffer): string {
   return NodeCrypto.createHash("sha1").update(header).update(content).digest("hex");
 }
 
+function syncText(buffer: Buffer) {
+  const text = buffer.toString("utf8");
+  return !buffer.includes(0) && Buffer.from(text).equals(buffer) ? text : null;
+}
+
 function scanBufferForSecrets(
   relPath: string,
   buffer: Buffer,
@@ -249,7 +252,8 @@ function scanBufferForSecrets(
     });
     return;
   }
-  if (buffer.includes(0)) {
+  const content = syncText(buffer);
+  if (content === null) {
     findings.push({
       path: relPath,
       line: PositiveInt.make(1),
@@ -258,7 +262,6 @@ function scanBufferForSecrets(
     });
     return;
   }
-  const content = buffer.toString("utf8");
   const lines = content.split(/\r?\n/u);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? "";
@@ -321,65 +324,44 @@ async function snapshotAllowlistedHarnessFiles(
   const readAllowlistedFile = async (relPath: string, fullPath: string) => {
     if (bundleLimitReached || options?.acceptsPath?.(relPath) === false) return;
     try {
-      const { resolvedTarget } = await assertContainedNoSymlinks(harnessDir, fullPath);
-      const handle = await NodeFSP.open(resolvedTarget, SAFE_READ_FLAGS);
-      try {
-        const stat = await handle.stat();
-        if (!stat.isFile()) {
-          findings.push({
-            path: relPath,
-            line: PositiveInt.make(1),
-            rule: "unscannable-non-regular",
-            preview: "Non-regular file cannot be synced",
-          });
-          return;
-        }
-        if (stat.size > MAX_SYNC_FILE_BYTES) {
-          findings.push({
-            path: relPath,
-            line: PositiveInt.make(1),
-            rule: "unscannable-oversized",
-            preview: `File size ${stat.size} exceeds ${MAX_SYNC_FILE_BYTES} bytes`,
-          });
-          return;
-        }
-        if (
-          options?.bundleLimits &&
-          (files.size >= MAX_SYNC_BUNDLE_FILES ||
-            bundleBytes + stat.size + Buffer.byteLength(relPath, "utf8") > MAX_SYNC_BUNDLE_BYTES)
-        ) {
-          bundleLimitReached = true;
-          findings.push(safetyFinding(".", "unscannable-bundle-size"));
-          return;
-        }
-        const buffer = await handle.readFile();
-        scanBufferForSecrets(relPath, buffer, findings);
-        const text = buffer.toString("utf8");
-        if (!Buffer.from(text).equals(buffer))
-          findings.push(safetyFinding(relPath, "unscannable-binary"));
-        if (
-          !buffer.includes(0) &&
-          buffer.byteLength <= MAX_SYNC_FILE_BYTES &&
-          Buffer.from(text).equals(buffer)
-        ) {
-          bundleBytes += buffer.byteLength + Buffer.byteLength(relPath, "utf8");
-          files.set(relPath, {
-            relPath,
-            content: buffer,
-            text,
-            executable: relPath.startsWith("skills/") && (stat.mode & 0o111) !== 0,
-            blobSha: gitBlobHash(buffer),
-          });
-        }
-      } finally {
-        await handle.close();
+      const { bytes: buffer, executable } = await readContainedFile(
+        harnessDir,
+        fullPath,
+        MAX_SYNC_FILE_BYTES,
+      );
+      if (
+        options?.bundleLimits &&
+        (files.size >= MAX_SYNC_BUNDLE_FILES ||
+          bundleBytes + buffer.length + Buffer.byteLength(relPath) > MAX_SYNC_BUNDLE_BYTES)
+      ) {
+        bundleLimitReached = true;
+        findings.push(safetyFinding(".", "unscannable-bundle-size"));
+        return;
+      }
+      scanBufferForSecrets(relPath, buffer, findings);
+      const text = syncText(buffer);
+      if (text !== null) {
+        bundleBytes += buffer.length + Buffer.byteLength(relPath);
+        files.set(relPath, {
+          relPath,
+          content: buffer,
+          text,
+          executable: relPath.startsWith("skills/") && executable,
+          blobSha: gitBlobHash(buffer),
+        });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       findings.push({
         path: relPath,
         line: PositiveInt.make(1),
-        rule: message.toLowerCase().includes("symlink") ? "unscannable-symlink" : "unscannable-io",
+        rule: message.includes("non-regular")
+          ? "unscannable-non-regular"
+          : message.includes("oversized")
+            ? "unscannable-oversized"
+            : message.toLowerCase().includes("symlink")
+              ? "unscannable-symlink"
+              : "unscannable-io",
         preview: REDACTED_PREVIEW,
       });
     }
@@ -571,29 +553,76 @@ function isMissing(error: unknown): boolean {
 
 async function readLocalBlobSha(root: string, target: string): Promise<string | null> {
   try {
-    const { resolvedTarget } = await assertContainedNoSymlinks(root, target);
-    const handle = await NodeFSP.open(resolvedTarget, SAFE_READ_FLAGS);
-    try {
-      const stat = await handle.stat();
-      if (!stat.isFile() || stat.size > MAX_SYNC_FILE_BYTES) {
-        throw new Error("Local file is unsafe or too large to compare.");
-      }
-      const content = await handle.readFile();
-      if (content.includes(0) || content.byteLength > MAX_SYNC_FILE_BYTES) {
-        throw new Error("Local file is binary or too large to compare.");
-      }
-      return fileIdentity(
-        gitBlobHash(content),
-        NodePath.relative(root, target).split(NodePath.sep)[0] === "skills" &&
-          (stat.mode & 0o111) !== 0,
-      );
-    } finally {
-      await handle.close();
-    }
+    const { bytes, executable } = await readContainedFile(root, target, MAX_SYNC_FILE_BYTES);
+    if (syncText(bytes) === null) throw new Error("Local file is binary.");
+    return fileIdentity(
+      gitBlobHash(bytes),
+      NodePath.relative(root, target).split(NodePath.sep)[0] === "skills" && executable,
+    );
   } catch (error) {
     if (isMissing(error)) return null;
     throw error;
   }
+}
+
+interface PullChange {
+  readonly path: string;
+  readonly content: Buffer | null;
+  readonly mode: number;
+  readonly local: string | null;
+}
+
+async function publishPullChanges(
+  harnessDir: string,
+  group: string | undefined,
+  changes: readonly PullChange[],
+) {
+  const writeChanges = async (root: string) => {
+    for (const change of changes) {
+      const path = NodePath.join(root, group ? NodePath.relative(group, change.path) : change.path);
+      if (change.content === null) await safeRemoveFile(root, path);
+      else await safeWriteFileAtomic(root, path, change.content, change.mode);
+    }
+  };
+  if (!group) return writeChanges(harnessDir);
+  const target = NodePath.join(harnessDir, group);
+  const previous = await loadPackage(target, harnessDir).catch((error: unknown) => {
+    if (isMissing(error)) return null;
+    throw error;
+  });
+  const identities = new Map(
+    previous?.map((file) => [
+      file.relativePath,
+      fileIdentity(gitBlobHash(Buffer.from(file.content, "base64")), file.executable),
+    ]),
+  );
+  for (const change of changes) {
+    if (
+      (identities.get(NodePath.relative(group, change.path).split(NodePath.sep).join("/")) ??
+        null) !== change.local
+    )
+      throw new Error("Local skill changed during pull.");
+  }
+  await replaceDirectory(
+    harnessDir,
+    target,
+    previous === null,
+    async (staged) => {
+      for (const file of previous ?? []) {
+        const local = await readPackageFile(target, file.relativePath, harnessDir);
+        const copy = NodePath.join(staged, file.relativePath);
+        await safeWriteFileAtomic(staged, copy, local.bytes, local.mode);
+      }
+      await writeChanges(staged);
+      await loadPackage(staged);
+    },
+    previous === null
+      ? undefined
+      : async (backup) => {
+          if (packageDigest(await loadPackage(backup, harnessDir)) !== packageDigest(previous))
+            throw new Error("Local skill changed during pull.");
+        },
+  );
 }
 
 async function readPendingPullBases(
@@ -1319,8 +1348,8 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
         if (size.code !== 0 || Number(size.stdout) > MAX_SYNC_FILE_BYTES) return null;
         const blob = await runGitBuffer(repo, ["cat-file", "blob", sha]);
         if (blob.code !== 0) return null;
-        const text = blob.stdout.toString("utf8");
-        if (!Buffer.from(text).equals(blob.stdout)) return null;
+        const text = syncText(blob.stdout);
+        if (text === null) return null;
         const findings: Array<HarnessSyncSecretFinding> = [];
         scanBufferForSecrets(PORTABLE_MCP_FILE, blob.stdout, findings);
         return findings.length === 0 ? readPortableMcpCatalog(text) : null;
@@ -1858,72 +1887,113 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                   const conflicts: Array<HarnessSyncPullConflict> = [];
                   await NodeFSP.mkdir(hDir, { recursive: true });
 
-                  for (const [path, base] of pendingBases) {
-                    if (path === PORTABLE_MCP_FILE) continue;
-                    if (isLockedPath(path)) {
-                      pendingBases.delete(path);
-                      skippedFiles.add(path);
-                      continue;
-                    }
-                    const entry = afterEntries.get(path);
-                    if (entry !== undefined && !isRegularSyncEntry(entry)) continue;
-                    const remote = entry ? treeIdentity(entry) : null;
-                    if (remote === base) {
-                      pendingBases.delete(path);
-                      continue;
-                    }
+                  const skillGroup = (path: string) => /^(skills\/[^/]+)(?:\/|$)/u.exec(path)?.[1];
+                  const rejected = new Set(
+                    [...skippedFiles].map(skillGroup).filter((group) => group !== undefined),
+                  );
+                  const groups = new Map<string, string[]>();
+                  for (const path of pendingBases.keys()) {
+                    const group = skillGroup(path) ?? path;
+                    const paths = groups.get(group) ?? [];
+                    paths.push(path);
+                    groups.set(group, paths);
+                  }
+                  for (const [group, paths] of groups) {
+                    const skill = skillGroup(group) !== undefined;
+                    const changes: PullChange[] = [];
+                    let packageBytes = 0;
+                    for (const path of paths) {
+                      const base = pendingBases.get(path)!;
+                      if (path === PORTABLE_MCP_FILE) continue;
+                      if (isLockedPath(path)) {
+                        pendingBases.delete(path);
+                        skippedFiles.add(path);
+                        continue;
+                      }
+                      const entry = afterEntries.get(path);
+                      if (entry !== undefined && !isRegularSyncEntry(entry)) continue;
+                      const remote = entry ? treeIdentity(entry) : null;
+                      if (remote === base) {
+                        pendingBases.delete(path);
+                        continue;
+                      }
 
-                    const target = NodePath.join(hDir, path);
-                    let local: string | null;
-                    try {
-                      local = await readLocalBlobSha(hDir, target);
-                    } catch {
-                      skippedFiles.add(path);
-                      continue;
-                    }
-                    if (local === remote) {
-                      pendingBases.delete(path);
-                      continue;
-                    }
-                    if (local !== base) {
-                      conflicts.push({
+                      const target = NodePath.join(hDir, path);
+                      let local: string | null;
+                      try {
+                        local = await readLocalBlobSha(hDir, target);
+                      } catch {
+                        skippedFiles.add(path);
+                        continue;
+                      }
+                      if (local === remote) {
+                        pendingBases.delete(path);
+                        continue;
+                      }
+                      if (local !== base) {
+                        conflicts.push({
+                          path,
+                          reason:
+                            remote === null
+                              ? "deleted_upstream_modified_locally"
+                              : base === null
+                                ? "added_both"
+                                : "modified_both",
+                        });
+                        if (input?.force !== true) continue;
+                      }
+                      let content: Buffer | null = null;
+                      if (entry) {
+                        const size = await runGit(repoDir, ["cat-file", "-s", entry.sha]);
+                        packageBytes += Number(size.stdout);
+                        if (
+                          size.code !== 0 ||
+                          Number(size.stdout) > MAX_SYNC_FILE_BYTES ||
+                          (skill && (packageBytes > MAX_PACKAGE_BYTES || changes.length >= 512))
+                        ) {
+                          skippedFiles.add(path);
+                          continue;
+                        }
+                        const blob = await runGitBuffer(repoDir, ["cat-file", "blob", entry.sha]);
+                        const findings: HarnessSyncSecretFinding[] = [];
+                        scanBufferForSecrets(path, blob.stdout, findings);
+                        if (blob.code !== 0 || findings.length) {
+                          skippedFiles.add(path);
+                          continue;
+                        }
+                        content = blob.stdout;
+                      }
+                      changes.push({
                         path,
-                        reason:
-                          remote === null
-                            ? "deleted_upstream_modified_locally"
-                            : base === null
-                              ? "added_both"
-                              : "modified_both",
+                        local,
+                        content,
+                        mode: skill && entry?.mode === "100755" ? 0o755 : 0o600,
                       });
-                      if (input?.force !== true) continue;
                     }
-                    if (entry === undefined) {
-                      await safeRemoveFile(hDir, target);
-                    } else {
-                      const size = await runGit(repoDir, ["cat-file", "-s", entry.sha]);
-                      if (size.code !== 0 || Number(size.stdout) > MAX_SYNC_FILE_BYTES) {
-                        skippedFiles.add(path);
-                        continue;
-                      }
-                      const blob = await runGitBuffer(repoDir, ["cat-file", "blob", entry.sha]);
-                      const text = blob.stdout.toString("utf8");
-                      if (
-                        blob.code !== 0 ||
-                        blob.stdout.includes(0) ||
-                        !Buffer.from(text).equals(blob.stdout)
-                      ) {
-                        skippedFiles.add(path);
-                        continue;
-                      }
-                      await safeWriteFileAtomic(
-                        hDir,
-                        target,
-                        text,
-                        path.startsWith("skills/") && entry.mode === "100755" ? 0o755 : 0o600,
-                      );
+                    if (
+                      skill &&
+                      (rejected.has(group) ||
+                        paths.some((path) => skippedFiles.has(path)) ||
+                        (input?.force !== true &&
+                          conflicts.some((conflict) => skillGroup(conflict.path) === group)))
+                    ) {
+                      rejected.add(group);
+                      for (const path of paths) skippedFiles.add(path);
+                      continue;
                     }
-                    updatedFiles.push(path);
-                    pendingBases.delete(path);
+                    if (!changes.length) continue;
+                    try {
+                      await publishPullChanges(hDir, skill ? group : undefined, changes);
+                    } catch (error) {
+                      if (!skill) throw error;
+                      rejected.add(group);
+                      for (const path of paths) skippedFiles.add(path);
+                      continue;
+                    }
+                    for (const change of changes) {
+                      updatedFiles.push(change.path);
+                      pendingBases.delete(change.path);
+                    }
                   }
                   const entry = afterEntries.get(PORTABLE_MCP_FILE);
                   const portableBase = pendingBases.get(PORTABLE_MCP_FILE);
@@ -1960,7 +2030,7 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                     ...(inspected.includePortableMcpServers ? { importedDisabledMcpIds: [] } : {}),
                     ...(skippedFiles.size > 0 ? { skippedFiles: [...skippedFiles] } : {}),
                     ...(conflicts.length > 0 ? { conflicts } : {}),
-                    summary: `Applied ${updatedFiles.length} allowlisted file change(s) from origin/${branch}.${skippedSuffix}${conflictSuffix}`,
+                    summary: `Applied ${updatedFiles.length} allowlisted file change(s) from origin/${branch}.${skippedSuffix}${rejected.size ? ` Skipped whole skill packages: ${[...rejected].join(", ")}.` : ""}${conflictSuffix}`,
                   };
                   return {
                     result,

@@ -9156,6 +9156,7 @@
   "c8f10d28dead0ebb": "待审批",
   "464010ee13105dcc": "{count} 个工具",
   "abab777b3bbc4b03": "发现的 {count} 个工具中，有 0 个符合当前筛选条件。",
+  "13ff8a942c8dcce0": "插件：{id}",
   "ac7bdcfed0826a47": "连接或重启 {id}",
   "93f0a54678cc1595": "查看 {id} 日志",
   "c7fdce5691d7bfeb": "OAuth 回调地址",

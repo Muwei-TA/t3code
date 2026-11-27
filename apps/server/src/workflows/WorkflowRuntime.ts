@@ -2,6 +2,7 @@
 // change while the server runs. A file that loads replaces what it defined before; one that does
 // not keeps its last good version running. With no definitions there is no engine, unless runs
 // from before are kept: then one with nothing registered serves their history.
+import { safeWriteFileAtomic } from "../harness/safeFileOps.ts";
 import * as PluginHost from "../harness/PluginHost.ts";
 import * as NodeAsyncHooks from "node:async_hooks";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the CommonJS cache is cleared in the same tick as the import.
@@ -782,21 +783,28 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
     const file = path.join(directory, name);
     // Beside the real file, so what it imports resolves the same way. The dot keeps it out.
     const draft = path.join(directory, `.${name}.check-${loads + 1}${path.extname(name)}`);
-    const checked = yield* fileSystem.writeFileString(draft, source).pipe(
-      Effect.andThen(load(draft, name)),
-      Effect.ensuring(Effect.ignore(fileSystem.remove(draft))),
-      Effect.catchTags({
-        PlatformError: (error) =>
-          Effect.succeed({
-            problem: { message: `Could not write in ${directory}: ${text(error)}` },
-          } as const),
-      }),
+    const write = (target: string) =>
+      /\.ya?ml$/u.test(name)
+        ? Effect.tryPromise({
+            try: () => safeWriteFileAtomic(directory, target, source),
+            catch: text,
+          }).pipe(Effect.asVoid)
+        : fileSystem.writeFileString(target, source).pipe(Effect.mapError(text));
+    const checked = yield* write(draft).pipe(
+      Effect.andThen(
+        load(draft, name).pipe(Effect.ensuring(Effect.ignore(fileSystem.remove(draft)))),
+      ),
+      Effect.catch((reason) =>
+        Effect.succeed({
+          problem: { message: `Could not write in ${directory}: ${reason}` },
+        } as const),
+      ),
     );
     if (!("definitions" in checked)) return refusal([checked.problem]);
     const definitions = checked.definitions;
     const problems = yield* wouldBreak((files) => files.set(name, definitions));
     if (problems.length > 0) return refusal(problems);
-    const written = yield* fileSystem.writeFileString(file, source).pipe(Effect.result);
+    const written = yield* write(file).pipe(Effect.result);
     if (written._tag === "Failure") {
       return refusal([{ message: `Could not write ${file}: ${text(written.failure)}` }]);
     }

@@ -34,10 +34,9 @@ import {
 } from "./HarnessLibraryStore.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 
-import { loadPackage } from "./skillPackage.ts";
-import { assertContainedNoSymlinks } from "./safeFileOps.ts";
+import { safeReadFileUtf8 } from "./safeFileOps.ts";
+import { loadPackage, packageDigest } from "./skillPackage.ts";
 
-const packageIdentity = (files: readonly HarnessPackageFile[]) => JSON.stringify(files);
 const packageError = () =>
   new HarnessError({ code: "invalid_config", detail: "Unreadable package." });
 const decodeSkillId = Schema.decodeUnknownOption(HarnessSkillId);
@@ -173,10 +172,9 @@ const make = Effect.gen(function* () {
       .digest("hex")
       .slice(0, 24);
 
-  const readFileOpt = (filePath: string) =>
-    fs.readFileString(filePath).pipe(
-      Effect.asSome,
-      Effect.orElseSucceed(() => Option.none<string>()),
+  const readFileOpt = (filePath: string, root = homeDir) =>
+    Effect.tryPromise({ try: () => safeReadFileUtf8(root, filePath), catch: packageError }).pipe(
+      Effect.option,
     );
 
   const scanSkillsDir = Effect.fn("HarnessLibraryImporter.scanSkillsDir")(function* (
@@ -196,8 +194,7 @@ const make = Effect.gen(function* () {
       }
       const files = yield* Effect.tryPromise({
         try: async () => {
-          await assertContainedNoSymlinks(homeDir, path.dirname(skillFile));
-          return await loadPackage(path.dirname(skillFile));
+          return await loadPackage(path.dirname(skillFile), homeDir);
         },
         catch: packageError,
       }).pipe(Effect.option);
@@ -226,7 +223,7 @@ const make = Effect.gen(function* () {
         warnings.push(`Skipped skill "${dirName}": invalid manifest or unreadable package.`);
         continue;
       }
-      const normalizedContent = packageIdentity(files.value);
+      const normalizedContent = packageDigest(files.value);
       items.push({
         source,
         kind: "skill",
@@ -305,13 +302,14 @@ const make = Effect.gen(function* () {
   const scanCursorRulesDir = Effect.fn("HarnessLibraryImporter.scanCursorRulesDir")(function* (
     rulesDir: string,
     warnings: Array<string>,
+    root = homeDir,
   ) {
     const entries = yield* fs.readDirectory(rulesDir).pipe(Effect.orElseSucceed(() => []));
     const items: Array<RawLibraryImportItem> = [];
     for (const fileName of entries) {
       if (!fileName.endsWith(".mdc") && !fileName.endsWith(".md")) continue;
       const filePath = path.join(rulesDir, fileName);
-      const raw = yield* readFileOpt(filePath);
+      const raw = yield* readFileOpt(filePath, root);
       if (Option.isNone(raw)) continue;
       const base = fileName.replace(/\.(?:mdc|md)$/u, "");
       const rawId = sanitizeId(base);
@@ -431,6 +429,7 @@ const make = Effect.gen(function* () {
         const wsRules = yield* scanCursorRulesDir(
           path.join(workspaceRoot.trim(), ".cursor", "rules"),
           warnings,
+          workspaceRoot.trim(),
         );
         for (const item of wsRules) {
           seenRuleIds.add(item.id);
@@ -474,12 +473,11 @@ const make = Effect.gen(function* () {
       if (!found) return null;
       const files = yield* Effect.tryPromise({
         try: async () => {
-          await assertContainedNoSymlinks(snapshot.harnessDir, path.dirname(found.sourcePath));
-          return await loadPackage(path.dirname(found.sourcePath));
+          return await loadPackage(path.dirname(found.sourcePath), snapshot.harnessDir);
         },
         catch: packageError,
       });
-      return packageIdentity(files);
+      return packageDigest(files);
     }
     if (kind === "rule") {
       const found = snapshot.rules.find((r) => r.scope === "user" && r.id === id);
@@ -615,7 +613,13 @@ const make = Effect.gen(function* () {
       if (payload.kind === "agents_md") {
         yield* library.saveUserAgentsMd({ body: payload.body, ...wsOpt });
       } else if (payload.kind === "skill") {
+        if (existing !== null && !req.expectedExistingDigest)
+          return yield* new HarnessError({
+            code: "invalid_config",
+            detail: "Review the existing skill package before replacing it.",
+          });
         yield* library.installSkillPackage({
+          ...(existing !== null ? { expectedTargetDigest: existing } : {}),
           id: payload.id,
           scope: "user",
           files: payload.files,

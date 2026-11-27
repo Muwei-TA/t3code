@@ -268,6 +268,15 @@ it.effect(
       yield* Effect.gen(function* () {
         const workflows = yield* Workflows.Workflows;
         const definitions = yield* WorkflowRuntime.WorkflowDefinitions;
+        const original = yield* fileSystem.readFileString(at("hold.ts"));
+        yield* fileSystem.symlink(at("hold.ts"), at("linked.yaml"));
+        const linked = yield* definitions.save(
+          "linked.yaml",
+          "name: linked\nsteps:\n  - id: step\n    prompt: Example\n",
+        );
+        assert.isFalse(linked.changed);
+        assert.equal(yield* fileSystem.readFileString(at("hold.ts")), original);
+        yield* fileSystem.remove(at("linked.yaml"));
         const held = yield* workflows.start("hold", {}, { idempotencyKey: "h" });
         yield* workflows.waitFor(held.runId, (run) => run.status === "waiting");
 

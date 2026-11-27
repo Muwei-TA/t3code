@@ -1,6 +1,7 @@
 import { RegistryContext } from "@effect/atom-react";
 import {
   EnvironmentId,
+  HarnessModeId,
   ProjectId,
   ProviderInstanceId,
   ScheduledTaskId,
@@ -178,7 +179,8 @@ beforeEach(() => {
       model: "model",
     },
     runtimeMode: "full-access",
-    interactionMode: "default",
+    interactionMode: "plan",
+    modeId: HarnessModeId.make("prior-mode"),
     createdBy: "user",
     creationSource: "mobile",
     createdAt: "2026-10-22T00:00:00.000Z",
@@ -216,6 +218,15 @@ function button(label: string) {
   return element;
 }
 describe("scheduled task batched edits", () => {
+  it("clears the previous mode and its plan interaction mode when Default is selected", async () => {
+    act(() => button("Select Default").click());
+    await act(async () => button("Save changes").click());
+    expect(mocks.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({ modeId: null, interactionMode: "default" }),
+      }),
+    );
+  });
   it("saves a custom enabled Harness mode from the selected environment", async () => {
     expect(container.textContent).not.toContain("Select Retired");
     act(() => button("Select Triage").click());

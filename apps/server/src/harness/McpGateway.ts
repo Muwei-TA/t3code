@@ -33,7 +33,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
-import * as Semaphore from "effect/Semaphore";
+import type * as Semaphore from "effect/Semaphore";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import {
@@ -235,6 +235,7 @@ export interface GatewaySessionInjection {
 }
 
 interface PooledUpstream {
+  readonly pluginId?: string;
   readonly serverId: HarnessMcpServerId;
   readonly scopeKey: string;
   readonly configDigest: string;
@@ -876,7 +877,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
         stateByDigest: new Map(),
         toolsByUpstream: new Map(),
         logs: new RingLogBuffer(),
-        lock: Semaphore.makeUnsafe(1),
+        lock: store.serverLifecycleLock(serverId),
       };
       records.set(serverId, record);
     }
@@ -919,6 +920,16 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       }
     }
   });
+
+  yield* store.onPluginServerRemoved(
+    Effect.fn("McpGateway.closePluginServer")(function* (serverId, pluginId) {
+      for (const [key, upstream] of pool) {
+        if (upstream.serverId !== serverId || upstream.pluginId !== pluginId) continue;
+        yield* closePooled(key);
+        records.get(serverId)?.stateByDigest.delete(upstream.scopeKey);
+      }
+    }),
+  );
 
   /** Acquires the per-server lifecycle lock so invalidation and startup never race or leak children. */
   const closeAllForServer = Effect.fn("McpGateway.closeAllForServer")(function* (
@@ -1035,7 +1046,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     const scopeKey = runtimeScopeKey(server);
     const key = poolKeyFor(server);
     const existing = pool.get(key);
-    if (existing && !existing.connection.isClosed()) {
+    if (existing && existing.pluginId === server.pluginId && !existing.connection.isClosed()) {
       existing.lastUsedMs = yield* Clock.currentTimeMillis;
       return existing;
     }
@@ -1137,6 +1148,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
       const now = yield* Clock.currentTimeMillis;
       const pooled: PooledUpstream = {
         serverId: server.id,
+        ...(server.pluginId ? { pluginId: server.pluginId } : {}),
         scopeKey,
         configDigest: server.configDigest,
         transportType: server.config.transport.type,
@@ -1270,6 +1282,7 @@ export const makeWithOptions = Effect.fn("McpGateway.make")(function* (
     return {
       id: server.id,
       scope: server.scope,
+      ...(server.pluginId ? { pluginId: server.pluginId } : {}),
       config: redactHarnessServerConfig(server.config),
       configDigest: server.configDigest,
       effectiveEnabled: server.effectiveEnabled,

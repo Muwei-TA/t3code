@@ -391,9 +391,9 @@ export function HarnessHooksTab({ environmentId }: { readonly environmentId: Env
                         <Badge variant="warning">{gt("Fail-closed")}</Badge>
                       ) : null}
                     </div>
-                    <p className="truncate font-mono text-2xs text-muted-foreground">
+                    <p className="whitespace-pre-wrap break-all font-mono text-2xs text-muted-foreground">
                       {hook.target.type === "command"
-                        ? [hook.target.command, ...(hook.target.args ?? [])].join(" ")
+                        ? JSON.stringify([hook.target.command, ...(hook.target.args ?? [])])
                         : hook.target.url}
                     </p>
                   </div>
@@ -461,7 +461,13 @@ export function HarnessHooksTab({ environmentId }: { readonly environmentId: Env
                               setBusy(true);
                               const result = await setHookEnabled({
                                 environmentId,
-                                input: { id: hook.id, enabled: true },
+                                input: {
+                                  id: hook.id,
+                                  enabled: true,
+                                  ...(hook.configDigest
+                                    ? { expectedDigest: hook.configDigest }
+                                    : {}),
+                                },
                               });
                               setBusy(false);
                               if (result._tag === "Success") setOverrideSnapshot(result.value);
@@ -490,7 +496,13 @@ export function HarnessHooksTab({ environmentId }: { readonly environmentId: Env
                               setBusy(true);
                               const res = await setHookEnabled({
                                 environmentId,
-                                input: { id: hook.id, enabled: checked },
+                                input: {
+                                  id: hook.id,
+                                  enabled: checked,
+                                  ...(hook.configDigest
+                                    ? { expectedDigest: hook.configDigest }
+                                    : {}),
+                                },
                               });
                               setBusy(false);
                               if (res._tag === "Success") setOverrideSnapshot(res.value);

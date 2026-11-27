@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
@@ -681,9 +682,11 @@ export function EnvironmentHarnessMcpSection({
                 title={
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="font-mono text-sm">{server.id}</span>
-                    <Badge variant="outline">
-                      {server.scope === "project" ? gt("Project") : gt("User")}
-                    </Badge>
+                    {!server.pluginId ? (
+                      <Badge variant="outline">
+                        {server.scope === "project" ? gt("Project") : gt("User")}
+                      </Badge>
+                    ) : null}
                     <Badge variant="secondary">
                       {server.config.transport.type === "stdio"
                         ? "stdio"
@@ -835,6 +838,15 @@ export function EnvironmentHarnessMcpSection({
                 }
               >
                 <div className="flex items-center gap-1.5">
+                  {server.pluginId ? (
+                    <Link
+                      to="/harness"
+                      search={(previous) => ({ ...previous, tab: "skills" })}
+                      hash="harness-plugins"
+                    >
+                      {gt("Plugin: {id}", { id: server.pluginId })}
+                    </Link>
+                  ) : null}
                   {canManageProviders &&
                   server.effectiveEnabled &&
                   supportsHarnessMcpOAuth(server.config) ? (
@@ -859,7 +871,10 @@ export function EnvironmentHarnessMcpSection({
                       ) : null}
                     </>
                   ) : null}
-                  {server.config.pendingApproval && server.scope === "user" && canWriteSettings ? (
+                  {server.config.pendingApproval &&
+                  !server.pluginId &&
+                  server.scope === "user" &&
+                  canWriteSettings ? (
                     <>
                       <Button
                         size="sm"
@@ -882,7 +897,7 @@ export function EnvironmentHarnessMcpSection({
                         <T>Reject</T>
                       </Button>
                     </>
-                  ) : server.scope === "user" && canWriteSettings ? (
+                  ) : !server.pluginId && server.scope === "user" && canWriteSettings ? (
                     <Switch
                       size="sm"
                       checked={server.config.enabled}
@@ -915,7 +930,10 @@ export function EnvironmentHarnessMcpSection({
                       <TerminalIcon className="size-3.5" aria-hidden />
                     </Button>
                   ) : null}
-                  {server.scope === "user" && !server.config.pendingApproval && canWriteSettings ? (
+                  {!server.pluginId &&
+                  server.scope === "user" &&
+                  !server.config.pendingApproval &&
+                  canWriteSettings ? (
                     <>
                       <Button
                         size="icon-xs"

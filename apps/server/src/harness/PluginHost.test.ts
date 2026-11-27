@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Test fixture setup creates temporary plugin directory trees on disk.
+import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -225,10 +226,35 @@ describe("PluginHost", () => {
           const gatewayServer = store
             .resolveWorkspace()
             .pipe(Effect.map((w) => w.servers.find((s) => s.id === "plugin-acme-audit-search")));
+          yield* fs.writeFile(path.join(srcNative, "asset.bin"), Uint8Array.of(0, 1, 255, 0));
           yield* fs.writeFileString(path.join(srcNative, "check.sh"), "echo ok");
           yield* fs.chmod(path.join(srcNative, "check.sh"), 0o755);
           const sourcePath = TrimmedNonEmptyString.make(srcNative);
           const risk = yield* host.inspectExecutableRisk({ kind: "sourcePath", sourcePath });
+          const expectedFiles = [
+            "asset.bin",
+            "check.sh",
+            "modes/sec-audit.md",
+            "skills/audit-skill/SKILL.md",
+            "t3-plugin.json",
+            "workflows/audit.yaml",
+          ];
+          const records = yield* Effect.promise(() =>
+            Promise.all(
+              expectedFiles.map(async (name) => [
+                name,
+                name === "check.sh",
+                NodeCrypto.createHash("sha256")
+                  .update(await NodeFSP.readFile(path.join(srcNative, name)))
+                  .digest("hex"),
+              ]),
+            ),
+          );
+          expect(risk.contentDigest).toBe(
+            NodeCrypto.createHash("sha256")
+              .update(JSON.stringify({ version: 2, files: records }))
+              .digest("hex"),
+          );
           expect(risk.manifestDigest).toMatch(/^[a-f0-9]{64}$/u);
           yield* Effect.promise(() =>
             NodeFSP.appendFile(path.join(srcNative, "t3-plugin.json"), "\n"),

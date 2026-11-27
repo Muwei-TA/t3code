@@ -49,6 +49,29 @@ const input = {
   interactionMode: "default",
 };
 
+it.effect("preserves an omitted mode and persists an explicit reset to Default", () =>
+  Effect.gen(function* () {
+    const service = yield* ScheduledTaskService.ScheduledTaskService;
+    const decoded = yield* decodeInput({
+      ...input,
+      schedule: { type: "interval", everyMs: 60_000 },
+    });
+    const created = yield* service.upsert(
+      yield* decodeInput({ ...decoded, interactionMode: "plan", modeId: "triage" }),
+    );
+    const edit = { ...decoded, id: created.task.id, requireExisting: true };
+    expect((yield* service.upsert(edit)).task.modeId).toBe("triage");
+    yield* service.upsert({ ...edit, modeId: null, interactionMode: "default" });
+    const stored = (yield* service.list()).tasks[0];
+    expect(stored?.interactionMode).toBe("default");
+    expect(stored?.modeId).toBeUndefined();
+  }).pipe(
+    Effect.provide(serviceLayer),
+    Effect.provideService(ServerActivation, Effect.never),
+    Effect.provide(SqlitePersistence.layerMemory),
+  ),
+);
+
 it.effect.each([
   {
     zone: "America/New_York",

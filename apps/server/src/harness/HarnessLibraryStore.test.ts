@@ -19,6 +19,8 @@ import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
+import { readContainedFile } from "./safeFileOps.ts";
+import { packageDigest } from "./skillPackage.ts";
 import * as HarnessLibraryStore from "./HarnessLibraryStore.ts";
 import * as HarnessStore from "./HarnessStore.ts";
 
@@ -95,6 +97,11 @@ describe("HarnessLibraryStore", () => {
             yield* lib.readSkillFile({ ...location, relativePath: "assets/image.dat" }),
           ).toMatchObject({ binary: true, sizeBytes: 2 });
           const dir = path.join(workspaceRoot, ".agents", "skills", "package");
+          yield* Effect.promise(async () => {
+            const target = path.join(dir, "scripts", "check");
+            await expect(readContainedFile(dir, target, 9)).rejects.toThrow("oversized");
+            expect((await readContainedFile(dir, target, 10)).bytes.toString()).toBe("echo ready");
+          });
           const copy = yield* lib.installSkillPackage({
             ...location,
             scope: "user",
@@ -123,7 +130,21 @@ describe("HarnessLibraryStore", () => {
               .readSkillFile({ ...location, relativePath: "../SKILL.md" })
               .pipe(Effect.flip)).code,
           ).toBe("invalid_config");
+          yield* fs.remove(path.join(dir, "linked"));
+          const duplicate = yield* lib
+            .installSkillPackage({ ...location, files })
+            .pipe(Effect.flip);
+          expect(duplicate.detail).toContain("already installed");
+          const stale = yield* lib
+            .installSkillPackage({
+              ...location,
+              files,
+              expectedTargetDigest: packageDigest([manifest]),
+            })
+            .pipe(Effect.flip);
+          expect(stale.detail).toContain("changed since preview");
           const replaced = yield* lib.installSkillPackage({
+            expectedTargetDigest: packageDigest(files),
             ...location,
             files: [
               manifest,

@@ -1,9 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Package copies require bounded binary reads, POSIX modes and same-volume renames.
-import * as NodeFS from "node:fs";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import { NonNegativeInt, type HarnessPackageFile, type HarnessSkillFile } from "@t3tools/contracts";
-import { assertContainedNoSymlinks, replaceDirectory } from "./safeFileOps.ts";
+import { assertContainedNoSymlinks, readContainedFile, replaceDirectory } from "./safeFileOps.ts";
 
 const MAX_FILE_BYTES = 1024 * 1024;
 export const MAX_PACKAGE_BYTES = 8 * MAX_FILE_BYTES;
@@ -31,44 +31,21 @@ function validatePackagePath(relativePath: string) {
   return relativePath;
 }
 
-export async function readPackageFile(root: string, relativePath: string) {
+export async function readPackageFile(root: string, relativePath: string, containmentRoot = root) {
   const target = NodePath.join(root, validatePackagePath(relativePath));
-  const { resolvedTarget } = await assertContainedNoSymlinks(root, target);
-  const handle = await NodeFSP.open(
-    resolvedTarget,
-    NodeFS.constants.O_RDONLY | NodeFS.constants.O_NOFOLLOW | NodeFS.constants.O_NONBLOCK,
-  );
-  try {
-    const info = await handle.stat();
-    if (!info.isFile() || info.size > MAX_FILE_BYTES)
-      throw new Error("Invalid or oversized package file.");
-    const bytes = Buffer.alloc(info.size);
-    let offset = 0;
-    while (offset < bytes.length) {
-      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset);
-      if (!bytesRead) throw new Error("Package file changed while reading.");
-      offset += bytesRead;
-    }
-    if ((await handle.stat()).size !== info.size)
-      throw new Error("Package file changed while reading.");
-    return {
-      bytes,
-      executable: (info.mode & 0o111) !== 0,
-      executeBits: info.mode & 0o111,
-      path: resolvedTarget,
-    };
-  } finally {
-    await handle.close();
-  }
+  return readContainedFile(containmentRoot, target, MAX_FILE_BYTES);
 }
 
-export async function listPackageFiles(root: string, limit = MAX_FILES) {
+export async function listPackageFiles(root: string, limit = MAX_FILES, containmentRoot = root) {
   const files: HarnessSkillFile[] = [];
   const pending = [""];
   let directories = 0;
   while (pending.length) {
     const parent = pending.pop()!;
-    const { resolvedTarget } = await assertContainedNoSymlinks(root, NodePath.join(root, parent));
+    const { resolvedTarget } = await assertContainedNoSymlinks(
+      containmentRoot,
+      NodePath.join(root, parent),
+    );
     for (const entry of (await NodeFSP.readdir(resolvedTarget, { withFileTypes: true })).sort(
       (a, b) => a.name.localeCompare(b.name),
     )) {
@@ -98,8 +75,8 @@ export async function listPackageFiles(root: string, limit = MAX_FILES) {
   return { files, truncated: false };
 }
 
-export async function loadPackage(root: string) {
-  const listing = await listPackageFiles(root);
+export async function loadPackage(root: string, containmentRoot = root) {
+  const listing = await listPackageFiles(root, MAX_FILES, containmentRoot);
   if (
     listing.truncated ||
     listing.files.reduce((n, file) => n + file.sizeBytes, 0) > MAX_PACKAGE_BYTES
@@ -108,7 +85,7 @@ export async function loadPackage(root: string) {
   const files: HarnessPackageFile[] = [];
   let total = 0;
   for (const { relativePath } of listing.files) {
-    const file = await readPackageFile(root, relativePath);
+    const file = await readPackageFile(root, relativePath, containmentRoot);
     total += file.bytes.length;
     if (total > MAX_PACKAGE_BYTES) throw new Error("Package exceeds size limit.");
     files.push({
@@ -131,30 +108,56 @@ function decodePackageFile(file: HarnessPackageFile) {
   return bytes;
 }
 
+export function packageDigest(files: readonly HarnessPackageFile[]) {
+  const manifest = files
+    .map(
+      (file) =>
+        [
+          file.relativePath,
+          file.executable === true,
+          NodeCrypto.createHash("sha256").update(decodePackageFile(file)).digest("hex"),
+        ] as const,
+    )
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return NodeCrypto.createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
+}
+
 export async function replacePackage(
   root: string,
   target: string,
   files: readonly HarnessPackageFile[],
+  expectedTargetDigest: string | undefined,
   validateManifest: (raw: string) => void,
 ) {
   if (!files.length || files.length > MAX_FILES) throw new Error("Invalid package file count.");
-  await replaceDirectory(root, target, false, async (staged) => {
-    let total = 0;
-    let hasManifest = false;
-    for (const file of files) {
-      const dest = NodePath.join(staged, validatePackagePath(file.relativePath));
-      const bytes = decodePackageFile(file);
-      if ((total += bytes.length) > MAX_PACKAGE_BYTES)
-        throw new Error("Package exceeds size limit.");
-      if (file.relativePath === "SKILL.md") {
-        if (bytes.length > 262144) throw new Error("Oversized skill manifest.");
-        validateManifest(new TextDecoder("utf8", { fatal: true }).decode(bytes));
-        hasManifest = true;
+  const verifyTarget = async (dir: string) => {
+    if (packageDigest(await loadPackage(dir, root)) !== expectedTargetDigest)
+      throw new Error("Skill package changed since preview. Review before replacing.");
+  };
+  if (expectedTargetDigest !== undefined) await verifyTarget(target);
+  await replaceDirectory(
+    root,
+    target,
+    expectedTargetDigest === undefined,
+    async (staged) => {
+      let total = 0;
+      let hasManifest = false;
+      for (const file of files) {
+        const dest = NodePath.join(staged, validatePackagePath(file.relativePath));
+        const bytes = decodePackageFile(file);
+        if ((total += bytes.length) > MAX_PACKAGE_BYTES)
+          throw new Error("Package exceeds size limit.");
+        if (file.relativePath === "SKILL.md") {
+          if (bytes.length > 262144) throw new Error("Oversized skill manifest.");
+          validateManifest(new TextDecoder("utf8", { fatal: true }).decode(bytes));
+          hasManifest = true;
+        }
+        await NodeFSP.mkdir(NodePath.dirname(dest), { recursive: true });
+        await NodeFSP.writeFile(dest, bytes, { flag: "wx", mode: 0o600 });
+        await NodeFSP.chmod(dest, file.executable ? 0o755 : 0o644);
       }
-      await NodeFSP.mkdir(NodePath.dirname(dest), { recursive: true });
-      await NodeFSP.writeFile(dest, bytes, { flag: "wx", mode: 0o600 });
-      await NodeFSP.chmod(dest, file.executable ? 0o755 : 0o644);
-    }
-    if (!hasManifest) throw new Error("Missing SKILL.md.");
-  });
+      if (!hasManifest) throw new Error("Missing SKILL.md.");
+    },
+    expectedTargetDigest === undefined ? undefined : verifyTarget,
+  );
 }

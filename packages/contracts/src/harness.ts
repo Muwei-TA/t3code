@@ -323,6 +323,7 @@ export const HarnessMcpTrustReason = Schema.Literals([
 export type HarnessMcpTrustReason = typeof HarnessMcpTrustReason.Type;
 
 export const HarnessMcpServerView = Schema.Struct({
+  pluginId: Schema.optionalKey(Schema.String),
   id: HarnessMcpServerId,
   scope: HarnessMcpServerScope,
   config: HarnessMcpServerConfig,
@@ -474,6 +475,7 @@ export const HarnessPackageFile = Schema.Struct({
 export type HarnessPackageFile = typeof HarnessPackageFile.Type;
 export const HarnessInstallSkillPackageInput = Schema.Struct({
   ...skillLocation,
+  expectedTargetDigest: Schema.optionalKey(Schema.String),
   sourceDir: Schema.optionalKey(TrimmedNonEmptyString),
   files: Schema.optionalKey(Schema.Array(HarnessPackageFile).check(Schema.isMaxLength(512))),
 });
@@ -831,6 +833,8 @@ export const HarnessExportPreviewFile = Schema.Struct({
   itemId: Schema.String,
   bytes: NonNegativeInt,
   previewSnippet: Schema.String,
+  relativePath: Schema.optionalKey(Schema.String),
+  executable: Schema.optionalKey(Schema.Boolean),
   hasSecretPlaceholders: Schema.Boolean,
 });
 export type HarnessExportPreviewFile = typeof HarnessExportPreviewFile.Type;
@@ -1170,7 +1174,12 @@ export type HarnessHookDefinition = typeof HarnessHookDefinition.Type;
 
 export const HarnessHooksSnapshot = Schema.Struct({
   hooksPath: Schema.String,
-  hooks: Schema.Array(HarnessHookDefinition),
+  hooks: Schema.Array(
+    Schema.Struct({
+      ...HarnessHookDefinition.fields,
+      configDigest: Schema.optionalKey(Schema.String),
+    }),
+  ),
   managedPolicyAllowsHarness: Schema.Boolean,
 });
 export type HarnessHooksSnapshot = typeof HarnessHooksSnapshot.Type;
@@ -1193,6 +1202,7 @@ export const HarnessHookRemoveInput = Schema.Struct({
 export type HarnessHookRemoveInput = typeof HarnessHookRemoveInput.Type;
 
 export const HarnessHookSetEnabledInput = Schema.Struct({
+  expectedDigest: Schema.optionalKey(Schema.String),
   id: HarnessHookId,
   enabled: Schema.Boolean,
 });

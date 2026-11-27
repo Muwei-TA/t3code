@@ -98,19 +98,64 @@ async function safeEnsureDir(rootDir: string, dirPath: string): Promise<string> 
   return current;
 }
 
-/** Reads a UTF-8 file strictly contained inside `rootDir`, opening with `O_NOFOLLOW`. */
-export async function safeReadFileUtf8(rootDir: string, targetPath: string): Promise<string> {
-  const { resolvedTarget } = await assertContainedNoSymlinks(rootDir, targetPath);
-  const handle = await NodeFSP.open(resolvedTarget, NodeFS.constants.O_RDONLY | O_NOFOLLOW);
+export async function readContainedFile(
+  rootDir: string,
+  targetPath: string,
+  maxBytes = 8 * 1024 * 1024,
+) {
+  const { canonicalRoot, resolvedTarget } = await assertContainedNoSymlinks(rootDir, targetPath);
+  const parent = NodePath.dirname(resolvedTarget);
+  const parentStat = await NodeFSP.lstat(parent);
+  const before = await NodeFSP.lstat(resolvedTarget);
+  const handle = await NodeFSP.open(
+    resolvedTarget,
+    NodeFS.constants.O_RDONLY | O_NOFOLLOW | NodeFS.constants.O_NONBLOCK,
+  );
   try {
     const stat = await handle.stat();
-    if (!stat.isFile()) {
-      throw new Error(`Refusing non-regular file: ${resolvedTarget}`);
+    if (!stat.isFile()) throw new Error("Refusing non-regular file.");
+    if (stat.size > maxBytes) throw new Error("Refusing oversized regular file.");
+    if (before.dev !== stat.dev || before.ino !== stat.ino)
+      throw new Error("File changed while opening.");
+    const verify = async () => {
+      const current = await assertContainedNoSymlinks(rootDir, targetPath);
+      const parentNow = await NodeFSP.lstat(parent);
+      const fileNow = await NodeFSP.lstat(resolvedTarget);
+      if (
+        current.canonicalRoot !== canonicalRoot ||
+        (await NodeFSP.realpath(resolvedTarget)) !== resolvedTarget ||
+        parentStat.dev !== parentNow.dev ||
+        parentStat.ino !== parentNow.ino ||
+        stat.dev !== fileNow.dev ||
+        stat.ino !== fileNow.ino ||
+        stat.size !== fileNow.size ||
+        stat.ctimeMs !== fileNow.ctimeMs
+      )
+        throw new Error("File changed while reading.");
+    };
+    await verify();
+    const bytes = Buffer.alloc(stat.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset);
+      if (!bytesRead) throw new Error("File changed while reading.");
+      offset += bytesRead;
     }
-    return await handle.readFile({ encoding: "utf8" });
+    await verify();
+    return {
+      bytes,
+      mode: stat.mode & 0o777,
+      executable: (stat.mode & 0o111) !== 0,
+      executeBits: stat.mode & 0o111,
+      path: resolvedTarget,
+    };
   } finally {
     await handle.close();
   }
+}
+
+export async function safeReadFileUtf8(rootDir: string, targetPath: string): Promise<string> {
+  return (await readContainedFile(rootDir, targetPath)).bytes.toString("utf8");
 }
 
 /** Atomically writes a regular file inside `rootDir`, rejecting symlinks on all ancestors and target. */
@@ -119,6 +164,7 @@ export async function safeWriteFileAtomic(
   targetPath: string,
   content: string | Uint8Array,
   mode?: number,
+  beforePublish?: () => Promise<void>,
 ): Promise<string> {
   const parentDir = NodePath.dirname(NodePath.resolve(targetPath));
   const safeParent = await safeEnsureDir(rootDir, parentDir);
@@ -153,6 +199,7 @@ export async function safeWriteFileAtomic(
   try {
     // Re-verify right before rename to narrow TOCTOU window.
     await assertContainedNoSymlinks(rootDir, safeTarget);
+    await beforePublish?.();
     await NodeFSP.rename(tmpPath, safeTarget);
   } catch (error) {
     await NodeFSP.unlink(tmpPath).catch(() => {});
@@ -180,6 +227,7 @@ export async function replaceDirectory(
   target: string,
   createOnly: boolean,
   populate: (staged: string) => Promise<void>,
+  verifyPrevious?: (backup: string) => Promise<void>,
 ) {
   const parent = await safeEnsureDir(root, NodePath.dirname(target));
   await assertContainedNoSymlinks(root, target);
@@ -204,8 +252,9 @@ export async function replaceDirectory(
         await NodeFSP.rename(target, backup);
         backedUp = true;
       } catch (error) {
-        if (!isEnoent(error)) throw error;
+        if (verifyPrevious || !isEnoent(error)) throw error;
       }
+      if (verifyPrevious) await verifyPrevious(backup);
     }
     await NodeFSP.rename(staged, target);
     backedUp = false;

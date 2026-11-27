@@ -627,6 +627,10 @@ describe("HarnessSyncService", () => {
             const script = NodePath.join(attackerClone, "skills", "tool", "scripts", "check.sh");
             await NodeFSP.mkdir(NodePath.dirname(script), { recursive: true });
             await NodeFSP.writeFile(script, "echo ok", { mode: 0o755 });
+            const incomplete = path.join(attackerClone, "skills", "incomplete");
+            await NodeFSP.mkdir(incomplete);
+            await NodeFSP.writeFile(path.join(incomplete, "SKILL.md"), "updated manifest");
+            await NodeFSP.writeFile(path.join(incomplete, "helper"), Buffer.from([0xff]));
             await NodeFSP.mkdir(NodePath.join(attackerClone, "rules"), { recursive: true });
             await NodeFSP.writeFile(
               NodePath.join(attackerClone, "rules", "safe-rule.md"),
@@ -662,6 +666,12 @@ describe("HarnessSyncService", () => {
           });
 
           const pulled = yield* sync.pull();
+          expect(pulled.skippedFiles).toEqual(
+            expect.arrayContaining(["skills/incomplete/SKILL.md", "skills/incomplete/helper"]),
+          );
+          expect(yield* fs.exists(path.join(store.harnessDir, "skills/incomplete/SKILL.md"))).toBe(
+            false,
+          );
           expect(pulled.pulled).toBe(true);
           expect(pulled.updatedFiles).toContain("rules/safe-rule.md");
           expect(
@@ -804,6 +814,7 @@ describe("HarnessSyncService", () => {
               path.join(memory, "note.md"),
               "private note ghp_1234567890abcdefghij1234567890\n",
             );
+            await NodeFSP.writeFile(path.join(memory, "invalid.md"), Buffer.from([0xff]));
             await NodeFSP.symlink("note.md", path.join(memory, "linked.md"));
             await execGit(checkout, ["add", "-A"]);
             await commit(checkout, "First version");
@@ -824,6 +835,7 @@ describe("HarnessSyncService", () => {
           expect(preview.secretFindings).toEqual(
             expect.arrayContaining([
               { path: "memory/note.md", line: 1, rule: "github-token", preview: "***" },
+              expect.objectContaining({ path: "memory/invalid.md", rule: "unscannable-binary" }),
               expect.objectContaining({ path: "memory/linked.md", rule: "unscannable-symlink" }),
             ]),
           );

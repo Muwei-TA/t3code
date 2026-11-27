@@ -42,6 +42,7 @@ import * as HarnessMcpOAuthNotice from "./HarnessMcpOAuthNotice.ts";
 import { isMcpServerAllowedByMode } from "./HarnessProjector.ts";
 import { scrubHarnessLogText } from "./HarnessSecrets.ts";
 import * as McpGateway from "./McpGateway.ts";
+import { WorkflowDefinitions } from "../workflows/WorkflowRuntime.ts";
 import { managementTools, callManagementTool } from "./harnessManagement.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as HarnessStore from "./HarnessStore.ts";
@@ -106,6 +107,7 @@ const forbiddenResponse = (message: string) =>
   );
 
 const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* (deps: {
+  readonly definitions: Option.Option<WorkflowDefinitions["Service"]>;
   readonly registry: McpSessionRegistry.McpSessionRegistry["Service"];
   readonly gateway: McpGateway.McpGateway["Service"];
   readonly appCapture: Option.Option<GatewayMcpAppCapture.GatewayMcpAppCapture["Service"]>;
@@ -595,6 +597,7 @@ const makeHarnessPostHandler = Effect.fn("HarnessMcpHttpServer.post")(function* 
               }),
             )
           : callManagementTool(toolName, toolArgs, context.workspaceRoot, libraryStore.value, {
+              definitions: deps.definitions,
               path: deps.path,
               store: deps.store,
               instances: deps.instances,
@@ -1534,6 +1537,7 @@ export const layer = Layer.unwrap(
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const random = yield* SecureRandom.SecureRandom;
     const handlePost = makeHarnessPostHandler({
+      definitions: yield* Effect.serviceOption(WorkflowDefinitions),
       registry,
       gateway,
       appCapture,

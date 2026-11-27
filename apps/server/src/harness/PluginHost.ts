@@ -57,6 +57,7 @@ import {
   assertContainedNoSymlinks,
   replaceDirectory,
   safeReadFileUtf8,
+  readContainedFile,
   safeWriteFileAtomic,
 } from "./safeFileOps.ts";
 
@@ -134,11 +135,6 @@ function parseStringArray(value: unknown): ReadonlyArray<string> {
     .filter((item) => item.length > 0);
 }
 
-function isContainedIn(rootReal: string, candidateReal: string): boolean {
-  const rel = NodePath.relative(rootReal, candidateReal);
-  return rel === "" || (!rel.startsWith("..") && !NodePath.isAbsolute(rel));
-}
-
 interface ContainedPluginFile {
   readonly executeBits: number;
   readonly relPath: string;
@@ -146,8 +142,11 @@ interface ContainedPluginFile {
   readonly content: Buffer;
 }
 
-async function walkContainedFiles(rootDir: string): Promise<ReadonlyArray<ContainedPluginFile>> {
-  const { canonicalRoot: rootReal } = await assertContainedNoSymlinks(rootDir, rootDir);
+async function walkContainedFiles(
+  rootDir: string,
+  containmentRoot = rootDir,
+): Promise<ReadonlyArray<ContainedPluginFile>> {
+  const { resolvedTarget: rootReal } = await assertContainedNoSymlinks(containmentRoot, rootDir);
   const files: Array<ContainedPluginFile> = [];
   let totalBytes = 0;
 
@@ -158,30 +157,29 @@ async function walkContainedFiles(rootDir: string): Promise<ReadonlyArray<Contai
       if (entry.name === ".git" || entry.name === "node_modules") continue;
       const fullPath = NodePath.join(dir, entry.name);
       if (entry.isSymbolicLink()) throw new Error("Plugin symlink rejected: " + entry.name);
-      const real = await NodeFSP.realpath(fullPath);
-      if (!isContainedIn(rootReal, real)) {
-        throw new Error(`Plugin path escapes plugin root via symlink: ${entry.name}`);
-      }
-      const stat = await NodeFSP.stat(real);
-      if (stat.isDirectory()) {
-        await visit(real);
-      } else if (stat.isFile()) {
+      if (entry.isDirectory()) {
+        const { resolvedTarget } = await assertContainedNoSymlinks(containmentRoot, fullPath);
+        await visit(resolvedTarget);
+      } else if (entry.isFile()) {
         if (files.length >= MAX_PLUGIN_FILES) {
           throw new Error(`Plugin exceeds maximum file limit (${MAX_PLUGIN_FILES}).`);
         }
-        totalBytes += stat.size;
-        if (totalBytes > MAX_PLUGIN_TOTAL_BYTES) {
-          throw new Error(`Plugin exceeds maximum size limit (${MAX_PLUGIN_TOTAL_BYTES} bytes).`);
-        }
-        const content = await NodeFSP.readFile(real);
-        const relPath = NodePath.relative(rootReal, real).split(NodePath.sep).join("/");
-        files.push({ relPath, fullPath: real, content, executeBits: stat.mode & 0o111 });
+        const file = await readContainedFile(
+          containmentRoot,
+          fullPath,
+          MAX_PLUGIN_TOTAL_BYTES - totalBytes,
+        );
+        totalBytes += file.bytes.length;
+        const relPath = NodePath.relative(rootReal, fullPath).split(NodePath.sep).join("/");
+        files.push({ relPath, fullPath, content: file.bytes, executeBits: file.executeBits });
+      } else {
+        throw new Error("Unsupported plugin entry: " + entry.name);
       }
     }
   };
 
   await visit(rootReal);
-  files.sort((a, b) => a.relPath.localeCompare(b.relPath));
+  files.sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0));
   return files;
 }
 
@@ -623,20 +621,17 @@ interface ParsedPluginBundle {
 async function parsePluginDirectory(
   pluginDir: string,
   fallbackId: string,
-  installed = false,
+  installedRoot?: string,
 ): Promise<ParsedPluginBundle> {
-  const files = await walkContainedFiles(pluginDir);
+  const files = await walkContainedFiles(pluginDir, installedRoot);
   const fileByRel = new Map(files.map((f) => [f.relPath, f]));
 
-  const hasher = NodeCrypto.createHash("sha256");
-  for (const file of files) {
-    if (file.executeBits) hasher.update(`\0execute:${file.executeBits}\0`);
-    hasher.update(file.relPath, "utf8");
-    hasher.update("\0", "utf8");
-    hasher.update(file.content);
-    hasher.update("\0", "utf8");
-  }
-  const contentDigest = hasher.digest("hex");
+  const contentDigest = sha256Hex(
+    JSON.stringify({
+      version: 2,
+      files: files.map((file) => [file.relPath, file.executeBits !== 0, sha256Hex(file.content)]),
+    }),
+  );
 
   const t3ManifestFile = fileByRel.get("t3-plugin.json");
   const claudeManifestFile = fileByRel.get(".claude-plugin/plugin.json");
@@ -653,7 +648,7 @@ async function parsePluginDirectory(
   }
 
   const rawId =
-    !installed && typeof manifest.id === "string" && manifest.id.trim()
+    installedRoot === undefined && typeof manifest.id === "string" && manifest.id.trim()
       ? manifest.id.trim()
       : fallbackId;
   const decodedId = decodePluginId(rawId);
@@ -1072,9 +1067,9 @@ export const layer = Layer.effect(
 
     const readState = Effect.fn("PluginHost.readState")(function* () {
       const file = stateFilePath();
-      const exists = yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false));
-      if (!exists) return DEFAULT_PERSISTED_STATE;
-      const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+      const raw = yield* Effect.promise(() =>
+        safeReadFileUtf8(store.harnessDir, file).catch(() => ""),
+      );
       const obj = tryParseJsonObject(raw);
       if (!obj) return DEFAULT_PERSISTED_STATE;
       const trustedDigests: Record<string, string> = {};
@@ -1175,7 +1170,7 @@ export const layer = Layer.effect(
               )
                 return false;
               return yield* Effect.tryPromise({
-                try: () => parsePluginDirectory(bundle.sourcePath, bundle.id, true),
+                try: () => parsePluginDirectory(bundle.sourcePath, bundle.id, store.harnessDir),
                 catch: () =>
                   new HarnessError({ code: "invalid_config", detail: "Invalid plugin bundle." }),
               }).pipe(Effect.map((current) => current.contentDigest === bundle.contentDigest));
@@ -1245,7 +1240,7 @@ export const layer = Layer.effect(
           if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
           const dirPath = NodePath.join(root, entry.name);
           const parsed = yield* Effect.tryPromise({
-            try: () => parsePluginDirectory(dirPath, entry.name, true),
+            try: () => parsePluginDirectory(dirPath, entry.name, store.harnessDir),
             catch: (error) => (error instanceof Error ? error.message : String(error)),
           }).pipe(Effect.result);
 
@@ -1431,7 +1426,7 @@ export const layer = Layer.effect(
         if (input.kind === "installedId") {
           const dirPath = NodePath.join(pluginsDir(), input.id);
           const parsed = yield* Effect.tryPromise({
-            try: () => parsePluginDirectory(dirPath, input.id, true),
+            try: () => parsePluginDirectory(dirPath, input.id, store.harnessDir),
             catch: (error) =>
               new HarnessError({
                 code: "not_found",
@@ -1459,7 +1454,8 @@ export const layer = Layer.effect(
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
           const parsed = yield* Effect.tryPromise({
-            try: () => parsePluginDirectory(NodePath.join(root, entry.name), entry.name, true),
+            try: () =>
+              parsePluginDirectory(NodePath.join(root, entry.name), entry.name, store.harnessDir),
             catch: () => null,
           }).pipe(Effect.orElseSucceed(() => null));
           if (parsed) {
@@ -1552,7 +1548,7 @@ export const layer = Layer.effect(
             }
             const dirPath = NodePath.join(pluginsDir(), input.id);
             const parsed = yield* Effect.tryPromise({
-              try: () => parsePluginDirectory(dirPath, input.id, true),
+              try: () => parsePluginDirectory(dirPath, input.id, store.harnessDir),
               catch: (error) =>
                 new HarnessError({
                   code: "not_found",
@@ -1674,7 +1670,7 @@ export const layer = Layer.effect(
                 }),
             });
             const parsed = yield* Effect.tryPromise({
-              try: () => parsePluginDirectory(pluginDir, input.id, true),
+              try: () => parsePluginDirectory(pluginDir, input.id, store.harnessDir),
               catch: (error) =>
                 new HarnessError({
                   code: "invalid_config",

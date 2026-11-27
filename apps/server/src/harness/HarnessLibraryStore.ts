@@ -41,10 +41,13 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import * as ServerConfig from "../config.ts";
 import * as HarnessStore from "./HarnessStore.ts";
-import { assertContainedNoSymlinks, safeRemoveFile, safeWriteFileAtomic } from "./safeFileOps.ts";
+import {
+  assertContainedNoSymlinks,
+  readContainedFile,
+  safeWriteFileAtomic,
+} from "./safeFileOps.ts";
 import * as PluginHost from "./PluginHost.ts";
 
-import { compileAndValidateDeclarativeWorkflow } from "./DeclarativeWorkflowCompiler.ts";
 import {
   MAX_PACKAGE_BYTES,
   listPackageFiles,
@@ -347,13 +350,6 @@ export class HarnessLibraryStore extends Context.Service<
       readonly body: string;
       readonly workspaceRoot?: string | undefined;
     }) => Effect.Effect<HarnessLibrarySnapshot, HarnessError>;
-    readonly listWorkflows: () => Effect.Effect<ReadonlyArray<string>, HarnessError>;
-    readonly manageWorkflow: (input: {
-      id: HarnessRuleId;
-      action: "upsert" | "delete";
-      yaml?: string;
-      workspaceRoot?: string | undefined;
-    }) => Effect.Effect<string, HarnessError>;
     readonly readSkillFile: (
       input: HarnessReadSkillFileInput,
     ) => Effect.Effect<HarnessReadSkillFileResult, HarnessError>;
@@ -510,7 +506,9 @@ const make = Effect.gen(function* () {
               name,
               await fileFingerprint(item),
               await fileFingerprint(path.join(item, "SKILL.md")),
-              await listPackageFiles(item, MAX_COMPANION_FILES + 1).catch(() => null),
+              await listPackageFiles(item, MAX_COMPANION_FILES + 1, containmentRoot).catch(
+                () => null,
+              ),
             ];
           }
           return name.endsWith(".md") ? [name, await fileFingerprint(item)] : [name];
@@ -536,38 +534,15 @@ const make = Effect.gen(function* () {
     return await Promise.all(files);
   };
 
-  const isWithinRoot = (rootRealPath: string, candidateRealPath: string): boolean => {
-    const rel = path.relative(rootRealPath, candidateRealPath);
-    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-  };
-
-  const resolveContainedPath = Effect.fn("HarnessLibraryStore.resolveContainedPath")(function* (
-    rootDir: string,
-    targetPath: string,
-  ) {
-    const rootReal = yield* fs
-      .realPath(rootDir)
-      .pipe(Effect.orElseSucceed(() => path.resolve(rootDir)));
-    const targetReal = yield* fs
-      .realPath(targetPath)
-      .pipe(Effect.orElseSucceed(() => path.resolve(targetPath)));
-    return isWithinRoot(rootReal, targetReal) ? targetReal : null;
-  });
-
   const readBoundedContainedFile = Effect.fn("HarnessLibraryStore.readBoundedContainedFile")(
     function* (rootDir: string, filePath: string) {
-      const contained = yield* resolveContainedPath(rootDir, filePath);
-      if (contained === null)
-        return Option.none<{ readonly text: string; readonly realPath: string }>();
-      const info = yield* fs.stat(contained).pipe(Effect.option);
-      if (Option.isNone(info) || info.value.type !== "File") {
-        return Option.none<{ readonly text: string; readonly realPath: string }>();
-      }
-      if (Number(info.value.size) > MAX_READ_BYTES) {
-        return Option.none<{ readonly text: string; readonly realPath: string }>();
-      }
-      const text = yield* fs.readFileString(contained).pipe(Effect.option);
-      return Option.map(text, (content) => ({ text: content, realPath: contained }));
+      return yield* Effect.tryPromise({
+        try: () => readContainedFile(rootDir, filePath, MAX_READ_BYTES),
+        catch: packageError,
+      }).pipe(
+        Effect.map((file) => ({ text: file.bytes.toString("utf8"), realPath: file.path })),
+        Effect.option,
+      );
     },
   );
 
@@ -721,7 +696,7 @@ const make = Effect.gen(function* () {
       const listing = yield* Effect.promise(async () => {
         try {
           await assertContainedNoSymlinks(input.containmentRoot, skillDir);
-          return await listPackageFiles(skillDir, MAX_COMPANION_FILES + 1);
+          return await listPackageFiles(skillDir, MAX_COMPANION_FILES + 1, input.containmentRoot);
         } catch {
           return { files: [], truncated: true };
         }
@@ -1191,8 +1166,7 @@ const make = Effect.gen(function* () {
     const root = location.root;
     return yield* Effect.tryPromise({
       try: async () => {
-        await assertContainedNoSymlinks(root, dir);
-        const file = await readPackageFile(dir, input.relativePath);
+        const file = await readPackageFile(dir, input.relativePath, root);
         const meta = {
           path: file.path,
           sizeBytes: NonNegativeInt.make(file.bytes.length),
@@ -1225,7 +1199,7 @@ const make = Effect.gen(function* () {
           if (input.sourceDir && !path.isAbsolute(input.sourceDir))
             throw new Error("sourceDir must be absolute.");
           const files = input.files ?? (await loadPackage(input.sourceDir!));
-          await replacePackage(root, dir, files, (raw) => {
+          await replacePackage(root, dir, files, input.expectedTargetDigest, (raw) => {
             const parsed = parseMarkdownFrontmatter(raw);
             if (
               parsed.malformed ||
@@ -1829,59 +1803,6 @@ const make = Effect.gen(function* () {
   return HarnessLibraryStore.of({
     getSnapshot,
     saveUserAgentsMd,
-    listWorkflows: Effect.fn("HarnessLibraryStore.listWorkflows")(function* () {
-      yield* assertPolicyAllows();
-      return yield* Effect.tryPromise({
-        try: async () => {
-          const root = serverConfig.workflowsDir;
-          await assertContainedNoSymlinks(root, root);
-          return (await NodeFSP.readdir(root, { withFileTypes: true }))
-            .filter((f) => f.isFile() && /\.ya?ml$/iu.test(f.name))
-            .map((f) => f.name)
-            .sort();
-        },
-        catch: (error) =>
-          typeof error === "object" && error && "code" in error && error.code === "ENOENT"
-            ? new HarnessError({ code: "not_found", detail: "Missing workflow directory." })
-            : packageError(error),
-      }).pipe(
-        Effect.catchIf(
-          (e) => e.code === "not_found",
-          () => Effect.succeed([] as string[]),
-        ),
-      );
-    }),
-    manageWorkflow: Effect.fn("HarnessLibraryStore.manageWorkflow")(function* (input) {
-      yield* assertPolicyAllows();
-      const target = path.join(serverConfig.workflowsDir, input.id + ".yaml");
-      if (input.action === "delete") {
-        yield* withLibraryWrite(
-          Effect.tryPromise({
-            try: () => safeRemoveFile(serverConfig.workflowsDir, target),
-            catch: packageError,
-          }),
-        );
-      } else {
-        const yaml = input.yaml ?? "";
-        const snapshot = yield* getSnapshot(input.workspaceRoot);
-        const validation = compileAndValidateDeclarativeWorkflow(
-          yaml,
-          new Set(snapshot.modes.map((m) => m.id)),
-        );
-        if (!validation.valid)
-          return yield* new HarnessError({
-            code: "invalid_config",
-            detail: validation.issues.map((i) => i.message).join(" "),
-          });
-        yield* withLibraryWrite(
-          Effect.tryPromise({
-            try: () => safeWriteFileAtomic(serverConfig.workflowsDir, target, yaml),
-            catch: packageError,
-          }),
-        );
-      }
-      return target;
-    }),
     readSkillFile,
     installSkillPackage,
     upsertUserSkill,

@@ -21,6 +21,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { parse as parseToml, type TomlTable, type TomlValue } from "smol-toml";
 
@@ -32,10 +33,11 @@ import {
 } from "./HarnessLibraryStore.ts";
 import { configContainsSecretPlaceholder, redactHarnessServerConfig } from "./HarnessSecrets.ts";
 import * as HarnessStore from "./HarnessStore.ts";
-import { assertContainedNoSymlinks, safeReadFileUtf8, safeWriteFileAtomic } from "./safeFileOps.ts";
+import { readContainedFile, safeWriteFileAtomic } from "./safeFileOps.ts";
 
-import { loadPackage, readPackageFile } from "./skillPackage.ts";
+import { loadPackage } from "./skillPackage.ts";
 
+const isHarnessError = Schema.is(HarnessError);
 const ALL_SECTIONS: ReadonlyArray<HarnessExportSection> = ["mcp", "skills", "rules", "commands"];
 const MAX_SNIPPET_CHARS = 800;
 
@@ -52,6 +54,8 @@ interface PlannedExportFile {
   readonly itemId: string;
   readonly content: string;
   readonly redactedPreviewContent: string;
+  readonly relativePath?: string;
+  readonly targetIdentity: string | null;
   readonly hasSecretPlaceholders: boolean;
 }
 
@@ -259,7 +263,13 @@ function computeExportPlanDigest(
     .update(
       JSON.stringify({
         target,
-        files: files.map((f) => [f.targetPath, f.action, sha256Hex(f.content), f.executable]),
+        files: files.map((f) => [
+          f.targetPath,
+          f.action,
+          sha256Hex(f.content),
+          f.executable,
+          f.targetIdentity,
+        ]),
       }),
     )
     .digest("hex")
@@ -287,42 +297,43 @@ const make = Effect.gen(function* () {
   const writeLock = yield* Semaphore.make(1);
   const hmacKey = NodeCrypto.randomBytes(32);
 
-  const readFileOpt = Effect.fn("HarnessExporter.readFileOpt")(function* (filePath: string) {
-    return yield* Effect.tryPromise({
-      try: () =>
-        safeReadFileUtf8(homeDir, filePath)
-          .then(Option.some)
-          .catch((error: unknown) => {
-            if (
-              typeof error === "object" &&
-              error !== null &&
-              "code" in error &&
-              error.code === "ENOENT"
-            ) {
-              return Option.none<string>();
-            }
-            throw error;
-          }),
-      catch: () =>
-        new HarnessError({
-          code: "io_error",
-          detail: `Could not safely read ${filePath}. Symlinked dotfile directories and files are blocked by export protection.`,
-        }),
+  const readTarget = async (targetPath: string) => {
+    try {
+      const { bytes, executable } = await readContainedFile(homeDir, targetPath);
+      const digest = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+      return { bytes, executable, identity: JSON.stringify([digest, executable]) };
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+      throw error;
+    }
+  };
+  const changed = () =>
+    new HarnessError({
+      code: "invalid_config",
+      detail: "Export plan changed since preview. Refresh the export preview and confirm again.",
     });
-  });
-
   const writeFileAtomic = Effect.fn("HarnessExporter.writeFileAtomic")(function* (
-    targetPath: string,
-    contents: string | Uint8Array,
-    mode?: number,
+    file: PlannedExportFile,
   ) {
     yield* Effect.tryPromise({
-      try: () => safeWriteFileAtomic(homeDir, targetPath, contents, mode),
+      try: () =>
+        safeWriteFileAtomic(
+          homeDir,
+          file.targetPath,
+          file.executable === undefined ? file.content : Buffer.from(file.content, "base64"),
+          file.executable === undefined ? undefined : file.executable ? 0o755 : 0o644,
+          async () => {
+            if (((await readTarget(file.targetPath))?.identity ?? null) !== file.targetIdentity)
+              throw changed();
+          },
+        ),
       catch: (error) =>
-        new HarnessError({
-          code: "io_error",
-          detail: `Failed to write exported file ${targetPath}: ${error instanceof Error ? error.message : String(error)}`,
-        }),
+        isHarnessError(error)
+          ? error
+          : new HarnessError({
+              code: "io_error",
+              detail: `Failed to write exported file ${file.targetPath}.`,
+            }),
     });
   });
 
@@ -358,6 +369,21 @@ const make = Effect.gen(function* () {
     const files: Array<PlannedExportFile> = [];
     const warnings: Array<string> = [];
 
+    const targets = new Map<string, string | null>();
+    const readExistingText = Effect.fn("HarnessExporter.readExistingText")(function* (
+      filePath: string,
+    ) {
+      const file = yield* Effect.tryPromise({
+        try: () => readTarget(filePath),
+        catch: () =>
+          new HarnessError({
+            code: "io_error",
+            detail: `Could not safely read ${filePath}. Symlinked dotfile directories and files are blocked by export protection.`,
+          }),
+      });
+      targets.set(filePath, file?.identity ?? null);
+      return file?.bytes.toString("utf8") ?? null;
+    });
     const addPlannedFile = (
       targetPath: string,
       existingContent: string | null,
@@ -370,6 +396,7 @@ const make = Effect.gen(function* () {
       const action: HarnessExportFileAction =
         existingContent === null ? "create" : existingContent === content ? "unchanged" : "update";
       files.push({
+        targetIdentity: targets.get(targetPath) ?? null,
         targetPath,
         action,
         section,
@@ -399,7 +426,7 @@ const make = Effect.gen(function* () {
       if (exportableServers.length > 0) {
         if (input.target === "codex") {
           const targetPath = path.join(homeDir, ".codex", "config.toml");
-          const existing = Option.getOrNull(yield* readFileOpt(targetPath));
+          const existing = yield* readExistingText(targetPath);
           const validated = yield* Effect.try({
             try: () =>
               mergeCodexConfigToml(existing ?? "", renderCodexExportBlock(exportableServers)),
@@ -429,7 +456,7 @@ const make = Effect.gen(function* () {
             input.target === "claude"
               ? path.join(homeDir, ".claude.json")
               : path.join(homeDir, ".cursor", "mcp.json");
-          const existing = Option.getOrNull(yield* readFileOpt(targetPath));
+          const existing = yield* readExistingText(targetPath);
           const merged = mergeJsonMcpFile(existing, exportableServers);
           // Preview only the redacted T3-exported mcpServers entries, never existing host entries/secrets.
           const redactedDeltaPreview = mergeJsonMcpFile(null, redactedServers);
@@ -462,21 +489,13 @@ const make = Effect.gen(function* () {
         if (skill.scope !== "user" || !skill.effectiveEnabled) continue;
         const planned = yield* Effect.tryPromise({
           try: async () => {
-            await assertContainedNoSymlinks(lib.harnessDir, path.dirname(skill.sourcePath));
-            const source = await loadPackage(path.dirname(skill.sourcePath));
+            const source = await loadPackage(path.dirname(skill.sourcePath), lib.harnessDir);
             return await Promise.all(
               source.map(async (file) => {
                 const targetPath = path.join(targetSkillsRoot, skill.id, file.relativePath);
-                const existing = await readPackageFile(
-                  homeDir,
-                  path.relative(homeDir, targetPath).split(path.sep).join("/"),
-                ).catch((error: unknown) => {
-                  if (error instanceof Error && "code" in error && error.code === "ENOENT")
-                    return null;
-                  throw error;
-                });
+                const existing = await readTarget(targetPath);
                 const bytes = Buffer.from(file.content, "base64");
-                const text = bytes.toString("utf8");
+
                 return {
                   targetPath,
                   section: "skills",
@@ -489,10 +508,12 @@ const make = Effect.gen(function* () {
                       : existing.bytes.equals(bytes) && existing.executable === file.executable
                         ? "unchanged"
                         : "update",
+                  targetIdentity: existing?.identity ?? null,
+                  relativePath: file.relativePath,
                   redactedPreviewContent:
-                    bytes.includes(0) || !Buffer.from(text).equals(bytes)
-                      ? `Binary file (${bytes.length} bytes)`
-                      : text,
+                    file.relativePath === "SKILL.md"
+                      ? bytes.toString("utf8")
+                      : `${file.relativePath} · ${bytes.length} B${file.executable ? " [+x]" : ""}`,
                   hasSecretPlaceholders: false,
                 } satisfies PlannedExportFile;
               }),
@@ -515,7 +536,7 @@ const make = Effect.gen(function* () {
         const cursorRulesRoot = path.join(homeDir, ".cursor", "rules");
         if (lib.userAgentsMd.exists && lib.userAgentsMd.body.trim().length > 0) {
           const targetPath = path.join(cursorRulesRoot, "t3-personal-agents.mdc");
-          const existing = Option.getOrNull(yield* readFileOpt(targetPath));
+          const existing = yield* readExistingText(targetPath);
           const content = formatMarkdownWithFrontmatter(
             { description: "Exported from T3 Code portable AGENTS.md", alwaysApply: true },
             lib.userAgentsMd.body,
@@ -525,7 +546,7 @@ const make = Effect.gen(function* () {
         for (const rule of lib.rules) {
           if (!rule.effectiveEnabled || rule.lockedByPolicy) continue;
           const targetPath = path.join(cursorRulesRoot, `${rule.id}.mdc`);
-          const existing = Option.getOrNull(yield* readFileOpt(targetPath));
+          const existing = yield* readExistingText(targetPath);
           const fm: Record<string, unknown> = {
             ...(rule.description ? { description: rule.description } : {}),
             alwaysApply: rule.apply === "always",
@@ -556,7 +577,7 @@ const make = Effect.gen(function* () {
           input.target === "codex"
             ? path.join(homeDir, ".codex", "AGENTS.md")
             : path.join(homeDir, ".claude", "CLAUDE.md");
-        const existing = Option.getOrNull(yield* readFileOpt(targetPath));
+        const existing = yield* readExistingText(targetPath);
         const managed = existing?.match(MANAGED_RULES_BLOCK) ?? undefined;
         if (ruleBlocks.length > 0 || managed !== undefined) {
           const eol = managed?.[0].includes("\r\n") ? "\r\n" : "\n";
@@ -599,7 +620,7 @@ const make = Effect.gen(function* () {
           const commandsRoot = path.join(homeDir, ".claude", "commands");
           for (const cmd of enabledCommands) {
             const targetPath = path.join(commandsRoot, `${cmd.id}.md`);
-            const existing = Option.getOrNull(yield* readFileOpt(targetPath));
+            const existing = yield* readExistingText(targetPath);
             const content = formatCommandMarkdown({
               description: cmd.description,
               argumentHint: cmd.argumentHint,
@@ -632,6 +653,9 @@ const make = Effect.gen(function* () {
           Buffer.byteLength(file.content, file.executable === undefined ? "utf8" : "base64"),
         ),
         previewSnippet: truncateSnippet(file.redactedPreviewContent),
+        ...(file.relativePath !== undefined
+          ? { relativePath: file.relativePath, executable: file.executable === true }
+          : {}),
         hasSecretPlaceholders: file.hasSecretPlaceholders,
       }));
       return {
@@ -649,11 +673,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const plan = yield* buildExportPlan(input);
           if (plan.planDigest !== input.planDigest) {
-            return yield* new HarnessError({
-              code: "invalid_config",
-              detail:
-                "Export plan changed since preview. Refresh the export preview and confirm again.",
-            });
+            return yield* changed();
           }
           const writtenPaths: Array<string> = [];
           const skippedPaths: Array<string> = [];
@@ -662,14 +682,7 @@ const make = Effect.gen(function* () {
               skippedPaths.push(file.targetPath);
               continue;
             }
-            if (file.executable === undefined)
-              yield* writeFileAtomic(file.targetPath, file.content);
-            else
-              yield* writeFileAtomic(
-                file.targetPath,
-                Buffer.from(file.content, "base64"),
-                file.executable ? 0o755 : 0o644,
-              );
+            yield* writeFileAtomic(file);
             writtenPaths.push(file.targetPath);
           }
           return {
