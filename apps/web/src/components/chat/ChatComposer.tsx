@@ -66,7 +66,9 @@ import { splitTransferredFiles } from "./workspaceFileDrop";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
 import { USAGE_LIMITS_COMMAND } from "@t3tools/shared/usageLimits";
 import {
+  lazy,
   memo,
+  Suspense,
   use,
   useEffect,
   useEffectEvent,
@@ -531,6 +533,8 @@ export interface ChatComposerProps {
   onExpandImage: (preview: ExpandedImagePreview) => void;
   onFileOpen: (attachment: ChatFileAttachment) => void;
 }
+
+const HarnessMcpDialog = lazy(() => import("../harness/HarnessMcpDialog"));
 
 const NO_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const NO_PROVIDER_SLASH_COMMANDS: ServerProvider["slashCommands"] = [];
@@ -1119,6 +1123,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
+  const [mcpDialogTarget, setMcpDialogTarget] = useState<string | null>(null);
+  if (mcpDialogTarget !== null && mcpDialogTarget !== composerDraftTargetKey)
+    setMcpDialogTarget(null);
+  const closeMcpDialog = useStableCallback(() => setMcpDialogTarget(null));
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const isMobileViewport = useMediaQuery("max-sm");
   const isSoftwareKeyboardOpen = useSoftwareKeyboardOpen();
@@ -1971,6 +1979,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     return true;
   };
+  const refocusAfterMcp = useStableCallback(() =>
+    composerEditorRef.current?.focusAt(composerCursor),
+  );
   const applyPromptReplacementStable = useStableCallback(applyPromptReplacement);
 
   const readComposerSnapshot = (): {
@@ -2152,14 +2163,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return;
     }
     if (item.type === "slash-command") {
-      if (item.command === "model") {
+      if (item.command === "model" || item.command === "mcp") {
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
           focusEditorAfterReplace: false,
         });
         if (applied) {
           setComposerHighlightedItemId(null);
-          setIsComposerModelPickerOpen(true);
+          if (item.command === "mcp") setMcpDialogTarget(composerDraftTargetKey);
+          else setIsComposerModelPickerOpen(true);
         }
         return;
       }
@@ -3857,6 +3869,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       data-chat-composer-form="true"
       {...threadContextDropTargetProps()}
     >
+      {mcpDialogTarget === composerDraftTargetKey ? (
+        <Suspense fallback={null}>
+          <HarnessMcpDialog
+            environmentId={environmentId}
+            projectId={activeProjectId}
+            workspaceRoot={gitCwd ?? undefined}
+            onClosed={closeMcpDialog}
+            focusComposer={refocusAfterMcp}
+          />
+        </Suspense>
+      ) : null}
       <ComposerBanner.Dock>
         <ComposerBanner.Column>
           <ComposerBannerStack items={shelfItems} />

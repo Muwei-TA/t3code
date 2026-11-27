@@ -10,10 +10,12 @@ import { useSettingsSearchTargetId } from "./settingsLayout";
  * search jump opens the fold before its row mounts.
  */
 export function AdvancedSettings({
-  targetIds,
+  targetIds = [],
+  title,
   children,
 }: {
-  readonly targetIds: ReadonlyArray<string>;
+  readonly title?: string;
+  readonly targetIds?: ReadonlyArray<string>;
   readonly children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -31,7 +33,7 @@ export function AdvancedSettings({
           aria-hidden
           className="size-3.5 shrink-0 transition-transform duration-150 group-data-panel-open:rotate-90 motion-reduce:transition-none"
         />
-        <T>Advanced</T>
+        {title ?? <T>Advanced</T>}
       </CollapsibleTrigger>
       <CollapsiblePanel>
         <div className="border-t border-border/50 *:not-first:border-t *:not-first:border-border/50">

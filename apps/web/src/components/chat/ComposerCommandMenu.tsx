@@ -52,7 +52,7 @@ export type ComposerCommandItem =
   | {
       id: string;
       type: "slash-command";
-      command: ComposerSlashCommand;
+      command: ComposerSlashCommand | "mcp";
       label: string;
       description: string;
     }

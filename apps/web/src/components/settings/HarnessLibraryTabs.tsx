@@ -66,6 +66,7 @@ import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
+import { HarnessAgentAction } from "../harness/HarnessAgentAction";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useSearchableSetting } from "./settingsSearch";
 
@@ -722,7 +723,17 @@ export function HarnessLibraryPanels({
     const currentBudget = budgetDraft ?? String(snapshot.maxSystemContextBytes);
     return (
       <>
-        <SettingsSection title={gt("AGENTS.md")}>
+        <SettingsSection
+          title={gt("AGENTS.md")}
+          headerAction={
+            <HarnessAgentAction
+              environmentId={environmentId}
+              workspaceRoot={workspaceRoot}
+              domain="context"
+              label={gt("Edit with Agent")}
+            />
+          }
+        >
           <div className="flex min-w-0 flex-col gap-2 p-4 text-sm">
             <label>
               {gt("Always-on source text · {used} bytes against a {limit}-byte budget", {

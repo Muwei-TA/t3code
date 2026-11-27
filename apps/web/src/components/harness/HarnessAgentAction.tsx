@@ -1,5 +1,10 @@
 import { useAtomValue, useAtomRefresh } from "@effect/atom-react";
-import { type EnvironmentId, HarnessSkillId, TrimmedNonEmptyString } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type ProjectId,
+  HarnessSkillId,
+  TrimmedNonEmptyString,
+} from "@t3tools/contracts";
 import {
   squashAtomCommandFailure,
   isAtomCommandInterrupted,
@@ -33,12 +38,16 @@ const instructions = {
 export function HarnessAgentAction({
   environmentId,
   workspaceRoot,
+  projectId,
+  onThreadOpened,
   domain,
   label,
   skillId,
   onInstalled,
 }: {
   environmentId: EnvironmentId;
+  onThreadOpened?: (() => void) | undefined;
+  projectId?: ProjectId | null;
   workspaceRoot?: string | undefined;
   domain: keyof typeof instructions;
   label: string;
@@ -50,9 +59,11 @@ export function HarnessAgentAction({
   const projects = useProjects().filter(
     (project) => project.archivedAt == null && project.environmentId === environmentId,
   );
-  const project = workspaceRoot
-    ? projects.find((item) => item.workspaceRoot === workspaceRoot)
-    : projects[0];
+  const project = projectId
+    ? projects.find((item) => item.id === projectId)
+    : workspaceRoot
+      ? projects.find((item) => item.workspaceRoot === workspaceRoot)
+      : projects[0];
   const newThread = useNewThreadHandler();
   const installSkill = useAtomCommand(harnessEnvironment.installSkillPackage);
   const installPlugin = useAtomCommand(harnessEnvironment.installPlugin);
@@ -91,9 +102,13 @@ export function HarnessAgentAction({
       request.trim(),
     ].join("\n");
     setBusy(true);
-    await newThread({ environmentId, projectId: project.id }, { prompt }).finally(() =>
-      setBusy(false),
+    const thread = await newThread({ environmentId, projectId: project.id }, { prompt }).finally(
+      () => setBusy(false),
     );
+    if (thread) {
+      setOpen(false);
+      onThreadOpened?.();
+    }
   };
   const install = async () => {
     if (!path.trim() || (!plugin && id._tag === "None")) return;

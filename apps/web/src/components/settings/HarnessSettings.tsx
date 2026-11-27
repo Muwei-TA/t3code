@@ -12,6 +12,7 @@ import {
   AuthSettingsWriteScope,
   AuthTerminalOperateScope,
   type EnvironmentId,
+  type ProjectId,
   type HarnessMcpApplyImportsResult,
   type HarnessMcpApprovalPolicy,
   type HarnessMcpImportCandidate,
@@ -49,6 +50,7 @@ import { ensureLocalApi } from "../../localApi";
 import { harnessEnvironment } from "../../state/harness";
 import { useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { HarnessAgentAction } from "../harness/HarnessAgentAction";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import {
   AlertDialog,
@@ -220,7 +222,11 @@ function formatErrorMessage(error: unknown, fallback: string): string {
 export function EnvironmentHarnessMcpSection({
   environment,
   workspaceRoot,
+  projectId,
+  onThreadOpened,
 }: {
+  readonly onThreadOpened?: () => void;
+  readonly projectId?: ProjectId | null;
   readonly environment: EnvironmentPresentation;
   readonly workspaceRoot: string | undefined;
 }) {
@@ -562,16 +568,21 @@ export function EnvironmentHarnessMcpSection({
       <SettingsSection
         {...setting("harness-mcp")}
         headerAction={
-          canWriteSettings ? (
-            <div className="flex items-center gap-1.5">
-              <Button size="xs" variant="outline" onClick={() => void handleOpenImporter()}>
-                <DownloadIcon className="size-3" aria-hidden />
-                <T>Import from CLI</T>
-              </Button>
-              <details>
-                <summary className="cursor-pointer text-xs text-muted-foreground">
-                  <T>Manual configuration</T>
-                </summary>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <HarnessAgentAction
+              environmentId={environmentId}
+              workspaceRoot={workspaceRoot}
+              projectId={projectId ?? null}
+              onThreadOpened={onThreadOpened}
+              domain="tools"
+              label={gt("Add with Agent")}
+            />
+            {canWriteSettings ? (
+              <>
+                <Button size="xs" variant="outline" onClick={() => void handleOpenImporter()}>
+                  <DownloadIcon className="size-3" aria-hidden />
+                  <T>Import from CLI</T>
+                </Button>
                 <Button
                   size="xs"
                   variant="outline"
@@ -581,24 +592,12 @@ export function EnvironmentHarnessMcpSection({
                   <PlusIcon className="size-3" aria-hidden />
                   <T>Add MCP server</T>
                 </Button>
-              </details>
-            </div>
-          ) : null
+              </>
+            ) : null}
+          </div>
         }
       >
-        <div className="space-y-3 px-4 py-3">
-          <p className="text-xs text-muted-foreground">
-            <T>
-              Configure MCP servers once in{" "}
-              <code>
-                <Var>{snapshot?.configPath ?? "~/.t3/harness/harness.json"}</Var>
-              </code>{" "}
-              and reuse them across every provider through the isolated <code>/mcp/harness</code>{" "}
-              gateway. Use <code>{"${secret:NAME}"}</code> or{" "}
-              <code>{"${secret:provider:ref}"}</code> for credentials.
-            </T>
-          </p>
-
+        <div className="space-y-3 px-4 py-3 empty:hidden">
           {snapshot && !snapshot.managedPolicyAllowsHarness ? (
             <Alert variant="warning">
               <AlertTitle>
@@ -653,7 +652,7 @@ export function EnvironmentHarnessMcpSection({
           </h3>
         ) : null}
         {servers.length === 0 ? (
-          <div className="px-4 pb-4 text-sm text-muted-foreground">
+          <div className="px-4 py-4 text-sm text-muted-foreground">
             <T>
               No portable MCP servers configured yet. Add one manually or import existing servers
               from Codex, Claude, Cursor, or Antigravity without modifying their original files.
@@ -841,7 +840,11 @@ export function EnvironmentHarnessMcpSection({
                   {server.pluginId ? (
                     <Link
                       to="/harness"
-                      search={(previous) => ({ ...previous, tab: "skills" })}
+                      search={(previous) => ({
+                        ...previous,
+                        machine: environmentId,
+                        tab: "skills",
+                      })}
                       hash="harness-plugins"
                     >
                       {gt("Plugin: {id}", { id: server.pluginId })}
@@ -960,6 +963,22 @@ export function EnvironmentHarnessMcpSection({
             );
           })
         )}
+        <details className="px-4 py-2">
+          <summary className="cursor-pointer text-xs text-muted-foreground">
+            <T>Manual configuration</T>
+          </summary>
+          <p className="text-xs text-muted-foreground">
+            <T>
+              Configure MCP servers once in{" "}
+              <code>
+                <Var>{snapshot?.configPath ?? "~/.t3/harness/harness.json"}</Var>
+              </code>{" "}
+              and reuse them across every provider through the isolated <code>/mcp/harness</code>{" "}
+              gateway. Use <code>{"${secret:NAME}"}</code> or{" "}
+              <code>{"${secret:provider:ref}"}</code> for credentials.
+            </T>
+          </p>
+        </details>
       </SettingsSection>
 
       <Dialog

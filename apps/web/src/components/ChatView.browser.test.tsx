@@ -39,6 +39,7 @@ import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
 import { environmentThreadDetails } from "~/state/threads";
 import {
+  CODEX_PROVIDER,
   ENVIRONMENT_ID,
   PROJECT_ID,
   answerAssetUrls,
@@ -1090,4 +1091,38 @@ it("/side sends the draft's attachments and context, and keeps them when it does
       "/side what is this?",
     ]),
   );
+});
+
+it("opens MCP management with Enter and restores the draft and editor focus on Escape", async () => {
+  const thread = threadWithHistory("mcp-menu", 1);
+  using _environment = installFakeEnvironment([thread], {
+    providers: [{ ...CODEX_PROVIDER, slashCommands: [{ name: "mcp" }] }],
+  });
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, {
+    // AppRoot brings its own router.
+    router: false,
+  });
+  const editor = page.getByTestId("composer-editor");
+  await editor.click();
+  await insertText(" later");
+  await userEvent.keyboard("{Home}");
+  await insertText("/mcp");
+  await expect.element(page.getByRole("option", { name: /\/mcp/ })).toBeVisible();
+  await userEvent.keyboard("{Enter}");
+  const dialog = page.getByRole("dialog", { name: "Tools (MCP)" });
+  await expect.element(dialog.getByRole("button", { name: "Add with Agent" })).toBeVisible();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(dialog).not.toBeInTheDocument();
+  await expect.element(editor).toHaveFocus();
+  await insertText("ready");
+  await expect.element(editor).toHaveTextContent("ready later");
+  expect(router.state.location.pathname).toBe(`/${ENVIRONMENT_ID}/${thread.id}`);
 });
