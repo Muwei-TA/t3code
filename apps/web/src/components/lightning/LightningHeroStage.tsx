@@ -34,8 +34,10 @@ export function LightningHeroStage({ onScratch }: { onScratch: (() => void) | nu
     >
       <LightningCosmicBackdrop variant="hero" />
       <div className="relative z-10 my-auto flex w-full max-w-3xl flex-col items-center">
-        <div className="lightning-hero-emblem mb-5 grid size-13 place-items-center rounded-2xl">
-          <LightningAppIcon className="size-7" />
+        <div className="lightning-hero-emblem relative mb-5 grid size-14 place-items-center overflow-hidden rounded-2xl">
+          <span aria-hidden="true" className="lightning-brand-chip-grid" />
+          <LightningAppIcon className="lightning-brand-bolt relative z-10 size-8" />
+          <span aria-hidden="true" className="lightning-brand-chip-prism" />
         </div>
         <div className="lightning-eyebrow-pill mb-5 inline-flex items-center rounded-full px-3 py-1">
           <WorkspaceStatus hero />

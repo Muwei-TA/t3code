@@ -7,6 +7,7 @@ import { ComposerEnergyWave } from "./ComposerEnergyWave";
 import { LedMatrixIndicator } from "./LedMatrixIndicator";
 import { LightningCosmicBackdrop } from "./LightningCosmicBackdrop";
 import { LightningThinkingPill } from "./LightningThinkingPill";
+import { LightningWordmark } from "./LightningWordmark";
 import "~/index.css";
 
 const { add, scratch, available } = vi.hoisted(() => ({
@@ -48,18 +49,38 @@ it.each(["lightning", "classic"])("opens project actions in the %s shell", async
   );
 });
 
-it("keeps scratch unavailable and draws telemetry only while active", async () => {
+it("transitions composer telemetry across waiting, typing, sending, running, and voice states", async () => {
   available.mockReturnValue(null);
   await using screen = await render(
-    <>
+    <form data-chat-composer-form="true">
+      <div data-slot="composer-host">
+        <input aria-label="Prompt" />
+        <ComposerEnergyWave active={false} />
+      </div>
       <NoProjectsHero />
-      <ComposerEnergyWave active={false} />
-    </>,
+      <LightningWordmark />
+    </form>,
   );
-  expect(screen.container.querySelector(".lightning-energy-wave")).toBeNull();
+  expect(screen.container.querySelector("[data-lightning-energy-wave='waiting']")).not.toBeNull();
+  expect(screen.container.querySelector(".lightning-brand-chip")).not.toBeNull();
   await expect
     .element(screen.getByRole("button", { name: "Start without a project" }))
     .not.toBeInTheDocument();
+
+  // Typing transitions the composer capsule into typing telemetry.
+  const input = screen.container.querySelector("input")!;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await vi.waitFor(() =>
+    expect(screen.container.querySelector("[data-lightning-energy-wave='typing']")).not.toBeNull(),
+  );
+
+  // Send dispatch triggers the sending burst state and surge layer.
+  window.dispatchEvent(new Event("lightning:composer-send"));
+  await vi.waitFor(() => {
+    expect(screen.container.querySelector("[data-lightning-energy-wave='sending']")).not.toBeNull();
+    expect(screen.container.querySelector(".lightning-send-surge")).not.toBeNull();
+  });
+
   await screen.rerender(
     <>
       <LightningThinkingPill label="Thinking" />
@@ -85,6 +106,7 @@ it("pauses offscreen telemetry and respects reduced motion", async () => {
   );
   const matrix = screen.container.querySelector(".lightning-led-pattern")!;
   const waveBand = screen.container.querySelector(".lightning-wave-band-front")!;
+  const rim = screen.container.querySelector(".lightning-composer-rim-sweep")!;
   const session = cdp();
   try {
     await session.send("Emulation.setEmulatedMedia", {
@@ -92,15 +114,18 @@ it("pauses offscreen telemetry and respects reduced motion", async () => {
     });
     await vi.waitFor(() => expect(getComputedStyle(matrix).animationPlayState).toBe("running"));
     await vi.waitFor(() => expect(getComputedStyle(waveBand).animationPlayState).toBe("running"));
+    await vi.waitFor(() => expect(getComputedStyle(rim).animationPlayState).toBe("running"));
     screen.container.hidden = true;
     await vi.waitFor(() => expect(getComputedStyle(matrix).animationPlayState).toBe("paused"));
     await vi.waitFor(() => expect(getComputedStyle(waveBand).animationPlayState).toBe("paused"));
+    await vi.waitFor(() => expect(getComputedStyle(rim).animationPlayState).toBe("paused"));
     screen.container.hidden = false;
     await session.send("Emulation.setEmulatedMedia", {
       features: [{ name: "prefers-reduced-motion", value: "reduce" }],
     });
     expect(getComputedStyle(matrix).animationName).toBe("none");
     expect(getComputedStyle(waveBand).animationName).toBe("none");
+    expect(getComputedStyle(rim).animationName).toBe("none");
   } finally {
     await session.send("Emulation.setEmulatedMedia", { features: [] });
   }

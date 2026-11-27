@@ -2493,6 +2493,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
     setComposerSubmissionError(submission.validationMessage);
     if (!submission.didDispatch) return false;
+    window.dispatchEvent(new Event("lightning:composer-send"));
     onTypingGuardSend();
     if (shouldBlurMobileComposerOnSubmit()) {
       blurMobileComposerAfterSend();
@@ -4355,6 +4356,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             active={speechInput.state.phase === "recording" || phase === "running"}
             mode={speechInput.state.phase === "recording" ? "voice" : "running"}
             level={speechInput.level}
+            sending={isSendBusy}
           />
         </ComposerSurface.Main>
       </div>
