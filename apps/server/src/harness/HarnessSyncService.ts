@@ -1946,7 +1946,11 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                       }
                     }
                     const changes: PullChange[] = [];
-                    let packageBytes = 0;
+                    const finalSizes = new Map<string, number>();
+                    if (skill && previous) {
+                      for (const [name, file] of previous) finalSizes.set(name, file.bytes.length);
+                    }
+                    let incomingBytes = 0;
                     for (const path of paths) {
                       const base = pendingBases.get(path)!;
                       if (path === PORTABLE_MCP_FILE) continue;
@@ -2003,11 +2007,12 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                       let content: Buffer | null = null;
                       if (entry) {
                         const size = await runGit(repoDir, ["cat-file", "-s", entry.sha]);
-                        packageBytes += Number(size.stdout);
+                        const fileSize = Number(size.stdout);
+                        incomingBytes += fileSize;
                         if (
                           size.code !== 0 ||
-                          Number(size.stdout) > MAX_SYNC_FILE_BYTES ||
-                          (skill && (packageBytes > MAX_PACKAGE_BYTES || changes.length >= 512))
+                          fileSize > MAX_SYNC_FILE_BYTES ||
+                          (skill && incomingBytes > MAX_PACKAGE_BYTES)
                         ) {
                           skippedFiles.add(path);
                           continue;
@@ -2021,11 +2026,24 @@ export const makeLayer = (options?: { readonly allowLocalRemoteForTest?: boolean
                         }
                         content = blob.stdout;
                       }
+                      if (skill) {
+                        const relName = path.slice(group.length + 1);
+                        if (content === null) finalSizes.delete(relName);
+                        else finalSizes.set(relName, content.length);
+                      }
                       changes.push({
                         path,
                         content,
                         mode: skill && entry?.mode === "100755" ? 0o755 : 0o600,
                       });
+                    }
+                    if (skill) {
+                      let finalBytes = 0;
+                      for (const bytes of finalSizes.values()) finalBytes += bytes;
+                      if (finalSizes.size > 512 || finalBytes > MAX_PACKAGE_BYTES) {
+                        skipGroup(group, paths);
+                        return;
+                      }
                     }
                     if (
                       skill &&

@@ -4,7 +4,13 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { expect, it, vi } from "vite-plus/test";
 
-import { readContainedFile, replaceDirectory, safeWriteFileAtomic } from "./safeFileOps.ts";
+import {
+  readContainedFile,
+  recoverOrphanedReplace,
+  replaceDirectory,
+  safeRemoveFile,
+  safeWriteFileAtomic,
+} from "./safeFileOps.ts";
 
 vi.mock("node:fs/promises", { spy: true });
 
@@ -71,6 +77,35 @@ it("rejects a changed parent identity, removes temporary files and restores a fa
     expect(await NodeFSP.readFile(file, "utf8")).toBe("previous");
     expect(await NodeFSP.readdir(root)).toEqual(["package"]);
     expect(await NodeFSP.readdir(target)).toEqual(["keep"]);
+  } finally {
+    await NodeFSP.rm(root, { recursive: true, force: true });
+  }
+});
+
+it("accepts case-insensitive directory aliases and recovers orphaned install backups", async () => {
+  const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "harness-case-recover-"));
+  try {
+    const sub = NodePath.join(root, "SubDir");
+    await NodeFSP.mkdir(sub);
+    const lowerSub = NodePath.join(root, "subdir");
+    const isCaseInsensitive = await NodeFSP.lstat(lowerSub).then(
+      () => true,
+      () => false,
+    );
+    if (isCaseInsensitive) {
+      const target = NodePath.join(lowerSub, "note.txt");
+      await safeWriteFileAtomic(root, target, "ok");
+      await safeRemoveFile(root, target);
+      expect(await NodeFSP.readdir(sub)).toEqual([]);
+    }
+    const orphanStage = NodePath.join(root, ".install-my-skill-abc123");
+    await NodeFSP.mkdir(NodePath.join(orphanStage, "old"), { recursive: true });
+    await NodeFSP.writeFile(NodePath.join(orphanStage, "old", "SKILL.md"), "restored");
+    await recoverOrphanedReplace(root, root);
+    expect(await NodeFSP.readFile(NodePath.join(root, "my-skill", "SKILL.md"), "utf8")).toBe(
+      "restored",
+    );
+    expect(await NodeFSP.readdir(root)).not.toContain(".install-my-skill-abc123");
   } finally {
     await NodeFSP.rm(root, { recursive: true, force: true });
   }

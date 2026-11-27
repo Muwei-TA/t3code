@@ -44,17 +44,20 @@ import * as HarnessStore from "./HarnessStore.ts";
 import {
   assertContainedNoSymlinks,
   readContainedFile,
+  recoverOrphanedReplace,
   safeWriteFileAtomic,
 } from "./safeFileOps.ts";
 import * as PluginHost from "./PluginHost.ts";
 
 import {
   MAX_PACKAGE_BYTES,
+  acquireSkillsDirRead,
   listPackageFiles,
   loadPackage,
   readPackageFile,
   packageDigest,
   replacePackage,
+  withSkillsDirRead,
   withSkillWrites,
 } from "./skillPackage.ts";
 
@@ -486,42 +489,52 @@ const make = Effect.gen(function* () {
   };
 
   const directoryFingerprint = async (directory: string, containmentRoot?: string) => {
-    if (
-      containmentRoot &&
-      !(await assertContainedNoSymlinks(containmentRoot, directory).then(
-        () => true,
-        () => false,
-      ))
-    )
-      return [];
-    const entries = await NodeFSP.readdir(directory).catch(() => []);
-    return [
-      await fileFingerprint(directory),
-      ...(await Promise.all(
-        entries.toSorted().map(async (name) => {
-          const item = path.join(directory, name);
-          if (containmentRoot) {
-            if (
-              name.startsWith(".") ||
-              !(await assertContainedNoSymlinks(containmentRoot, path.join(item, "SKILL.md")).then(
-                () => true,
-                () => false,
-              ))
-            )
-              return [name];
-            return [
-              name,
-              await fileFingerprint(item),
-              await fileFingerprint(path.join(item, "SKILL.md")),
-              await listPackageFiles(item, MAX_COMPANION_FILES + 1, containmentRoot).catch(
-                () => null,
-              ),
-            ];
-          }
-          return name.endsWith(".md") ? [name, await fileFingerprint(item)] : [name];
-        }),
-      )),
-    ];
+    const release = containmentRoot ? await acquireSkillsDirRead(containmentRoot, directory) : null;
+    try {
+      if (containmentRoot) {
+        if (
+          !(await assertContainedNoSymlinks(containmentRoot, directory).then(
+            () => true,
+            () => false,
+          ))
+        )
+          return [];
+        await recoverOrphanedReplace(containmentRoot, directory).catch(() => {});
+      }
+      const entries = await NodeFSP.readdir(directory).catch(() => []);
+      return [
+        await fileFingerprint(directory),
+        ...(await Promise.all(
+          entries.toSorted().map(async (name) => {
+            const item = path.join(directory, name);
+            if (containmentRoot) {
+              if (
+                name.startsWith(".") ||
+                !(await assertContainedNoSymlinks(
+                  containmentRoot,
+                  path.join(item, "SKILL.md"),
+                ).then(
+                  () => true,
+                  () => false,
+                ))
+              )
+                return [name];
+              return [
+                name,
+                await fileFingerprint(item),
+                await fileFingerprint(path.join(item, "SKILL.md")),
+                await listPackageFiles(item, MAX_COMPANION_FILES + 1, containmentRoot).catch(
+                  () => null,
+                ),
+              ];
+            }
+            return name.endsWith(".md") ? [name, await fileFingerprint(item)] : [name];
+          }),
+        )),
+      ];
+    } finally {
+      release?.();
+    }
   };
 
   const libraryFingerprint = async (workspaceRoot: string | null) => {
@@ -640,98 +653,113 @@ const make = Effect.gen(function* () {
     readonly skillsDir: string;
     readonly invalidEntries: Array<HarnessInvalidEntry>;
   }) {
-    const entries = yield* fs.readDirectory(input.skillsDir).pipe(Effect.orElseSucceed(() => []));
-    const out: Array<
-      Omit<HarnessSkillEntry, "effectiveEnabled" | "overriddenByProject"> & {
-        readonly frontmatterEnabled: boolean;
-      }
-    > = [];
-    for (const rawDirName of entries) {
-      if (rawDirName.startsWith(".")) continue;
-      const skillDir = path.join(input.skillsDir, rawDirName);
-      const stat = yield* fs.stat(skillDir).pipe(Effect.option);
-      if (Option.isNone(stat) || stat.value.type !== "Directory") continue;
-      const decodedId = decodeSkillId(rawDirName);
-      if (Option.isNone(decodedId)) {
-        input.invalidEntries.push({
-          source: skillDir,
-          id: rawDirName,
-          message: `Skill directory "${rawDirName}" is not a valid skill identifier and was skipped.`,
-        });
-        continue;
-      }
-      const skillFilePath = path.join(skillDir, "SKILL.md");
-      const safe = yield* Effect.promise(() =>
-        assertContainedNoSymlinks(input.containmentRoot, skillFilePath).then(
-          () => true,
-          () => false,
-        ),
-      );
-      if (!safe) {
-        input.invalidEntries.push({
-          source: skillFilePath,
-          id: decodedId.value,
-          message: "Unsafe skill manifest path.",
-        });
-        continue;
-      }
-      const loaded = yield* readBoundedContainedFile(input.containmentRoot, skillFilePath);
-      if (Option.isNone(loaded)) continue;
-      const parsed = parseMarkdownFrontmatter(loaded.value.text);
-      if (parsed.malformed) {
-        input.invalidEntries.push({
-          source: loaded.value.realPath,
-          id: decodedId.value,
-          message: `Skill "${decodedId.value}" has malformed YAML frontmatter and was skipped.`,
-        });
-        continue;
-      }
-      const fm = parsed.frontmatter ?? {};
-      const rawName = typeof fm.name === "string" ? fm.name.trim() : "";
-      const name = TrimmedNonEmptyString.make(rawName.length > 0 ? rawName : decodedId.value);
-      const description =
-        typeof fm.description === "string" && fm.description.trim().length > 0
-          ? fm.description.trim()
-          : undefined;
-      const shortDescription =
-        typeof fm["short-description"] === "string" && fm["short-description"].trim().length > 0
-          ? fm["short-description"].trim()
-          : undefined;
-      const userInvocable = parseBool(fm["user-invocable"]) ?? true;
-      const userInvocationOnly = parseBool(fm["disable-model-invocation"]) ?? false;
-      const frontmatterEnabled = parseBool(fm.enabled) ?? true;
-      const listing = yield* Effect.promise(async () => {
-        try {
-          await assertContainedNoSymlinks(input.containmentRoot, skillDir);
-          return await listPackageFiles(skillDir, MAX_COMPANION_FILES + 1, input.containmentRoot);
-        } catch {
-          return { files: [], truncated: true };
+    return yield* withSkillsDirRead(
+      input.containmentRoot,
+      input.skillsDir,
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          recoverOrphanedReplace(input.containmentRoot, input.skillsDir).catch(() => {}),
+        );
+        const entries = yield* fs
+          .readDirectory(input.skillsDir)
+          .pipe(Effect.orElseSucceed(() => []));
+        const out: Array<
+          Omit<HarnessSkillEntry, "effectiveEnabled" | "overriddenByProject"> & {
+            readonly frontmatterEnabled: boolean;
+          }
+        > = [];
+        for (const rawDirName of entries) {
+          if (rawDirName.startsWith(".")) continue;
+          const skillDir = path.join(input.skillsDir, rawDirName);
+          const stat = yield* fs.stat(skillDir).pipe(Effect.option);
+          if (Option.isNone(stat) || stat.value.type !== "Directory") continue;
+          const decodedId = decodeSkillId(rawDirName);
+          if (Option.isNone(decodedId)) {
+            input.invalidEntries.push({
+              source: skillDir,
+              id: rawDirName,
+              message: `Skill directory "${rawDirName}" is not a valid skill identifier and was skipped.`,
+            });
+            continue;
+          }
+          const skillFilePath = path.join(skillDir, "SKILL.md");
+          const safe = yield* Effect.promise(() =>
+            assertContainedNoSymlinks(input.containmentRoot, skillFilePath).then(
+              () => true,
+              () => false,
+            ),
+          );
+          if (!safe) {
+            input.invalidEntries.push({
+              source: skillFilePath,
+              id: decodedId.value,
+              message: "Unsafe skill manifest path.",
+            });
+            continue;
+          }
+          const loaded = yield* readBoundedContainedFile(input.containmentRoot, skillFilePath);
+          if (Option.isNone(loaded)) continue;
+          const parsed = parseMarkdownFrontmatter(loaded.value.text);
+          if (parsed.malformed) {
+            input.invalidEntries.push({
+              source: loaded.value.realPath,
+              id: decodedId.value,
+              message: `Skill "${decodedId.value}" has malformed YAML frontmatter and was skipped.`,
+            });
+            continue;
+          }
+          const fm = parsed.frontmatter ?? {};
+          const rawName = typeof fm.name === "string" ? fm.name.trim() : "";
+          const name = TrimmedNonEmptyString.make(rawName.length > 0 ? rawName : decodedId.value);
+          const description =
+            typeof fm.description === "string" && fm.description.trim().length > 0
+              ? fm.description.trim()
+              : undefined;
+          const shortDescription =
+            typeof fm["short-description"] === "string" && fm["short-description"].trim().length > 0
+              ? fm["short-description"].trim()
+              : undefined;
+          const userInvocable = parseBool(fm["user-invocable"]) ?? true;
+          const userInvocationOnly = parseBool(fm["disable-model-invocation"]) ?? false;
+          const frontmatterEnabled = parseBool(fm.enabled) ?? true;
+          const listing = yield* Effect.promise(async () => {
+            try {
+              await assertContainedNoSymlinks(input.containmentRoot, skillDir);
+              return await listPackageFiles(
+                skillDir,
+                MAX_COMPANION_FILES + 1,
+                input.containmentRoot,
+              );
+            } catch {
+              return { files: [], truncated: true };
+            }
+          });
+          out.push({
+            files: listing.files,
+            companionTruncated: listing.truncated,
+            id: decodedId.value,
+            name,
+            scope: input.scope,
+            ...(description !== undefined ? { description } : {}),
+            ...(shortDescription !== undefined ? { shortDescription } : {}),
+            userInvocable,
+            userInvocationOnly,
+            enabled: frontmatterEnabled,
+            frontmatterEnabled,
+            sourcePath: loaded.value.realPath,
+            contentDigest: sha256Hex(loaded.value.text),
+            bytes: utf8Bytes(loaded.value.text),
+            body: parsed.body,
+            origin: {
+              kind: input.scope,
+              source: input.scope === "project" ? ".agents/skills" : "harness",
+              sourcePath: loaded.value.realPath,
+            },
+          });
         }
-      });
-      out.push({
-        files: listing.files,
-        companionTruncated: listing.truncated,
-        id: decodedId.value,
-        name,
-        scope: input.scope,
-        ...(description !== undefined ? { description } : {}),
-        ...(shortDescription !== undefined ? { shortDescription } : {}),
-        userInvocable,
-        userInvocationOnly,
-        enabled: frontmatterEnabled,
-        frontmatterEnabled,
-        sourcePath: loaded.value.realPath,
-        contentDigest: sha256Hex(loaded.value.text),
-        bytes: utf8Bytes(loaded.value.text),
-        body: parsed.body,
-        origin: {
-          kind: input.scope,
-          source: input.scope === "project" ? ".agents/skills" : "harness",
-          sourcePath: loaded.value.realPath,
-        },
-      });
-    }
-    return out;
+        return out;
+      }),
+    );
   });
 
   const loadRulesFromDir = Effect.fn("HarnessLibraryStore.loadRulesFromDir")(function* (input: {

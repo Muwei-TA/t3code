@@ -16,26 +16,72 @@ export const MAX_PACKAGE_BYTES = 8 * MAX_FILE_BYTES;
 const MAX_FILES = 512;
 
 const skillWrites = new Map<string, Promise<void>>();
+const skillsDirReaders = new Map<string, Set<Promise<void>>>();
+
+function normalizeLockKey(value: string) {
+  return value.normalize("NFC").toLowerCase();
+}
 
 // Reserve all keys together, including directories temporarily absent during replacement.
 export async function acquireSkillWrites(root: string, directories: readonly string[]) {
   const keys = new Set<string>();
+  const parentKeys = new Set<string>();
   for (const dir of directories) {
     const { resolvedTarget: parent } = await assertContainedNoSymlinks(
       root,
       NodePath.dirname(dir),
       { createRoot: true },
     );
-    keys.add(NodePath.join(parent, NodePath.basename(dir)).normalize("NFC").toLowerCase());
+    parentKeys.add(normalizeLockKey(parent));
+    keys.add(normalizeLockKey(NodePath.join(parent, NodePath.basename(dir))));
   }
   const previous = [...keys].map((key) => skillWrites.get(key));
   const next = Promise.withResolvers<void>();
   for (const key of keys) skillWrites.set(key, next.promise);
   await Promise.all(previous);
+  const activeReaders = [...parentKeys].flatMap((parentKey) => [
+    ...(skillsDirReaders.get(parentKey) ?? []),
+  ]);
+  if (activeReaders.length > 0) await Promise.all(activeReaders);
   return () => {
     for (const key of keys) if (skillWrites.get(key) === next.promise) skillWrites.delete(key);
     next.resolve();
   };
+}
+
+export async function acquireSkillsDirRead(root: string, skillsDir: string) {
+  const resolved = await assertContainedNoSymlinks(root, skillsDir).catch(() => null);
+  const parentKey = normalizeLockKey(resolved?.resolvedTarget ?? NodePath.resolve(skillsDir));
+  const prefix = parentKey.endsWith(NodePath.sep) ? parentKey : `${parentKey}${NodePath.sep}`;
+  while (true) {
+    const writers: Array<Promise<void>> = [];
+    for (const [key, promise] of skillWrites) {
+      if (key === parentKey || key.startsWith(prefix)) writers.push(promise);
+    }
+    if (writers.length === 0) break;
+    await Promise.all(writers);
+  }
+  const reader = Promise.withResolvers<void>();
+  const bucket = skillsDirReaders.get(parentKey) ?? new Set<Promise<void>>();
+  bucket.add(reader.promise);
+  skillsDirReaders.set(parentKey, bucket);
+  return () => {
+    bucket.delete(reader.promise);
+    if (bucket.size === 0) skillsDirReaders.delete(parentKey);
+    reader.resolve();
+  };
+}
+
+export function withSkillsDirRead<A, E, R>(
+  root: string,
+  skillsDir: string,
+  use: Effect.Effect<A, E, R>,
+) {
+  return Effect.acquireUseRelease(
+    Effect.promise(() => acquireSkillsDirRead(root, skillsDir)),
+    () => use,
+    (release) => Effect.sync(release),
+  );
 }
 
 export function withSkillWrites<A, E, R>(

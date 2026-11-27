@@ -851,6 +851,50 @@ describe("HarnessSyncService", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("allows moving 511 companion files when the final skill package has 512 files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const paths = yield* ServerConfig.deriveServerPaths(root, undefined);
+      const remote = path.join(root, "remote.git");
+      const clone = path.join(root, "clone");
+      yield* Effect.promise(() => execGit(root, ["init", "--bare", "-b", "main", remote]));
+      yield* Effect.promise(() => execGit(root, ["clone", remote, clone]));
+      const skillDir = path.join(clone, "skills", "bulk");
+      yield* fs.makeDirectory(path.join(skillDir, "a"), { recursive: true });
+      yield* fs.writeFileString(path.join(skillDir, "SKILL.md"), "---\nname: Bulk\n---\nBody\n");
+      for (let i = 0; i < 511; i += 1) {
+        yield* fs.writeFileString(path.join(skillDir, "a", `f-${i}.md`), `v${i}\n`);
+      }
+      const push = Effect.promise(async () => {
+        await execGit(clone, ["add", "-A"]);
+        await commit(clone, "Bulk package");
+        await execGit(clone, ["push", "origin", "main"]);
+      });
+      yield* push;
+      yield* Effect.gen(function* () {
+        const sync = yield* HarnessSyncService.HarnessSyncService;
+        yield* sync.configureRemote({ remoteUrl: TrimmedNonEmptyString.make(remote) });
+        const initial = yield* sync.pull();
+        expect(initial.skippedFiles).toBeUndefined();
+        yield* fs.remove(path.join(skillDir, "a"), { recursive: true });
+        yield* fs.makeDirectory(path.join(skillDir, "b"), { recursive: true });
+        for (let i = 0; i < 511; i += 1) {
+          yield* fs.writeFileString(path.join(skillDir, "b", `f-${i}.md`), `v${i}\n`);
+        }
+        yield* push;
+        const moved = yield* sync.pull();
+        expect(moved.skippedFiles).toBeUndefined();
+        expect(moved.conflicts).toBeUndefined();
+        expect(moved.updatedFiles.length).toBe(1022);
+        const localSkill = path.join(paths.harnessDir, "skills", "bulk");
+        expect(yield* fs.exists(path.join(localSkill, "b", "f-510.md"))).toBe(true);
+        expect(yield* fs.exists(path.join(localSkill, "a"))).toBe(false);
+      }).pipe(Effect.provide(makeTestLayer(root, paths)));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("uses the pushed resolution as the base for the next pull", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

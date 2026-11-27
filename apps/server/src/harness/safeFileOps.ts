@@ -83,6 +83,7 @@ async function withFileHandles<A>(use: (handles: NodeFSP.FileHandle[]) => Promis
 async function pinDirectory(path: string, handles: NodeFSP.FileHandle[]) {
   const before = await NodeFSP.lstat(path);
   if (!before.isDirectory()) throw new Error("Expected a non-symlink directory.");
+  const canonical = await NodeFSP.realpath(path);
   const handle = await NodeFSP.open(
     path,
     NodeFS.constants.O_RDONLY |
@@ -95,7 +96,10 @@ async function pinDirectory(path: string, handles: NodeFSP.FileHandle[]) {
   if (!opened.isDirectory() || !sameFile(before, opened))
     throw new Error("Directory changed while opening.");
   return async () => {
-    if (!sameFile(opened, await NodeFSP.lstat(path)) || (await NodeFSP.realpath(path)) !== path)
+    if (
+      !sameFile(opened, await NodeFSP.lstat(path)) ||
+      (await NodeFSP.realpath(path)) !== canonical
+    )
       throw new Error("Directory changed during file operation.");
   };
 }
@@ -276,16 +280,40 @@ export async function safeRemoveFile(rootDir: string, targetPath: string): Promi
   });
 }
 
+export async function recoverOrphanedReplace(root: string, parentDir: string): Promise<void> {
+  const existingParent = await statIfPresent(parentDir);
+  if (!existingParent || existingParent.isSymbolicLink() || !existingParent.isDirectory()) return;
+  const { resolvedTarget: safeParent } = await assertContainedNoSymlinks(root, parentDir);
+  const entries = await NodeFSP.readdir(safeParent, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(".install-")) continue;
+    const match = /^\.install-([a-z0-9][a-z0-9._-]*)-[^-]+$/iu.exec(entry.name);
+    if (!match?.[1]) continue;
+    const stageDir = NodePath.join(safeParent, entry.name);
+    const oldDir = NodePath.join(stageDir, "old");
+    const targetDir = NodePath.join(safeParent, match[1]);
+    const oldStat = await statIfPresent(oldDir);
+    if (!oldStat || oldStat.isSymbolicLink() || !oldStat.isDirectory()) continue;
+    if ((await statIfPresent(targetDir)) !== null) continue;
+    await assertContainedNoSymlinks(root, oldDir);
+    await assertContainedNoSymlinks(root, targetDir);
+    await NodeFSP.rename(oldDir, targetDir).catch(() => {});
+    await NodeFSP.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 export async function replaceDirectory(
   root: string,
   target: string,
   createOnly: boolean,
   populate: (staged: string) => Promise<void>,
-  verifyPrevious?: (backup: string) => Promise<void>,
+  verifyPrevious?: (previous: string) => Promise<void>,
 ) {
   return withFileHandles(async (handles) => {
     const { parent, resolvedTarget, verify } = await pinParent(root, target, true, handles);
-    const stage = await NodeFSP.mkdtemp(NodePath.join(parent, ".install-"));
+    const stage = await NodeFSP.mkdtemp(
+      NodePath.join(parent, `.install-${NodePath.basename(resolvedTarget)}-`),
+    );
     const verifyStage = await pinDirectory(stage, handles);
     const check = async () => {
       await verify();
@@ -303,21 +331,18 @@ export async function replaceDirectory(
         await check();
         await verifyNew();
         await assertContainedNoSymlinks(root, resolvedTarget);
+        const existing = await statIfPresent(resolvedTarget);
         if (createOnly) {
-          if (await statIfPresent(resolvedTarget))
-            throw new Error("Package id is already installed.");
+          if (existing) throw new Error("Package id is already installed.");
+        } else if (existing === null) {
+          if (verifyPrevious) throw new Error("Expected existing target directory.");
         } else {
-          try {
-            await NodeFSP.rename(resolvedTarget, backup);
-            backedUp = true;
-          } catch (error) {
-            if (verifyPrevious || !isEnoent(error)) throw error;
-          }
+          if (verifyPrevious) await verifyPrevious(resolvedTarget);
           await check();
-          if (verifyPrevious) await verifyPrevious(backup);
+          await verifyNew();
+          await NodeFSP.rename(resolvedTarget, backup);
+          backedUp = true;
         }
-        await check();
-        await verifyNew();
         await NodeFSP.rename(staged, resolvedTarget);
         backedUp = false;
         await check();
