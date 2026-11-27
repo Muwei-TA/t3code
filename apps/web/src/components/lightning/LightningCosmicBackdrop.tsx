@@ -2,6 +2,7 @@ import { use, useEffect, useRef } from "react";
 import { observeResize } from "~/lib/observeResize";
 import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { paintOrbit, releaseWarp } from "./galaxy";
+import { registerPointerSurface } from "./pointerInteractive";
 import { LightningShell } from "./shell";
 
 export function LightningCosmicBackdrop({ variant = "hero" }: { variant?: "hero" | "draft" }) {
@@ -56,34 +57,7 @@ export function LightningCosmicBackdrop({ variant = "hero" }: { variant?: "hero"
     });
 
     const moving = () => host.style.getPropertyValue("--visible-animation-state") === "running";
-    let pointerFrame = 0;
-    let x = 0;
-    let y = 0;
-    const reset = () => {
-      cancelAnimationFrame(pointerFrame);
-      pointerFrame = 0;
-      host.style.removeProperty("--orbit-dx");
-      host.style.removeProperty("--orbit-dy");
-      host.removeAttribute("data-orbit-focus");
-    };
-    const follow = (event: PointerEvent) => {
-      if (event.pointerType === "touch" || !moving()) return;
-      x = event.clientX;
-      y = event.clientY;
-      if (pointerFrame) return;
-      pointerFrame = requestAnimationFrame(() => {
-        pointerFrame = 0;
-        const rect = host.getBoundingClientRect();
-        if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-          reset();
-          return;
-        }
-        host.setAttribute("data-orbit-focus", "");
-        host.style.setProperty("--orbit-dx", String((x - rect.left) / rect.width - 0.5));
-        host.style.setProperty("--orbit-dy", String((y - rect.top) / rect.height - 0.5));
-      });
-    };
-
+    const stopPointerSurface = registerPointerSurface(host);
     let coast: number | undefined;
     const onTyping = () => {
       if (!moving()) return;
@@ -101,21 +75,15 @@ export function LightningCosmicBackdrop({ variant = "hero" }: { variant?: "hero"
       if (moving()) releaseWarp(host, anchor);
     };
 
-    window.addEventListener("pointermove", follow, { passive: true });
-    document.documentElement.addEventListener("pointerleave", reset);
-    window.addEventListener("blur", reset);
     window.addEventListener("lightning:composer-typing", onTyping);
     window.addEventListener("lightning:composer-send", onSend);
     return () => {
-      reset();
+      stopPointerSurface?.();
       window.clearTimeout(coast);
       theme.disconnect();
       stopResize();
       stopAnchor?.();
       stopVisibility?.();
-      window.removeEventListener("pointermove", follow);
-      document.documentElement.removeEventListener("pointerleave", reset);
-      window.removeEventListener("blur", reset);
       window.removeEventListener("lightning:composer-typing", onTyping);
       window.removeEventListener("lightning:composer-send", onSend);
     };
@@ -129,6 +97,8 @@ export function LightningCosmicBackdrop({ variant = "hero" }: { variant?: "hero"
       data-lightning-cosmic-backdrop={variant}
       className="lightning-cosmic-backdrop pointer-events-none absolute inset-0 overflow-hidden select-none"
     >
+      <div className="lightning-zenith-beam" />
+      <div className="lightning-horizon-arc" />
       <div className="lightning-orbit-plane">
         <canvas ref={discRef} className="lightning-orbit-disc" />
         <canvas ref={coreRef} className="lightning-orbit-core" />

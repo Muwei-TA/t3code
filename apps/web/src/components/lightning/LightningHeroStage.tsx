@@ -17,6 +17,7 @@ import { observeVisibleAnimation } from "../../lib/visibleAnimation";
 import { Button } from "../ui/button";
 import { LightningHardwareBadge } from "./LightningAppIcon";
 import { LightningCosmicBackdrop } from "./LightningCosmicBackdrop";
+import { registerPointerSurface } from "./pointerInteractive";
 import { WorkspaceStatus } from "./WorkspaceStatus";
 
 export function LightningHeroStage({ onScratch }: { onScratch: (() => void) | null }) {
@@ -51,7 +52,14 @@ export function LightningHeroStage({ onScratch }: { onScratch: (() => void) | nu
         </p>
 
         <div
-          ref={observeVisibleAnimation}
+          ref={(node) => {
+            const stopVisibility = observeVisibleAnimation(node);
+            const stopPointerSurface = registerPointerSurface(node);
+            return () => {
+              stopVisibility?.();
+              stopPointerSurface?.();
+            };
+          }}
           className="lightning-hero-capsule-moat mt-9 w-full max-w-2xl"
         >
           <div className="lightning-hero-capsule relative flex flex-col overflow-hidden text-left">
@@ -65,6 +73,7 @@ export function LightningHeroStage({ onScratch }: { onScratch: (() => void) | nu
               </span>
               <span
                 aria-hidden="true"
+                data-lightning-launch=""
                 className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-transform group-hover:scale-105"
               >
                 <ArrowUpIcon className="size-4 stroke-2" />
@@ -98,6 +107,7 @@ export function LightningHeroStage({ onScratch }: { onScratch: (() => void) | nu
         </div>
 
         <nav
+          data-lightning-card-grid=""
           aria-label={gt("Workspace")}
           className="mt-7 grid w-full max-w-2xl grid-cols-1 gap-2.5 sm:grid-cols-2"
         >

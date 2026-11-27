@@ -516,7 +516,9 @@ html[data-theme-id="lightning"]
   }
 }
 
-html[data-theme-id="lightning"] [data-ui-shell="lightning"] [data-slot="composer-host"]::after {
+html[data-theme-id="lightning"]
+  [data-ui-shell="lightning"]
+  [data-slot="composer-host"]:not([data-lightning-pointer])::after {
   display: none;
 }
 
@@ -1131,5 +1133,202 @@ html[data-theme-id="lightning"]
   .lightning-thinking-text,
   .lightning-wordmark-glow {
     background-position: 50% 0;
+  }
+}
+
+.lightning-zenith-beam,
+.lightning-horizon-arc {
+  position: absolute;
+  pointer-events: none;
+  left: 50%;
+  translate: -50% 0;
+  color: var(--orbit-ice);
+}
+.lightning-zenith-beam {
+  top: -14%;
+  width: 82%;
+  height: 68%;
+  background: conic-gradient(
+    from 158deg at 50% 0%,
+    transparent,
+    currentColor 23deg,
+    transparent 46deg
+  );
+  mask-image: linear-gradient(to bottom, black, transparent);
+  opacity: 0.1;
+}
+.lightning-horizon-arc {
+  top: 75%;
+  width: 136%;
+  height: 52%;
+  border-top: 1px solid currentColor;
+  border-radius: 50%;
+  mask-image: radial-gradient(ellipse at 50% 0%, black, transparent 67%);
+  opacity: 0.22;
+}
+
+@media (any-hover: hover) {
+  [data-lightning-pointer] {
+    --pointer-silver: color-mix(in srgb, var(--color-slate-100) 67%, transparent);
+    --pointer-indigo: color-mix(in srgb, var(--color-indigo-300) 46%, transparent);
+    --pointer-amber: color-mix(in srgb, var(--color-amber-300) 27%, transparent);
+    --pointer-rim: radial-gradient(
+      128px circle at var(--lx) var(--ly),
+      var(--pointer-silver),
+      var(--pointer-indigo) 43%,
+      var(--pointer-amber) 72%,
+      transparent
+    );
+    @variant light {
+      --pointer-silver: color-mix(in srgb, var(--color-slate-700) 56%, transparent);
+      --pointer-indigo: color-mix(in srgb, var(--color-blue-500) 34%, transparent);
+      --pointer-amber: color-mix(in srgb, var(--color-stone-500) 24%, transparent);
+    }
+  }
+
+  :is(
+    [data-lightning-pointer="capsule"],
+    [data-lightning-pointer="details"],
+    [data-lightning-pointer="card"],
+    [data-lightning-pointer="row"]
+  ) {
+    position: relative;
+  }
+
+  :is(
+    [data-lightning-pointer="capsule"],
+    [data-lightning-pointer="card"],
+    [data-lightning-pointer="details"]
+  )::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    border-radius: inherit;
+    padding: 1px;
+    background: var(--pointer-rim);
+    mask:
+      linear-gradient(white 0 0) content-box,
+      linear-gradient(white 0 0);
+    mask-composite: exclude;
+  }
+  [data-lightning-pointer="capsule"]::after {
+    padding: 2px;
+  }
+  [data-lightning-pointer="capsule"] .lightning-composer-rim-sweep {
+    background-image: var(--pointer-rim);
+  }
+  [data-lightning-pointer="details"]::after {
+    background:
+      linear-gradient(90deg, transparent, var(--pointer-silver), transparent) calc(var(--lx) - 70px)
+        0 / 140px 1px no-repeat,
+      var(--pointer-rim);
+  }
+  [data-lightning-pointer="magnet"] {
+    box-shadow:
+      0 0 0 1px var(--pointer-silver),
+      0 0 7px var(--pointer-indigo);
+  }
+  [data-lightning-pointer="badge"] {
+    border-color: var(--pointer-silver);
+  }
+  [data-lightning-pointer="row"] {
+    --sidebar-row-hover: transparent;
+    background-image: radial-gradient(
+      ellipse 105px 95% at var(--lx) var(--ly),
+      color-mix(in srgb, var(--foreground) 5%, transparent),
+      transparent
+    );
+  }
+  [data-lightning-pointer="row"]::after {
+    content: "";
+    pointer-events: none;
+    position: absolute;
+    inset: 12% auto 12% 0;
+    width: 2px;
+    border-radius: 2px;
+    background: linear-gradient(
+      180deg,
+      transparent,
+      var(--pointer-silver) 35%,
+      var(--pointer-indigo) 75%,
+      transparent
+    );
+  }
+}
+
+@media (any-hover: hover) and (prefers-reduced-motion: no-preference) {
+  .lightning-zenith-beam,
+  .lightning-horizon-arc {
+    transition: transform 480ms cubic-bezier(0.2, 0.72, 0.26, 1);
+  }
+  .lightning-zenith-beam {
+    transform: translateX(calc(var(--orbit-dx, 0) * 32px));
+  }
+  .lightning-horizon-arc {
+    transform: translateX(calc(var(--orbit-dx, 0) * -32px));
+  }
+  html[data-lightning-pointer-enabled]
+    :is(.lightning-brand-chip, .lightning-hardware-card, [data-theme-library-card]) {
+    transition:
+      transform 240ms cubic-bezier(0.2, 0.85, 0.3, 1.12),
+      border-color 160ms ease,
+      background-color 160ms ease;
+  }
+  :is([data-lightning-pointer="badge"], [data-lightning-pointer="card"]) {
+    transform: perspective(720px) rotateX(var(--tilt-x)) rotateY(var(--tilt-y));
+  }
+  [data-lightning-pointer="badge"] .lightning-brand-chip-grid::after,
+  [data-lightning-pointer="card"]::before {
+    content: "";
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+  }
+  [data-lightning-pointer="badge"] .lightning-brand-chip-grid::after {
+    background: linear-gradient(
+        115deg,
+        transparent 30%,
+        var(--pointer-indigo) 45%,
+        var(--pointer-silver) 50%,
+        transparent 62%
+      )
+      calc(var(--lx) - 50px) center / 100px 100% no-repeat;
+    opacity: 0.56;
+  }
+  [data-lightning-pointer="badge"] .lightning-brand-bolt {
+    filter: brightness(1.12) drop-shadow(0 0 3px var(--color-amber-500));
+  }
+  [data-lightning-pointer="card"]::before {
+    z-index: 1;
+    background: radial-gradient(
+      128px circle at var(--lx) var(--ly),
+      color-mix(in srgb, var(--foreground) 5%, transparent),
+      transparent
+    );
+  }
+  html[data-lightning-pointer-enabled]
+    :is([data-lightning-launch], [data-slot="composer-host"] button.rounded-full[aria-label]) {
+    transition-property: translate, scale, box-shadow, background-color, opacity;
+    transition-duration: 150ms;
+  }
+  [data-lightning-pointer="magnet"] {
+    translate: var(--mag-x) var(--mag-y);
+  }
+  [data-lightning-pointer="magnet"]:active,
+  button:active > [data-lightning-launch][data-lightning-pointer="magnet"] {
+    scale: 0.94;
+  }
+}
+
+@media (any-hover: hover) and (prefers-reduced-motion: reduce) {
+  [data-lightning-pointer="magnet"],
+  button:hover > [data-lightning-launch] {
+    scale: none;
+  }
+  [data-lightning-pointer="row"] {
+    background-image: none;
   }
 }

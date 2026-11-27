@@ -1,6 +1,7 @@
 import { use, useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { observeVisibleAnimation } from "../../lib/visibleAnimation";
 import { cn } from "../../lib/utils";
+import { registerPointerSurface } from "./pointerInteractive";
 import { LightningShell } from "./shell";
 
 export type ComposerTelemetryPhase = "waiting" | "typing" | "sending" | "running" | "voice";
@@ -62,6 +63,8 @@ export function ComposerEnergyWave({
     const form = root.closest<HTMLElement>('[data-chat-composer-form="true"]');
     const host = root.closest<HTMLElement>('[data-slot="composer-host"]');
 
+    const stopPointerSurface = registerPointerSurface(host);
+
     let typingTimer: number | undefined;
     let strikeFrame = 0;
     let sendTimer: number | undefined;
@@ -122,6 +125,7 @@ export function ComposerEnergyWave({
     window.addEventListener("lightning:composer-send", triggerSendBurst);
 
     return () => {
+      stopPointerSurface?.();
       window.clearTimeout(typingTimer);
       window.cancelAnimationFrame(strikeFrame);
       window.clearTimeout(sendTimer);

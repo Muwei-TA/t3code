@@ -1,5 +1,6 @@
+import { createContext, useEffect, useState, type ComponentProps } from "react";
 import { SidebarProvider } from "../ui/sidebar";
-import { createContext, useState, type ComponentProps } from "react";
+import { observeLightningPointer } from "./pointerInteractive";
 
 export function readLightningShell(): "lightning" | "classic" {
   try {
@@ -13,6 +14,10 @@ export const LightningShell =
 
 export function WorkspaceShellProvider(props: ComponentProps<typeof SidebarProvider>) {
   const [shell] = useState(readLightningShell);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- delegates hardware pointer input for the mounted workspace
+  useEffect(() => {
+    if (shell === "lightning") return observeLightningPointer();
+  }, [shell]);
   return (
     <LightningShell value={shell}>
       <SidebarProvider {...props} data-ui-shell={shell} />

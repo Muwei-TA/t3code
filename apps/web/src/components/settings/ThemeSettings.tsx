@@ -778,6 +778,7 @@ export function ThemeLibrary({
   const renderPairGrid = () => (
     <TooltipProvider>
       <div
+        data-lightning-card-grid=""
         className="grid w-full gap-2"
         style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 16rem), 1fr))" }}
       >
