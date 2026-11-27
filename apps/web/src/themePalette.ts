@@ -1,3 +1,4 @@
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import { pipe } from "effect/Function";
 import { THEME_CSS_MAX_LENGTH, type EnvironmentTheme } from "@t3tools/contracts";
 import * as Equal from "effect/Equal";
@@ -1024,8 +1025,12 @@ function standardMutedThemeText(
   return readableThemeText(background, foreground, 1, target);
 }
 
+const defaultTheme = canonicalizeThemeDefinition(
+  BUILT_IN_THEMES.find((theme) => theme.id === LIGHTNING_BRAND.defaultThemeId)!,
+);
+
 export function getDefaultThemeColors(appearance: ThemeAppearance): ThemeColors {
-  return appearance === "dark" ? T3_CHAT_THEME.variants!.dark! : T3_CHAT_THEME.colors;
+  return getThemeColorsForMode(defaultTheme, appearance) ?? defaultTheme.colors;
 }
 
 export function updateThemeColorFamily(

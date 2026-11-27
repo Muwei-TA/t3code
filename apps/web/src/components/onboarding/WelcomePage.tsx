@@ -346,6 +346,13 @@ export function WelcomePage({
 function TelemetryNotice({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const messages = useMessages();
   const telemetryOff = managedTelemetryOffMessage(useManagedPolicy(environmentId), messages);
+  if (!PRIVACY_POLICY_URL) {
+    return (
+      <p className="mt-auto pt-12 text-2xs leading-relaxed text-muted-foreground">
+        {telemetryOff ?? <T>Anonymous usage data is sent only when enabled.</T>}
+      </p>
+    );
+  }
   return (
     <p className="mt-auto pt-12 text-2xs leading-relaxed text-muted-foreground/70">
       {telemetryOff === undefined ? (
@@ -997,28 +1004,34 @@ function PhoneSection({ environmentId }: { readonly environmentId: EnvironmentId
           </CollapsibleTrigger>
         </div>
         <CollapsiblePanel>
-          <div className="flex items-center gap-8 pt-2 pb-3 pl-8">
-            <ol className="min-w-0 flex-1 space-y-5">
-              <PhoneStep step={1}>
-                <p className="text-sm text-foreground">
-                  <T>Scan with your phone to get the app.</T>
-                </p>
-              </PhoneStep>
-              <PhoneStep step={2}>
-                <PhoneConnectLink environmentId={environmentId} />
-              </PhoneStep>
-            </ol>
-            {/* One code for both stores: the link opens the store that matches the phone. */}
-            <div className="shrink-0 rounded-lg bg-white p-1.5">
-              <QRCodeSvg
-                value={MOBILE_APP_URL}
-                size={124}
-                level="M"
-                marginSize={2}
-                title={gt("T3 Code app for iPhone and Android")}
-              />
+          {MOBILE_APP_URL ? (
+            <div className="flex items-center gap-8 pt-2 pb-3 pl-8">
+              <ol className="min-w-0 flex-1 space-y-5">
+                <PhoneStep step={1}>
+                  <p className="text-sm text-foreground">
+                    <T>Scan with your phone to get the app.</T>
+                  </p>
+                </PhoneStep>
+                <PhoneStep step={2}>
+                  <PhoneConnectLink environmentId={environmentId} />
+                </PhoneStep>
+              </ol>
+              {/* One code for both stores: the link opens the store that matches the phone. */}
+              <div className="shrink-0 rounded-lg bg-white p-1.5">
+                <QRCodeSvg
+                  value={MOBILE_APP_URL}
+                  size={124}
+                  level="M"
+                  marginSize={2}
+                  title={gt("T3 Code app for iPhone and Android")}
+                />
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="pl-8">
+              <PhoneConnectLink environmentId={environmentId} />
+            </div>
+          )}
         </CollapsiblePanel>
       </Collapsible>
     </WelcomeSection>

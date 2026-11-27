@@ -1,3 +1,4 @@
+import { ComposerEnergyWave } from "../lightning/ComposerEnergyWave";
 import { copySnapshot } from "./copySnapshot";
 import { VoiceInputSetup } from "./VoiceInputSetup";
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
@@ -4350,6 +4351,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               </div>
             ) : null}
           </div>
+          <ComposerEnergyWave
+            active={speechInput.state.phase === "recording" || phase === "running"}
+          />
         </ComposerSurface.Main>
       </div>
     </form>

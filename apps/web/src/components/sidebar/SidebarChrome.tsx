@@ -1,3 +1,4 @@
+import type { EnvironmentId } from "@t3tools/contracts";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
@@ -8,7 +9,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { T, useGT } from "gt-react";
-import { memo } from "react";
+import { memo, use } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useAtomValue } from "@effect/atom-react";
@@ -22,7 +23,10 @@ import {
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { cn } from "../../lib/utils";
 import { useIssuesSupported, usePullRequestsSupported } from "../../state/environments";
-import { T3Wordmark } from "../T3Wordmark";
+import { LightningWordmark } from "../lightning/LightningWordmark";
+import { LightningShell } from "../lightning/shell";
+import { WorkspaceStatus } from "../lightning/WorkspaceStatus";
+import { APP_BASE_NAME } from "../../branding";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -52,9 +56,24 @@ import { observeResize } from "~/lib/observeResize";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
+  environmentId,
 }: {
   isElectron: boolean;
+  environmentId: EnvironmentId | null;
 }) {
+  return (
+    <>
+      <SidebarTitlebar isElectron={isElectron} />
+      {use(LightningShell) === "lightning" ? (
+        <div className="relative border-b border-sidebar-border px-4 py-2">
+          <WorkspaceStatus environmentId={environmentId} />
+        </div>
+      ) : null}
+    </>
+  );
+});
+
+function SidebarTitlebar({ isElectron }: { isElectron: boolean }) {
   const stageLabel = useEnvironmentStageLabel();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const gt = useGT();
@@ -102,7 +121,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       </div>
     </div>
   );
-});
+}
 
 export function SidebarBrandWidthProbe({
   isElectron,
@@ -124,7 +143,7 @@ export function SidebarBrandWidthProbe({
       ref={observeWidth}
     >
       <div className="ml-[var(--workspace-titlebar-content-left)] flex gap-1">
-        <SidebarBrandMark onBackdrop={false} />
+        <LightningWordmark />
         {isElectron ? <div className="w-[calc(2*var(--workspace-titlebar-control-size))]" /> : null}
       </div>
     </div>
@@ -178,32 +197,15 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   const gt = useGT();
   return (
     <Link
-      aria-label={gt("T3 Code home")}
+      aria-label={gt("{app} home", { app: APP_BASE_NAME })}
       className={cn(
         "relative z-10 ml-[var(--workspace-titlebar-content-left)] hidden h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 focus-visible:ring-inset md:flex",
         onBackdrop ? "text-white" : "text-foreground",
       )}
       to="/"
     >
-      <SidebarBrandMark onBackdrop={onBackdrop} />
+      <LightningWordmark />
     </Link>
-  );
-}
-
-function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
-  return (
-    <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight">
-      <T3Wordmark aria-label="T3" className="h-[1cap] w-auto shrink-0" />
-      <span
-        className={cn(
-          "truncate [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1",
-          onBackdrop ? "text-white/70" : "text-muted-foreground",
-        )}
-      >
-        {/* oxlint-disable-next-line t3code/no-untranslated-copy -- product wordmark */}
-        {"Code"}
-      </span>
-    </span>
   );
 }
 
@@ -280,6 +282,42 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigateToMainApp();
   };
 
+  const utilityItems = {
+    harness: {
+      icon: <BlocksIcon />,
+      label: gt("Harness"),
+      onClick: () => {
+        closeMobileSidebar();
+        void navigate({ to: "/harness" });
+      },
+    },
+    automations: {
+      icon: <Clock3Icon />,
+      label: gt("Automations"),
+      onClick: handleAutomationsClick,
+    },
+    pulls: pullRequestsSupported
+      ? {
+          icon: <PullRequestGlyph.pullRequest />,
+          label: gt("Pull requests"),
+          onClick: handlePullRequestsClick,
+        }
+      : null,
+    issues: issuesSupported
+      ? {
+          icon: <IssueGlyph.issue />,
+          label: gt("Issues", { $context: "sidebar link to the list of issues" }),
+          onClick: handleIssuesClick,
+        }
+      : null,
+    usage: { icon: <ChartNoAxesColumnIcon />, label: gt("Usage"), onClick: handleUsageClick },
+    settings: { icon: <SettingsIcon />, label: gt("Settings"), onClick: handleSettingsClick },
+  };
+  const order =
+    use(LightningShell) === "classic"
+      ? (["settings", "pulls", "issues", "harness", "automations", "usage"] as const)
+      : (["harness", "automations", "pulls", "issues", "usage", "settings"] as const);
+
   return (
     <SidebarMenu className="flex-row items-center">
       {isOnUtilityPage ? (
@@ -292,45 +330,10 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           </SidebarMenuButton>
         </SidebarMenuItem>
       ) : (
-        <>
-          <SidebarUtilityItem
-            icon={<SettingsIcon />}
-            label={gt("Settings")}
-            onClick={handleSettingsClick}
-          />
-          {pullRequestsSupported ? (
-            <SidebarUtilityItem
-              icon={<PullRequestGlyph.pullRequest />}
-              label={gt("Pull requests")}
-              onClick={handlePullRequestsClick}
-            />
-          ) : null}
-          {issuesSupported ? (
-            <SidebarUtilityItem
-              icon={<IssueGlyph.issue />}
-              label={gt("Issues", { $context: "sidebar link to the list of issues" })}
-              onClick={handleIssuesClick}
-            />
-          ) : null}
-          <SidebarUtilityItem
-            icon={<BlocksIcon />}
-            label={gt("Harness")}
-            onClick={() => {
-              closeMobileSidebar();
-              void navigate({ to: "/harness" });
-            }}
-          />
-          <SidebarUtilityItem
-            icon={<Clock3Icon />}
-            label={gt("Automations")}
-            onClick={handleAutomationsClick}
-          />
-          <SidebarUtilityItem
-            icon={<ChartNoAxesColumnIcon />}
-            label={gt("Usage")}
-            onClick={handleUsageClick}
-          />
-        </>
+        order.map((key) => {
+          const item = utilityItems[key];
+          return item && <SidebarUtilityItem key={key} {...item} />;
+        })
       )}
       <SidebarThreadUndoNotice />
       <SidebarUpdatePill />
