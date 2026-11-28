@@ -1,3 +1,4 @@
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import { HOSTED_APP_CHANNEL } from "~/branding";
 import { isElectron } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
@@ -997,7 +998,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "cli-command",
-    title: msg("t3 command"),
+    title: msg("{command} command", { command: LIGHTNING_BRAND.cliCommand }),
     to: "/settings/about",
     searchTerms: [msg("cli terminal shell path install command line")],
     desktopOnly: true,
@@ -1534,7 +1535,13 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   { id: "harness-skills", title: msg("Skills"), to: "/harness", tab: "skills" },
   { id: "harness-plugins", title: msg("Plugins"), to: "/harness", tab: "skills" },
-  { id: "harness-mcp", title: msg("MCP servers"), to: "/harness", tab: "tools" },
+  {
+    id: "harness-mcp",
+    title: msg("MCP servers"),
+    searchTerms: ["/mcp"],
+    to: "/harness",
+    tab: "tools",
+  },
   { id: "harness-rules", title: msg("Rules & AGENTS.md"), to: "/harness", tab: "context" },
   { id: "harness-modes", title: msg("Modes"), to: "/harness", tab: "context" },
   { id: "harness-commands", title: msg("Commands"), to: "/harness", tab: "context" },

@@ -1,3 +1,4 @@
+import { WorkspaceShellProvider } from "./lightning/shell";
 import { useAtomValue } from "@effect/atom-react";
 import { useGT } from "gt-react";
 import * as Schema from "effect/Schema";
@@ -56,7 +57,6 @@ import {
 } from "./threadSidebarWidth";
 import {
   Sidebar,
-  SidebarProvider,
   SidebarRail,
   SidebarTrigger,
   useMobileSidebarSheetMounted,
@@ -467,7 +467,7 @@ export function AppSidebarLayout({
 
   return (
     <PanelAnimationSuppressionProvider value={panelAnimationsSuppressed}>
-      <SidebarProvider
+      <WorkspaceShellProvider
         className="h-dvh! min-h-0!"
         data-panel-animations={routePanelAnimationsActive ? "true" : "false"}
         storageKey="chat_thread_sidebar_open"
@@ -503,7 +503,7 @@ export function AppSidebarLayout({
         <BackgroundThreadAnnouncer />
         <SidebarControl showSidebar={showSidebar} />
         {isElectron ? <HistorySwipeNavigation /> : null}
-      </SidebarProvider>
+      </WorkspaceShellProvider>
     </PanelAnimationSuppressionProvider>
   );
 }

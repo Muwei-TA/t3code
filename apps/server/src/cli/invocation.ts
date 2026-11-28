@@ -1,3 +1,4 @@
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -6,20 +7,25 @@ import * as Schema from "effect/Schema";
 
 import type { ServerInstallation } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { CLI_NPM_PACKAGE_NAME } from "@t3tools/shared/cliRelease";
 import { resolveCommandPath } from "@t3tools/shared/shell";
 
 import packageJson from "../../package.json" with { type: "json" };
 import {
   findPosixLauncher,
+  findWindowsShim,
+  pinnedRuntimeVersionsDir,
   readPosixLauncherTarget,
   resolveLauncherPath,
 } from "../cloud/pinnedRuntime.ts";
 
-const PINNED_RUNTIME_ENTRY = /^(.*)\/runtime\/versions\/[^/]+\/t3$/;
+const PINNED_RUNTIME_ENTRY = /^(.*)\/runtime\/versions\/[^/]+\/t3(?:\.exe)?$/i;
+const pinnedRuntimeHome = (executable: string) =>
+  PINNED_RUNTIME_ENTRY.exec(executable.replaceAll("\\", "/"))?.[1];
 
 export type CliRunner = "npx" | "pnpm dlx" | "bunx";
 
-/** Detection is best-effort; callers must fail closed to a plain `t3` command. */
+/** Detection is best-effort; callers fall back to the installed command. */
 export function detectCliRunner(entryPath: string): CliRunner | null {
   const path = entryPath.replaceAll("\\", "/");
   if (path.includes("/_npx/")) {
@@ -32,35 +38,63 @@ export function detectCliRunner(entryPath: string): CliRunner | null {
   ) {
     return "pnpm dlx";
   }
-  if (path.includes("/.bun/install/cache/") || path.includes("/bunx-")) {
+  if (path.includes("/.bun/install/cache/") || /\/bunx-[^/]+\/node_modules\//.test(path)) {
     return "bunx";
   }
   return null;
 }
 
 const InstallManifest = Schema.Struct({
-  name: Schema.String,
+  name: Schema.Literals([CLI_NPM_PACKAGE_NAME, "t3"]),
   version: Schema.String,
-  bin: Schema.optionalKey(Schema.Struct({ t3: Schema.String })),
+  bin: Schema.Struct({ lightning: Schema.String }),
 });
 const decodeInstallManifest = Schema.decodeUnknownEffect(Schema.fromJsonString(InstallManifest));
+const NPM_GLOBAL_ENTRY =
+  /^(?<modulesParent>.*\/)node_modules\/(?<name>(?:@[^/]+\/)?[^/]+)\/(?:dist\/bin\.mjs|bin\/t3\.mjs)$/;
+
+// npm's cmd-shim expands the Node shebang into this wrapper. An exact match rules out
+// a custom wrapper that happens to mention or chain to the installed package.
+const matchesNpmWindowsShim = (contents: string, relativeEntry: string) =>
+  contents.replaceAll("\r\n", "\n") ===
+  [
+    "@ECHO off",
+    "GOTO start",
+    ":find_dp0",
+    "SET dp0=%~dp0",
+    "EXIT /b",
+    ":start",
+    "SETLOCAL",
+    "CALL :find_dp0",
+    "",
+    'IF EXIST "%dp0%\\node.exe" (',
+    '  SET "_prog=%dp0%\\node.exe"',
+    ") ELSE (",
+    '  SET "_prog=node"',
+    "  SET PATHEXT=%PATHEXT:;.JS;=;%",
+    ")",
+    "",
+    `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\${relativeEntry.replaceAll("/", "\\")}" %*`,
+    "",
+  ].join("\n");
 
 /**
- * `T3CODE_NPM_LAUNCHER_PATH` is inherited by child shells, so accept it only for this package
- * version to avoid claiming another `t3` invocation is the npm install.
+ * `T3CODE_NPM_LAUNCHER_PATH` is inherited by child shells. Check the version and bin
+ * target, since the legacy package name also belongs to upstream T3 Code.
  */
 export const resolveEntryPath = Effect.gen(function* () {
   const npmLauncher = (yield* HostProcess.Environment).T3CODE_NPM_LAUNCHER_PATH?.trim();
   if (npmLauncher) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const packageRoot = path.dirname(path.dirname(npmLauncher));
     const manifest = yield* fs
-      .readFileString(path.join(path.dirname(npmLauncher), "../package.json"))
+      .readFileString(path.join(packageRoot, "package.json"))
       .pipe(Effect.flatMap(decodeInstallManifest), Effect.option);
     if (
       Option.isSome(manifest) &&
-      manifest.value.name === "t3" &&
-      manifest.value.version === packageJson.version
+      manifest.value.version === packageJson.version &&
+      path.resolve(packageRoot, manifest.value.bin.lightning) === path.resolve(npmLauncher)
     ) {
       return npmLauncher;
     }
@@ -74,8 +108,29 @@ export const resolveServerInstallation = Effect.gen(function* () {
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const entry = yield* fs.realPath(yield* resolveEntryPath);
-  const runtime = PINNED_RUNTIME_ENTRY.exec(entry);
-  if (runtime) {
+  const runner = detectCliRunner(entry);
+  if (runner !== null && (yield* HostProcess.IsExecutable)) {
+    const executable = yield* HostProcess.ExecutablePath;
+    const home = pinnedRuntimeHome(executable);
+    if (home !== undefined) {
+      return {
+        kind: "t3-launcher",
+        launcher: executable,
+        baseDir: path.normalize(home || "/"),
+      } satisfies ServerInstallation;
+    }
+  }
+  const runtime = pinnedRuntimeHome(entry);
+  if (platform === "win32" && runtime !== undefined) {
+    const baseDir = path.normalize(runtime || "/");
+    const launcher = yield* findWindowsShim(entry, pinnedRuntimeVersionsDir(path, baseDir));
+    return {
+      kind: "t3-launcher",
+      launcher: launcher ?? entry,
+      baseDir,
+    } satisfies ServerInstallation;
+  }
+  if (runtime !== undefined) {
     const launchedAs = yield* resolveLauncherPath;
     if (launchedAs === undefined) return null;
     const link = yield* fs.readLink(launchedAs).pipe(Effect.option);
@@ -84,7 +139,7 @@ export const resolveServerInstallation = Effect.gen(function* () {
       ? launchedAs
       : yield* findPosixLauncher({
           launchedAs,
-          versionsDir: path.join(runtime[1] || "/", "runtime/versions"),
+          versionsDir: pinnedRuntimeVersionsDir(path, runtime || "/"),
         });
     // None for a runtime started directly, as SSH launches do, or through a copy.
     if (launcher === undefined) return null;
@@ -92,63 +147,66 @@ export const resolveServerInstallation = Effect.gen(function* () {
       ? path.resolve(path.dirname(launcher), link.value)
       : yield* readPosixLauncherTarget(launcher);
     // Keep the home as the launcher spells it; `t3 update` only repoints launchers into that spelling.
-    const linked = target === undefined ? null : PINNED_RUNTIME_ENTRY.exec(target);
-    if (!linked || (yield* fs.realPath(linked[1] || "/")) !== (runtime[1] || "/")) return null;
+    const linked = target === undefined ? undefined : pinnedRuntimeHome(target);
+    if (linked === undefined || (yield* fs.realPath(linked || "/")) !== (runtime || "/"))
+      return null;
     return {
       kind: "t3-launcher",
       launcher,
-      baseDir: linked[1] || "/",
+      baseDir: linked || "/",
     } satisfies ServerInstallation;
   }
-  const match = /^(.*)\/lib\/node_modules\/t3\/(?:dist\/bin\.mjs|bin\/t3\.mjs)$/.exec(entry);
-  if (!match) {
-    const runner = detectCliRunner(entry);
-    return runner === null
-      ? null
-      : ({ kind: runner === "pnpm dlx" ? "pnpm-dlx" : runner } satisfies ServerInstallation);
+  if (runner !== null) {
+    const node = yield* HostProcess.ExecutablePath;
+    return {
+      kind: runner === "pnpm dlx" ? "pnpm-dlx" : runner,
+      ...(path.isAbsolute(node) && !(yield* HostProcess.IsExecutable)
+        ? { launch: { node, entry } }
+        : {}),
+    } satisfies ServerInstallation;
   }
-  if (platform === "win32") return null;
-  const prefix = match[1] || "/";
+  const windows = platform === "win32";
+  const match = NPM_GLOBAL_ENTRY.exec(entry.replaceAll("\\", "/"))?.groups;
+  const modulesParent = match?.modulesParent;
+  const name = match?.name;
   if (
-    prefix.includes("/node_modules/") ||
-    /\/(?:Cellar|Caskroom)\//i.test(prefix) ||
-    /\/mise\/installs\/(?!node\/)[^/]+\//.test(prefix)
+    modulesParent === undefined ||
+    (!windows && !modulesParent.endsWith("/lib/")) ||
+    (name !== CLI_NPM_PACKAGE_NAME && name !== "t3")
+  )
+    return null;
+  const rawPrefix = windows ? modulesParent : modulesParent.slice(0, -"lib/".length);
+  if (
+    /(?:^|\/)node_modules\//i.test(rawPrefix) ||
+    /\/(?:Cellar|Caskroom)\//i.test(rawPrefix) ||
+    /\/mise\/installs\/(?!node\/)[^/]+\//.test(rawPrefix)
   )
     return null;
 
-  const packageRoot = path.join(prefix, "lib/node_modules/t3");
+  const prefix = path.resolve(rawPrefix);
+  const packageRoot = path.dirname(path.dirname(entry));
   const manifest = yield* fs
     .readFileString(path.join(packageRoot, "package.json"))
     .pipe(Effect.flatMap(decodeInstallManifest));
-  if (manifest.name !== "t3" || !manifest.bin) return null;
-  const bin = yield* fs.realPath(path.join(packageRoot, manifest.bin.t3));
-  const globalBin = yield* fs.realPath(path.join(prefix, "bin/t3"));
-  if (globalBin !== bin || bin !== entry) return null;
-  return { kind: "npm-global", prefix } satisfies ServerInstallation;
-}).pipe(Effect.orElseSucceed(() => null));
-
-/** The original package spec is unavailable at startup; infer its channel from the version. */
-function suggestedPackageSpec(version: string): string {
-  const channel = /^[^-+]+-(nightly|preview)\./.exec(version)?.[1];
-  return channel === undefined ? "t3" : `t3@${channel}`;
-}
-
-function formatCliCommand(input: {
-  readonly subcommand: string;
-  readonly entryPath: string;
-  readonly version: string;
-}): string {
-  const runner = detectCliRunner(input.entryPath);
-  if (runner === null) {
-    return `t3 ${input.subcommand}`;
+  if (manifest.name !== name) return null;
+  const bin = path.resolve(packageRoot, manifest.bin.lightning);
+  if ((yield* fs.realPath(bin)) !== entry) return null;
+  if (windows) {
+    const contents = yield* fs.readFileString(
+      path.join(prefix, `${LIGHTNING_BRAND.cliCommand}.cmd`),
+    );
+    if (!matchesNpmWindowsShim(contents, path.relative(prefix, bin))) return null;
+  } else {
+    const globalBin = yield* fs.realPath(path.join(prefix, "bin", LIGHTNING_BRAND.cliCommand));
+    if (globalBin !== entry) return null;
   }
-  return `${runner} ${suggestedPackageSpec(input.version)} ${input.subcommand}`;
-}
-
-export const resolveCliCommand = (subcommand: string) =>
-  Effect.map(resolveEntryPath, (entryPath) =>
-    formatCliCommand({ subcommand, entryPath, version: packageJson.version }),
-  );
+  return {
+    kind: "npm-global",
+    prefix,
+    packageName: manifest.name,
+    ...(manifest.name === "t3" ? { legacyPackage: true } : {}),
+  } satisfies ServerInstallation;
+}).pipe(Effect.orElseSucceed(() => null));
 
 const shellWord = (value: string) =>
   /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
@@ -163,10 +221,22 @@ const powershellWord = (value: string) =>
 export const hostShellWord = (platform: NodeJS.Platform, value: string) =>
   platform === "win32" ? powershellWord(value) : shellWord(value);
 
+export const resolveCliCommand = Effect.fn("invocation.resolveCliCommand")(function* (
+  subcommand: string,
+) {
+  const entryPath = yield* resolveEntryPath;
+  if (detectCliRunner(entryPath) === null) return `${LIGHTNING_BRAND.cliCommand} ${subcommand}`;
+  const platform = yield* HostProcess.Platform;
+  const node = hostShellWord(platform, yield* HostProcess.ExecutablePath);
+  const invoke = platform === "win32" ? `& ${node}` : node;
+  if (yield* HostProcess.IsExecutable) return `${invoke} ${subcommand}`;
+  return `${invoke} ${hostShellWord(platform, entryPath)} ${subcommand}`;
+});
+
 /** Script installs have no single launcher; desktop shims and standalone binaries do. */
 const resolveInstallLauncher = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  const shim = (yield* HostProcess.Environment).T3CODE_CLI_PATH?.trim();
+  const shim = (yield* HostProcess.Environment).LIGHTNING_CODE_CLI_PATH?.trim();
   if (shim && (yield* fs.exists(shim).pipe(Effect.orElseSucceed(() => false)))) {
     return Option.some(shim);
   }
@@ -176,7 +246,7 @@ const resolveInstallLauncher = Effect.gen(function* () {
 });
 
 /**
- * Uses this install's `t3` on PATH, the originating runner, or its absolute launcher path.
+ * Uses this install's command on PATH or its absolute executable or cached entry point.
  * Arguments are quoted for POSIX shells or PowerShell on Windows.
  */
 export const resolveHostCliCommand = Effect.fn("invocation.resolveHostCliCommand")(function* (
@@ -188,10 +258,11 @@ export const resolveHostCliCommand = Effect.fn("invocation.resolveHostCliCommand
     // An empty subcommand names the root `t3` command.
     [prefix.trimEnd(), ...args.map((arg) => hostShellWord(platform, arg))].join(" ");
   const command = yield* resolveCliCommand(subcommand);
-  if (command !== `t3 ${subcommand}`) return { command: withArgs(command), launcher: false };
-  const onPath = yield* resolveCommandPath("t3");
+  if (command !== `${LIGHTNING_BRAND.cliCommand} ${subcommand}`)
+    return { command: withArgs(command), launcher: true };
+  const onPath = yield* resolveCommandPath(LIGHTNING_BRAND.cliCommand);
   if (onPath !== null) {
-    const shim = (yield* HostProcess.Environment).T3CODE_CLI_PATH?.trim();
+    const shim = (yield* HostProcess.Environment).LIGHTNING_CODE_CLI_PATH?.trim();
     const fs = yield* FileSystem.FileSystem;
     const real = (file: string) => fs.realPath(file).pipe(Effect.orElseSucceed(() => null));
     // Windows `t3.cmd` shims are text files that never realpath to the executable they run.
@@ -229,9 +300,8 @@ export const resolveHostCliHint = (
 
 /**
  * `sudo` resets PATH on most distributions, which drops a user-installed Node
- * (nvm, fnm, a tarball) and with it `npx` or a global `t3`, so the command
- * carries PATH through unless Node is on root's PATH too. An absolute launcher
- * needs neither.
+ * (nvm, fnm, a tarball) and its global commands. An absolute launcher uses
+ * its own Node path.
  */
 export const resolveRootCliCommand = Effect.fn("invocation.resolveRootCliCommand")(function* (
   subcommand: string,

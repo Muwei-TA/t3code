@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./brand": {
+      "types": "./src/brand.ts",
+      "import": "./src/brand.ts"
+    },
+    "./mobileBrand": {
+      "types": "./src/mobileBrand.ts",
+      "import": "./src/mobileBrand.ts"
+    },
     "./png": {
       "types": "./src/png.ts",
       "import": "./src/png.ts"

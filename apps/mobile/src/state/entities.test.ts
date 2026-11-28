@@ -18,6 +18,9 @@ vi.mock(import("./orchestration"), () => ({
   orchestrationEnvironment: { threadLinkMetadata: () => state.reply } as never,
 }));
 vi.mock(import("./atom-registry"), () => ({ appAtomRegistry: {} as never }));
+vi.mock(import("../lib/hostedThreadLinkOrigin"), () => ({
+  hostedThreadLinkOrigin: undefined,
+}));
 vi.mock(import("./projects"), () => ({ environmentProjects: {} as never }));
 vi.mock(import("./server"), () => ({
   environmentServerConfigsAtom: {} as never,

@@ -1,10 +1,12 @@
 import * as NodeUtil from "node:util";
 
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { Command, Flag, GlobalFlag, Prompt } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
@@ -153,10 +155,11 @@ export const reconcileService = Effect.fn("cli.service.reconcile")(function* (op
 export function formatServiceChange(
   result: Extract<ServiceReconcileResult, { readonly changed: true }>,
 ): string {
+  const cli = LIGHTNING_BRAND.cliCommand;
   if (result.plan.handedOff === true) {
-    return `Service update to t3@${packageJson.version} queued. This session will disconnect.\nLog: ${result.plan.logPath}`;
+    return `Service update to ${cli}@${packageJson.version} queued. This session will disconnect.\nLog: ${result.plan.logPath}`;
   }
-  return `Service ${result.previouslyInstalled ? "updated" : "installed"} · t3@${packageJson.version}\nLog: ${result.plan.logPath}`;
+  return `Service ${result.previouslyInstalled ? "updated" : "installed"} · ${cli}@${packageJson.version}\nLog: ${result.plan.logPath}`;
 }
 
 const MEMORY_CONTROLLER_DISABLED =
@@ -166,12 +169,13 @@ function formatProtection(
   protection: ServiceProtection.ServiceProtectionState | undefined,
 ): ReadonlyArray<string> {
   if (protection === undefined) return [];
+  const cli = LIGHTNING_BRAND.cliCommand;
   return [
     !protection.memoryControllerAvailable
       ? `  Memory protection: unavailable, ${MEMORY_CONTROLLER_DISABLED}`
       : protection.unprotected === undefined
-        ? `  Memory protection: on${protection.setByProtect ? " (t3 service protect)" : ""}`
-        : `  Memory protection: off, ${protection.unprotected} grants none. Run \`t3 service protect\`.`,
+        ? `  Memory protection: on${protection.setByProtect ? ` (${cli} service protect)` : ""}`
+        : `  Memory protection: off, ${protection.unprotected} grants none. Run \`${cli} service protect\`.`,
     ...(protection.oomScoreAdj === undefined ? [] : [`  OOM score: ${protection.oomScoreAdj}`]),
   ];
 }
@@ -182,16 +186,18 @@ function formatServiceStatus(
   commands: { readonly install: string; readonly restart: string; readonly update: string },
   protection?: ServiceProtection.ServiceProtectionState,
 ): string {
+  const brand = LIGHTNING_BRAND.baseName;
+  const cli = LIGHTNING_BRAND.cliCommand;
   if (!status.supported) {
-    return "T3 Code service\n  Status: unavailable on this machine\n  Supported on: Linux with systemd, macOS with launchd, Windows with Task Scheduler";
+    return `${brand} service\n  Status: unavailable on this machine\n  Supported on: Linux with systemd, macOS with launchd, Windows with Task Scheduler`;
   }
   if (!status.installed) {
-    return `T3 Code service\n  Status: not installed\n  Next: Run \`${commands.install}\`.`;
+    return `${brand} service\n  Status: not installed\n  Next: Run \`${commands.install}\`.`;
   }
   if (status.otherBaseDir !== undefined) {
     return [
-      "T3 Code service",
-      "  Status: installed for another T3 home",
+      `${brand} service`,
+      `  Status: installed for another ${brand} home`,
       `  Base dir: ${status.otherBaseDir}`,
       `  Next: Pass \`${BootService.formatBootServiceBaseDirOption(status.otherBaseDir)}\` to manage it.`,
     ].join("\n");
@@ -206,8 +212,8 @@ function formatServiceStatus(
     compareExactServiceVersions(status.installedVersion, cliVersion) > 0
   ) {
     return [
-      "T3 Code service",
-      `  Status: installed · t3@${installedVersion} (newer than this t3@${cliVersion} CLI)`,
+      `${brand} service`,
+      `  Status: installed · ${cli}@${installedVersion} (newer than this ${cli}@${cliVersion} CLI)`,
       `  Unit: ${status.unitPath}`,
       `  Logs: ${status.logPath}`,
       ...formatProtection(protection),
@@ -216,8 +222,8 @@ function formatServiceStatus(
     ].join("\n");
   }
   return [
-    "T3 Code service",
-    `  Status: ${status.current ? `installed · t3@${installedVersion}` : "needs an update or repair"}`,
+    `${brand} service`,
+    `  Status: ${status.current ? `installed · ${cli}@${installedVersion}` : "needs an update or repair"}`,
     `  Unit: ${status.unitPath}`,
     `  Logs: ${status.logPath}`,
     ...formatProtection(protection),
@@ -245,7 +251,7 @@ const serviceReconcileFlags = {
 
 const serviceInstallCommand = Command.make("install", serviceReconcileFlags).pipe(
   Command.withDescription(
-    "Install T3 Code as a background service for this user. `t3 up` also chooses how your other devices reach it.",
+    "Install Lightning Code as a background service for this user. `lightning up` also chooses how your other devices reach it.",
   ),
   Command.withHandler((flags) =>
     runServiceCommand(
@@ -254,7 +260,7 @@ const serviceInstallCommand = Command.make("install", serviceReconcileFlags).pip
         const result = yield* reconcileService({ allowDowngrade: flags.allowDowngrade });
         if (!result.changed) {
           yield* Console.log(
-            `T3 Code service is already installed with t3@${packageJson.version} (${yield* resolveEntryPath}).`,
+            `${LIGHTNING_BRAND.baseName} service is already installed with ${LIGHTNING_BRAND.cliCommand}@${packageJson.version} (${yield* resolveEntryPath}).`,
           );
           return;
         }
@@ -269,19 +275,19 @@ const serviceInstallCommand = Command.make("install", serviceReconcileFlags).pip
 );
 
 const serviceUpdateCommand = Command.make("update", serviceReconcileFlags).pipe(
-  Command.withDescription("Deprecated. Run `t3 update` to move to a newer release."),
+  Command.withDescription("Deprecated. Run `lightning update` to move to a newer release."),
   Command.unlisted,
   Command.withHandler((flags) =>
     runServiceCommand(
       flags,
       Effect.gen(function* () {
         yield* Console.log(
-          "`t3 service update` is deprecated: run `t3 update` to move to a newer release, or `t3 service install` to repair the service. Repairing now.",
+          `\`${LIGHTNING_BRAND.cliCommand} service update\` is deprecated: run \`${LIGHTNING_BRAND.cliCommand} update\` to move to a newer release, or \`${LIGHTNING_BRAND.cliCommand} service install\` to repair the service. Repairing now.`,
         );
         const result = yield* reconcileService({ allowDowngrade: flags.allowDowngrade });
         if (!result.changed) {
           yield* Console.log(
-            `T3 Code service is already using t3@${packageJson.version} (${yield* resolveEntryPath}).`,
+            `${LIGHTNING_BRAND.baseName} service is already using ${LIGHTNING_BRAND.cliCommand}@${packageJson.version} (${yield* resolveEntryPath}).`,
           );
           return;
         }
@@ -293,7 +299,7 @@ const serviceUpdateCommand = Command.make("update", serviceReconcileFlags).pipe(
 
 const serviceRestartCommand = Command.make("restart", projectLocationFlags).pipe(
   Command.withDescription(
-    "Restart the background service. Picks up a version installed by `t3 update` that was not restarted at the time.",
+    "Restart the background service. Picks up a version installed by `lightning update` that was not restarted at the time.",
   ),
   Command.withHandler((flags) =>
     runServiceCommand(
@@ -303,15 +309,17 @@ const serviceRestartCommand = Command.make("restart", projectLocationFlags).pipe
         const status = yield* service.status;
         const outcome = yield* service.restart;
         const onVersion =
-          status.installedVersion === undefined ? "" : ` on t3@${status.installedVersion}`;
+          status.installedVersion === undefined
+            ? ""
+            : ` on ${LIGHTNING_BRAND.cliCommand}@${status.installedVersion}`;
         yield* Console.log(
           outcome === "restarted"
-            ? `Restarted the T3 Code service${onVersion}.`
+            ? `Restarted the ${LIGHTNING_BRAND.baseName} service${onVersion}.`
             : outcome === "queued"
-              ? `Queued a restart of the T3 Code service${onVersion}. This session runs inside the service and disconnects when it goes down.\nLogs: ${status.logPath}`
+              ? `Queued a restart of the ${LIGHTNING_BRAND.baseName} service${onVersion}. This session runs inside the service and disconnects when it goes down.\nLogs: ${status.logPath}`
               : status.otherBaseDir !== undefined
-                ? `The T3 Code service serves ${status.otherBaseDir}, so it was not restarted. Pass \`${BootService.formatBootServiceBaseDirOption(status.otherBaseDir)}\` to restart it.`
-                : "T3 Code service is not installed.",
+                ? `The ${LIGHTNING_BRAND.baseName} service serves ${status.otherBaseDir}, so it was not restarted. Pass \`${BootService.formatBootServiceBaseDirOption(status.otherBaseDir)}\` to restart it.`
+                : `${LIGHTNING_BRAND.baseName} service is not installed.`,
         );
       }),
     ),
@@ -319,7 +327,7 @@ const serviceRestartCommand = Command.make("restart", projectLocationFlags).pipe
 );
 
 const serviceUninstallCommand = Command.make("uninstall", projectLocationFlags).pipe(
-  Command.withDescription("Stop and remove the T3 Code background service."),
+  Command.withDescription("Stop and remove the Lightning Code background service."),
   Command.withHandler((flags) =>
     runServiceCommand(
       flags,
@@ -337,13 +345,15 @@ const serviceUninstallCommand = Command.make("uninstall", projectLocationFlags).
           path.resolve(installedBaseDir) !== path.resolve(baseDir)
         ) {
           yield* Console.log(
-            `The T3 Code service serves ${installedBaseDir}, so it was not removed. Pass \`${BootService.formatBootServiceBaseDirOption(installedBaseDir)}\` to remove it.`,
+            `The ${LIGHTNING_BRAND.baseName} service serves ${installedBaseDir}, so it was not removed. Pass \`${BootService.formatBootServiceBaseDirOption(installedBaseDir)}\` to remove it.`,
           );
           return;
         }
         const removed = yield* service.uninstall;
         yield* Console.log(
-          removed ? "Removed the T3 Code service." : "T3 Code service is not installed.",
+          removed
+            ? `Removed the ${LIGHTNING_BRAND.baseName} service.`
+            : `${LIGHTNING_BRAND.baseName} service is not installed.`,
         );
       }),
     ),
@@ -351,7 +361,7 @@ const serviceUninstallCommand = Command.make("uninstall", projectLocationFlags).
 );
 
 const serviceStatusCommand = Command.make("status", projectLocationFlags).pipe(
-  Command.withDescription("Show whether the T3 Code background service is installed."),
+  Command.withDescription("Show whether the Lightning Code background service is installed."),
   Command.withHandler((flags) =>
     runServiceCommand(
       flags,
@@ -398,7 +408,7 @@ const serviceProtectCommand = Command.make("protect", {
   ),
 }).pipe(
   Command.withDescription(
-    "Protect the T3 Code server from agents under memory pressure (Linux with systemd). Asks for sudo.",
+    "Protect the Lightning Code server from agents under memory pressure (Linux with systemd). Asks for sudo.",
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
@@ -407,7 +417,7 @@ const serviceProtectCommand = Command.make("protect", {
       // Before resolving config, which creates T3 directories that root would then own.
       if ((yield* HostProcess.UserId) === 0) {
         return yield* Console.log(
-          "Run `t3 service protect` as the user that runs T3 Code, without sudo. It asks for sudo when it needs root.",
+          `Run \`${LIGHTNING_BRAND.cliCommand} service protect\` as the user that runs ${LIGHTNING_BRAND.baseName}, without sudo. It asks for sudo when it needs root.`,
         );
       }
       return yield* runServiceCommand(
@@ -429,31 +439,48 @@ const serviceProtectCommand = Command.make("protect", {
                 remoteAccessUnits: ServiceProtection.REMOTE_ACCESS_UNITS,
               }),
             );
-            if (installed === undefined) {
-              return yield* Console.log("T3 Code service protection is not set up.");
+            if (installed.retainedLegacy.length > 0) {
+              yield* Console.log(
+                [
+                  "Keeping legacy drop-ins shared by other installations or users:",
+                  ...installed.retainedLegacy.map(({ path }) => `  ${path}`),
+                  "If you can verify that Lightning Code alone added these files and no other user or service relies on them, remove them and reload both managers with `sudo systemctl daemon-reload` and `systemctl --user daemon-reload`. Restart the affected services to apply any changed OOM scores.",
+                ].join("\n"),
+              );
+            }
+            const dropIns = [...installed.system, ...installed.user];
+            if (installed.managerDefaults !== undefined) dropIns.push(installed.managerDefaults);
+            if (dropIns.length === 0) {
+              return yield* Console.log(`No ${LIGHTNING_BRAND.baseName} drop-ins to remove.`);
             }
             yield* Console.log(
               [
                 "Removes:",
-                ...[...installed.system, ...installed.user, installed.managerDefaults].map(
+                ...dropIns.map(
                   ({ path, shared }) =>
                     `  ${path}${shared === true ? " (kept while another user is protected)" : ""}`,
                 ),
               ].join("\n"),
             );
-            if (!(yield* confirm(flags.yes, "Remove T3 Code service protection?"))) return;
+            if (
+              !(yield* confirm(flags.yes, `Remove ${LIGHTNING_BRAND.baseName} service protection?`))
+            )
+              return;
             yield* ServiceProtection.removeProtection(installed);
+            const baseDirOption = Option.isNone(flags.baseDir)
+              ? ""
+              : ` ${BootService.formatBootServiceBaseDirOption(flags.baseDir.value)}`;
             return yield* Console.log(
-              "Removed T3 Code service protection. The server's OOM score returns to normal after `t3 service restart`.",
+              `Removed ${LIGHTNING_BRAND.baseName} service protection drop-ins. Run \`${LIGHTNING_BRAND.cliCommand} service restart${baseDirOption}\` to apply the service's remaining OOM settings.`,
             );
           }
 
           yield* Console.log(
             [
-              "Keeps T3 Code running when agents fill this machine's memory:",
-              "  - reserves memory for the T3 Code server, so the kernel takes memory from agents first",
+              `Keeps ${LIGHTNING_BRAND.baseName} running when agents fill this machine's memory:`,
+              `  - reserves memory for the ${LIGHTNING_BRAND.baseName} server, so the kernel takes memory from agents first`,
               "  - makes the out-of-memory killer pick agents before the server",
-              "It adds systemd drop-in files and changes nothing else. Undo with `t3 service protect --undo`.",
+              `It adds systemd drop-in files and changes nothing else. Undo with \`${LIGHTNING_BRAND.cliCommand} service protect --undo\`.`,
             ].join("\n"),
           );
           const names = remote.map((unit) => unit.replace(/\.service$/, "")).join(" and ");
@@ -484,8 +511,8 @@ const serviceProtectCommand = Command.make("protect", {
           yield* ServiceProtection.applyProtection(plan);
           yield* Console.log(
             memoryController
-              ? "Protected T3 Code. Memory protection applies now; the server takes its OOM score after `t3 service restart`. Undo with `t3 service protect --undo`."
-              : "Protected T3 Code's OOM score; the server takes it after `t3 service restart`. Memory protection applies once the kernel's memory controller is enabled. Undo with `t3 service protect --undo`.",
+              ? `Protected ${LIGHTNING_BRAND.baseName}. Memory protection applies now; the server takes its OOM score after \`${LIGHTNING_BRAND.cliCommand} service restart\`. Undo with \`${LIGHTNING_BRAND.cliCommand} service protect --undo\`.`
+              : `Protected ${LIGHTNING_BRAND.baseName}'s OOM score; the server takes it after \`${LIGHTNING_BRAND.cliCommand} service restart\`. Memory protection applies once the kernel's memory controller is enabled. Undo with \`${LIGHTNING_BRAND.cliCommand} service protect --undo\`.`,
           );
         }).pipe(Effect.provide(ProcessRunner.layer)),
       );
@@ -494,7 +521,7 @@ const serviceProtectCommand = Command.make("protect", {
 );
 
 export const serviceCommand = Command.make("service").pipe(
-  Command.withDescription("Manage the T3 Code background service."),
+  Command.withDescription("Manage the Lightning Code background service."),
   Command.withSubcommands([
     serviceInstallCommand,
     serviceRestartCommand,

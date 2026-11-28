@@ -122,7 +122,7 @@ const LOGIN_SHELL_ENV_NAMES = [
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
   "NODE_EXTRA_CA_CERTS",
-  "T3CODE_TELEMETRY_ENABLED",
+  "LIGHTNING_CODE_TELEMETRY_ENABLED",
   "T3CODE_FEATURE_FLAGS",
   "T3CODE_RELEASE_BASE_URL",
   "__MISE_DIFF",
@@ -553,7 +553,7 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
       "NODE_EXTRA_CA_CERTS",
       "JAVA_HOME",
       "PNPM_HOME",
-      "T3CODE_TELEMETRY_ENABLED",
+      "LIGHTNING_CODE_TELEMETRY_ENABLED",
       "T3CODE_FEATURE_FLAGS",
       "T3CODE_RELEASE_BASE_URL",
     ] as const) {
@@ -660,7 +660,6 @@ const CACHED_ENV_NAMES = [
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
   "NODE_EXTRA_CA_CERTS",
-  "T3CODE_TELEMETRY_ENABLED",
   // The server reads its flags once at start, before discovery can finish.
   "T3CODE_FEATURE_FLAGS",
 ] as const;
@@ -704,7 +703,10 @@ export const make = Effect.gen(function* () {
     patch: ShellEnvironmentPatch,
     discovered = false,
   ) {
-    applyShellEnvironment(env, patch, environment.platform);
+    const { T3CODE_TELEMETRY_ENABLED: consent, ...rest } = patch;
+    applyShellEnvironment(env, rest, environment.platform);
+    if (consent == null) delete env.LIGHTNING_CODE_TELEMETRY_ENABLED;
+    else env.LIGHTNING_CODE_TELEMETRY_ENABLED = consent;
     const message: DesktopShellEnvironmentSnapshot = {
       version: 1,
       type: "shellEnvironment",
@@ -727,7 +729,11 @@ export const make = Effect.gen(function* () {
       const { prepared } = discovery;
       stripAppImagePaths(fresh);
       const patch = Object.fromEntries(
-        Object.keys(ShellEnvironmentPatch.fields).map((name) => [name, fresh[name] ?? null]),
+        Object.keys(ShellEnvironmentPatch.fields).map((name) => [
+          name,
+          fresh[name === "T3CODE_TELEMETRY_ENABLED" ? "LIGHTNING_CODE_TELEMETRY_ENABLED" : name] ??
+            null,
+        ]),
       );
       if (prepared || Option.isNone(yield* Ref.get(latest))) yield* publish(patch, prepared);
       if (prepared) {
@@ -799,7 +805,12 @@ export const make = Effect.gen(function* () {
         applyShellEnvironment(baseline, cached, environment.platform);
         yield* publish(
           Object.fromEntries(
-            Object.keys(ShellEnvironmentPatch.fields).map((name) => [name, baseline[name] ?? null]),
+            Object.keys(ShellEnvironmentPatch.fields).map((name) => [
+              name,
+              baseline[
+                name === "T3CODE_TELEMETRY_ENABLED" ? "LIGHTNING_CODE_TELEMETRY_ENABLED" : name
+              ] ?? null,
+            ]),
           ),
         );
       }

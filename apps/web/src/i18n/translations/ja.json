@@ -2268,23 +2268,6 @@
   "c65de112b48a66ed": "ペアリングリンクを追加",
   "bc8ab792af1d656f": "コンピューターで実行:",
   "0ba14e4e920cfa00": "またはデスクトップアプリをダウンロード",
-  "0e79b7a6508a6286": "次に",
-  "363b9991fa23d36b": [
-    "すでに ",
-    {
-      "t": "code",
-      "i": 1,
-      "c": "t3"
-    },
-    " がある場合はインストールを省略できます。インストール後に",
-    " ",
-    {
-      "t": "code",
-      "i": 2,
-      "c": "t3"
-    },
-    " が見つからない場合は、インストーラーが示すフォルダーを PATH に追加してください。"
-  ],
   "87b24d00c08f54bb": "キーボードショートカットのファイルを開けません",
   "0ee16208cbfcdbf4": "ファイルを開く際に不明なエラーが発生しました。",
   "9e20856550715c74": [
@@ -2508,21 +2491,18 @@
   "14c6474d167e703d": "{serverLabel} の更新に失敗しました",
   "42276d8ce4986860": "{serverLabel} を更新しました",
   "6dc325bc8a355b3c": "デスクトップアプリを {version} で再起動しました。",
-  "9bbe83d7e15acf08": "t3@{version} で再接続しました。",
+  "6c2cccb894d17c86": "{app} {version} に再接続しました。",
   "530f8d6d56cedc3b": "更新コマンドをコピーする際にクリップボード API を利用できませんでした。",
   "d8e50e9835a12e8d": "更新コマンドをクリップボードにコピーできませんでした。",
-  "9b947c837e3756c0": "再起動コマンドをコピーする際にクリップボード API を利用できませんでした。",
-  "4321f91645a6516a": "再起動コマンドをクリップボードにコピーできませんでした。",
   "c5422ea828b540ed": "{servers} の T3 Code デスクトップアプリを更新しますか？それらのマシンでアプリが終了し、再起動します。",
   "b25472ef70df9b5d": "すべて更新",
   "febf4ec3cdcdf372": "更新コマンドをコピーしました",
-  "bee440d0da53841c": "再起動コマンドをコピーしました",
-  "9e17a8beb64d6130": "{serverLabel} で `{command}` を実行してから、いつものオプションで t3 を再起動してください。",
-  "218253b96de09d5d": "{serverLabel} で t3 を停止してから、同じサブコマンドとオプションで `{command}` を使って再起動してください。インストール済みの t3 コマンドは更新されません。",
+  "c1bcad4fe66893fa": "{serverLabel} で `{command}` を実行し、同じインストール先から再起動してください。",
+  "eb8d76053aaf6469": "{serverLabel} の古いサーバーを停止し、元のフラグを付けたまま `{command}` で起動し直してください。",
+  "d54f9303c5795bad": "{serverLabel} で `{command}` を実行し、表示された再起動の手順に従ってください。",
   "3cb4fcae1546e2eb": "更新コマンドをコピーできませんでした",
   "c10262062b7f9a5e": "{serverLabel} を実行している T3 Code デスクトップアプリを更新しますか？そのマシンでアプリが終了し、再起動します。",
   "a1581c125ff5ba06": "更新コマンドをコピー",
-  "b3ba2b8e2eb87795": "再起動コマンドをコピー",
   "deeb29ec7a4749c1": "更新",
   "097b5f9ddc46e66c": "{serverLabel} の{action}",
   "f8725d62bc72896d": "[情報] → [更新トラック] でトラックを切り替えます",
@@ -4967,6 +4947,7 @@
   "5ba22a660758e453": "添付ファイルの上限に達しました。",
   "181933312b23cb0c": "下書きがこの添付ファイルを拒否しました (重複しているか、添付ファイルの上限に達しています)。",
   "df02c1d51d158d32": "このスレッドの応答モデルを切り替え",
+  "724baefb1716842b": "MCP servers",
   "929781439a221aae": "新しいサイドチャットで別の質問をする",
   "378c3404c430fc05": "/side と同じ",
   "8ce7ee2a95c49bdb": "新しいセッションを開始します。以前のメッセージは表示されたままです",
@@ -6019,6 +6000,8 @@
   "f36faf18ea4b130a": "Paste a link or describe the change",
   "c042797cf356651e": "Add a project on this server to open an agent thread.",
   "619181f6a1b73fe7": "Open thread with instructions",
+  "7a4492e0fa79dca2": "Tools (MCP)",
+  "13acfdd2e7f96433": "Connect an environment to configure portable MCP servers and harness extensions.",
   "c614a41c7aa71164": "Conditional native",
   "f67d0170cde760bb": "Gateway",
   "f43b2a530d418624": "Hybrid",
@@ -6027,10 +6010,13 @@
   "61d3e5d50ac89d1c": "No native AGENTS.md",
   "7f4e9affebdf1126": "Native tool hooks",
   "5ea6906a9dc1b825": "Gateway & lifecycle",
-  "877e407e292f137b": "Create Hook with Agent",
+  "b31222510bd5d6ea": "Skills & Plugins",
   "43fbda290c4d7393": "Edit with Agent",
   "ef42298248058528": "Add with Agent",
-  "13acfdd2e7f96433": "Connect an environment to configure portable MCP servers and harness extensions.",
+  "4e5f1c0e990db46f": "Hooks",
+  "877e407e292f137b": "Create Hook with Agent",
+  "c9eafd03dec510c7": "Modes",
+  "8cf8658120885e30": "Portable Memory",
   "b739cb13af449fca": "CLI migration preserves skill files and executable permissions. Sync flags binary files as unscannable-binary when it cannot check them for secrets.",
   "b6f319cedd309b03": "Harness",
   "008ad7d6219755cd": "Sync & Migration",
@@ -6041,8 +6027,6 @@
   "893d27f47cdeebb9": "The server returned a partial file tree.",
   "1429a64f16526b00": "File read access is required.",
   "a08dfffb58eed789": "Loading file…",
-  "b31222510bd5d6ea": "Skills & Plugins",
-  "7a4492e0fa79dca2": "Tools (MCP)",
   "6bad24dc338be059": "Context & Roles",
   "c916ffa7d2f1cf1b": "Guardrails",
   "94ab4591ce101233": "コメントを投稿できませんでした",
@@ -6173,6 +6157,10 @@
   "c9cae7bac5f42342": "さらに読み込む",
   "54f59582f641cbaf": "Issue",
   "01e7836447bcad93": "自分に割り当てられた Issue",
+  "1a07e4d043f5df4e": "接続",
+  "683dc8c4b42d1a89": "Harness",
+  "752fa31f9a4b7702": "Disconnected",
+  "935f2a074b265463": "Local workspace",
   "3a883fbaed8d7561": "アプリ",
   "3cc7159b902f36ec": "アクセス",
   "a6615c82020deb59": "接続",
@@ -6384,6 +6372,7 @@
   ],
   "216ab7514aea1d61": "エージェントなしで開始",
   "501ce2d99da8bfd1": "開始するにはエージェントを 1 つセットアップしてください。",
+  "e29409ae107f57b1": "Anonymous usage data is sent only when enabled.",
   "dc099484b76a9526": [
     "T3 Code は有効にした場合にのみ匿名の使用状況データを送信します。詳しくは",
     " ",
@@ -8034,15 +8023,15 @@
     },
     ")"
   ],
-  "d0e747ae0c4f68a5": "t3 をインストールできませんでした",
-  "ba3ac338f36cba74": "t3 を削除できませんでした",
-  "9c942b53b58119b8": "t3 を PATH に追加できませんでした",
-  "dbd9a279df913da0": "新しいターミナルでは {path} にある別の t3 が先に実行されます。T3 Code の t3 を使うには、それを削除してください。",
-  "20a48e388fd71c1d": "T3 Code の CLI を、どのターミナルからでも `t3` として実行できるようにします。",
+  "a20b66761ab8743d": "{command} をインストールできませんでした",
+  "2d8c72d1fbb24ccd": "{command} を削除できませんでした",
+  "5231206d848f0f51": "{command} を PATH に追加できませんでした",
+  "74c0bd0b60c1b4e1": "新しいターミナルでは {path} にある別の {command} が先に実行されます。T3 Code の {command} を使うには、それを削除してください。",
+  "e2bc9a831c257fbf": "T3 Code の CLI を、どのターミナルからでも `{command}` として実行できるようにします。",
   "4f6e93011ef2da6f": "{path} にインストールしました。使うには新しいターミナルを開いてください。",
   "371ca438cf467125": "{path} にインストールし、{file} で PATH に追加しました。使うには新しいターミナルを開いてください。",
   "fd3eece9d1a7ea38": "{path} にインストールしましたが、まだ PATH に含まれていません。",
-  "5fff98fa978bd008": "{path} にインストールしましたが、まだ PATH に含まれていません。`t3` を実行するには、そのフォルダーを PATH に追加してください。",
+  "8567db625e5549ae": "{path} にインストールしましたが、まだ PATH に含まれていません。`{command}` を実行するには、そのフォルダーを PATH に追加してください。",
   "dc06294dd4078b00": "削除",
   "b707d919dbf0222a": "インストール",
   "9a284b5893dc04a2": "OpenRouter のモデル",
@@ -8796,7 +8785,6 @@
   "df1b3dddecd4659f": "対象環境にのみ存在するファイルを削除",
   "ad36b814f6a09f97": "確認して送信",
   "682cc6348b64e626": "Failed to refresh Harness library",
-  "683dc8c4b42d1a89": "Harness",
   "ceee7a38b04806df": "組み込みモードを上書き済み",
   "3ee0fccb20600705": "Propose plan",
   "10f1a7a0f8a9c900": "MCP · {id}",
@@ -8939,7 +8927,6 @@
   "3c55c1bc971ab639": "Stored under ~/.t3/harness/modes/*.md and projected across all providers.",
   "1e88c5f19afe621a": "Save Mode",
   "cf34fc4aae4c9d49": "Read instructions",
-  "8cf8658120885e30": "Portable Memory",
   "3cc30b3af2b72eb4": "Search memory",
   "08c507d1999563c7": "Could not save memory note",
   "876e7a8c229f3d07": "Unpin",
@@ -9125,41 +9112,6 @@
   "60b069c909226eb0": "検出したツールを追加",
   "b5cbec89930470c9": "Import from CLI",
   "e6e4b713eaf4d497": "Add MCP server",
-  "97388c061a394481": [
-    "Configure MCP servers once in",
-    " ",
-    {
-      "t": "code",
-      "i": 1,
-      "c": {
-        "i": 2,
-        "k": "_gt_value_2",
-        "v": "v"
-      }
-    },
-    " ",
-    "and reuse them across every provider through the isolated ",
-    {
-      "t": "code",
-      "i": 3,
-      "c": "/mcp/harness"
-    },
-    " ",
-    "gateway. Use ",
-    {
-      "t": "code",
-      "i": 4,
-      "c": "${secret:NAME}"
-    },
-    " or",
-    " ",
-    {
-      "t": "code",
-      "i": 5,
-      "c": "${secret:provider:ref}"
-    },
-    " for credentials."
-  ],
   "4247e5730988f6a9": "Restricted by organization policy",
   "3f28feb80259d963": [
     {
@@ -9224,6 +9176,41 @@
   "e9459149a38c95c1": "Revoke trust",
   "32111e0efc4c768e": "再ログイン",
   "e2dd98f1b8c413c4": "ログインを解除",
+  "97388c061a394481": [
+    "Configure MCP servers once in",
+    " ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": {
+        "i": 2,
+        "k": "_gt_value_2",
+        "v": "v"
+      }
+    },
+    " ",
+    "and reuse them across every provider through the isolated ",
+    {
+      "t": "code",
+      "i": 3,
+      "c": "/mcp/harness"
+    },
+    " ",
+    "gateway. Use ",
+    {
+      "t": "code",
+      "i": 4,
+      "c": "${secret:NAME}"
+    },
+    " or",
+    " ",
+    {
+      "t": "code",
+      "i": 5,
+      "c": "${secret:provider:ref}"
+    },
+    " for credentials."
+  ],
   "7a45e9a9f2f0b41d": "ブラウザーでアクセスを許可してください。コールバックページを開けない場合は、そのアドレスをここに貼り付けてください。",
   "52d4be6f6cd63137": [
     "MCP diagnostics: ",
@@ -9289,14 +9276,40 @@
   ],
   "7e2e8bec840689a3": "Trust & enable",
   "9fb072ea040d84bf": "Retry loading Harness",
-  "0b27489e18ff9300": [
-    "Saved to your portable ",
+  "e331cad6483bf496": [
+    "Configure MCP servers once in",
+    " ",
     {
       "t": "code",
       "i": 1,
-      "c": "~/.t3/harness/harness.json"
+      "c": {
+        "i": 2,
+        "k": "_gt_value_2",
+        "v": "v"
+      }
     },
-    " and available to every provider."
+    " ",
+    "and reuse them across every provider through the isolated ",
+    {
+      "t": "code",
+      "i": 3,
+      "c": "/mcp/harness"
+    },
+    " ",
+    "gateway. Use ",
+    {
+      "t": "code",
+      "i": 4,
+      "c": "${secret:NAME}"
+    },
+    " or ",
+    {
+      "t": "code",
+      "i": 5,
+      "c": "${secret:provider:ref}"
+    },
+    " ",
+    "for credentials."
   ],
   "78ade2037b60c8f0": "Server ID",
   "e4c938ffecbcc0f9": "Transport",
@@ -9745,10 +9758,11 @@
   "0be6b2546df12f66": "停止",
   "7dbd7e8943e8931f": "マイクを起動しています…",
   "efa31f38b611e912": "この録音を再生できませんでした。もう一度録音してください。",
-  "0cebac0a2a6bdc99": "iPhone と iPad",
   "d797c9687a256a50": "スマートフォンやタブレットからサーバーに接続します。",
-  "c21858dee1b62639": "{store} のリンク",
+  "e5e10738cd1b6d83": "モバイルの設定",
+  "30340cddf36f92fa": "モバイルの設定",
   "cdcdc54a444a3636": "スマートフォンのカメラでスキャンしてください。",
+  "eb576a5feda7b535": "開く",
   "73da41e93823fd71": [
     "T3 Code で複数の ",
     {
@@ -10973,7 +10987,6 @@
   "126a28a1ad4b2d57": "テキスト生成モデルを選ぶには環境に接続してください。",
   "5fe5a45199fa9c07": "利用できるテキスト生成プロバイダーはありません。",
   "99ceba64591c9257": "診断を表示",
-  "eb576a5feda7b535": "開く",
   "66647e8c8123a51f": "ポリシーを表示",
   "6d59e1e516e53d17": "ライセンスを表示",
   "941d08db15f62d17": "アーカイブ済み",
@@ -12505,7 +12518,6 @@
   "f2bf529f85e05494": "共有とアクセス",
   "7cf24feddad00a5e": "環境設定",
   "58058320796d28f6": "コード",
-  "1a07e4d043f5df4e": "接続",
   "d8cd577c915539bd": "{label} のアカウントとトークン",
   "a5ea998202be1fbc": "{label} の認証情報",
   "8f636f473e42e657": "すべて ローカル ファイル 未コミット 変更 編集済み 追跡 無視 env ビルド 出力 クリーンアップ any local files uncommitted",
@@ -12618,10 +12630,10 @@
   "0c5fc3b5e41e1956": "生成 スレッドタイトル プロンプト カスタム スタイル 命名 名前の変更 再生成 titles",
   "a83570bcb45d8fa1": "情報 更新を確認 アップデート ダウンロード インストール アップグレード リリース update",
   "d65bdf6748801734": "リリース チャンネル stable latest nightly プレリリース channel",
-  "0767c794edea8f03": "t3 コマンド",
+  "7a761ec0d7eb5be7": "{command} コマンド",
   "46dd4dc08c1e552f": "CLI ターミナル シェル パス インストール コマンドライン cli",
   "86479042bae0e2db": "モバイルアプリ",
-  "dc2a999ca67ccf31": "スマートフォン タブレット iPhone iPad iOS Android App Store Google Play QR mobile",
+  "dc2a999ca67ccf31": "phone tablet iPhone iPad iOS Android App Store Google Play QR",
   "6310b97b04ef239f": "ようこそページ",
   "df9fa3a9cb004b9b": "オンボーディング セットアップ 初回起動 はじめに エージェント インポート プロジェクト onboarding",
   "3188bc3b3c4508bc": "プライバシーポリシー",
@@ -12702,10 +12714,7 @@
   "ff679e74f97044e6": "シークレットプロバイダーを追加",
   "ddd5990f613aebb4": "新規 1Password 保管庫 op CLI アカウント vault",
   "c1b7649ac731ed07": "Plugins",
-  "724baefb1716842b": "MCP servers",
   "e095b15447afbb6f": "Rules & AGENTS.md",
-  "c9eafd03dec510c7": "Modes",
-  "4e5f1c0e990db46f": "Hooks",
   "ce19cbab7a347f89": "Approvals",
   "d7ace0fcb370d8b1": "CLI Import / Export",
   "b9b1dccabd2ed00d": "アーカイブ済みのスレッド",
@@ -12739,7 +12748,7 @@
   "9c73aa0c2e2b4e7d": "ショートカットを選択",
   "300a948f90c4d75c": "戻る",
   "2a50e229df85d553": "進む",
-  "8aa6404c8018ea67": "T3 Code ホーム",
+  "bcdd5a1286c75b62": "{app} home",
   "8e9626aa27cb188a": "Issue",
   "9d2fc1003e82feb1": "使用量",
   "20283eb1dd6119f9": "{count, plural, other {{count} 個の添付ファイル}}",

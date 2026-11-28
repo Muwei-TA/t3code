@@ -1,10 +1,16 @@
+import { LIGHTNING_BRAND } from "./brand.ts";
 import { isLoopbackHost } from "./preview.ts";
+
+const DESKTOP_RETURN_PROTOCOLS = [
+  `${LIGHTNING_BRAND.urlScheme}:`,
+  `${LIGHTNING_BRAND.urlScheme}-dev:`,
+];
 
 export function providerAuthReturnUrl(value: string | undefined): string | undefined {
   if (!value) return undefined;
   try {
     const url = new URL(value);
-    const desktop = ["t3code:", "t3code-dev:"].includes(url.protocol) && url.host === "app";
+    const desktop = DESKTOP_RETURN_PROTOCOLS.includes(url.protocol) && url.host === "app";
     const web =
       ["http:", "https:"].includes(url.protocol) &&
       (isLoopbackHost(url.hostname) || url.origin === "https://app.t3.codes");

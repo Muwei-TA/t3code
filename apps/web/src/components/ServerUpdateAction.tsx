@@ -38,8 +38,9 @@ import { useServerConfigs } from "~/state/entities";
 import { useManagedPolicy } from "~/state/managedPolicy";
 import { environmentPresentations } from "~/state/presentation";
 import { ManagedControl } from "./ManagedPolicy";
-import { manualServerUpdateCommand } from "~/versionSkew";
+import { legacyServerUpdateRunner, manualServerUpdateCommand } from "~/versionSkew";
 import { crossesReleaseTrack } from "@t3tools/shared/cliRelease";
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -179,7 +180,12 @@ export function useServerUpdate() {
                   version: result.value.targetVersion,
                 }),
               )
-            : m(msg("Reconnected on t3@{version}.", { version: result.value.targetVersion })),
+            : m(
+                msg("Reconnected on {app} {version}.", {
+                  app: LIGHTNING_BRAND.baseName,
+                  version: result.value.targetVersion,
+                }),
+              ),
       });
     }
     return { status: "updated" };
@@ -301,38 +307,37 @@ export function ServerUpdateAction({
   const gt = useGT();
   const messages = useMessages();
   const isDesktopAppUpdate = selfUpdate === "desktop-managed";
-  const serverVersion = useServerConfigs().get(environmentId)?.environment.serverVersion;
+  const server = useServerConfigs().get(environmentId)?.environment;
+  const serverVersion = server?.serverVersion;
   const sessionStateAtom = environmentSession.sessionStateAtom(environmentId);
   const canUpdate = useAtomValue(sessionStateAtom, canUpdateServer);
   const updatesDenial = managedUpdatesDenial(useManagedPolicy(environmentId), messages);
   const update = useServerUpdate();
-  const updatesInstall =
-    installation?.kind === "npm-global" || installation?.kind === "t3-launcher";
   const { copyToClipboard } = useCopyToClipboard<{ command: string }>({
-    target: updatesInstall
-      ? {
-          target: "update command",
-          unavailableMessage: msg("Clipboard API is unavailable while copying update command."),
-          failureMessage: msg("Failed to copy update command to the clipboard."),
-        }
-      : {
-          target: "relaunch command",
-          unavailableMessage: msg("Clipboard API is unavailable while copying relaunch command."),
-          failureMessage: msg("Failed to copy relaunch command to the clipboard."),
-        },
+    target: {
+      target: "update command",
+      unavailableMessage: msg("Clipboard API is unavailable while copying update command."),
+      failureMessage: msg("Failed to copy update command to the clipboard."),
+    },
     onCopy: ({ command }) => {
       toastManager.add({
         type: "success",
-        title: updatesInstall ? gt("Update command copied") : gt("Relaunch command copied"),
-        description: updatesInstall
-          ? gt("Run `{command}` on {serverLabel}, then restart t3 with your usual options.", {
-              command,
-              serverLabel,
-            })
-          : gt(
-              "Stop t3 on {serverLabel}, then relaunch with `{command}` using the same subcommand and options. This does not update an installed t3 command.",
-              { command, serverLabel },
-            ),
+        title: gt("Update command copied"),
+        description:
+          legacyServerUpdateRunner(installation) !== null
+            ? gt(
+                "Stop the old server on {serverLabel} and relaunch with `{command}`, keeping any original flags.",
+                { command, serverLabel },
+              )
+            : installation?.kind === "npm-global"
+              ? gt(
+                  "Run `{command}` on {serverLabel}, then restart from the same install location.",
+                  { command, serverLabel },
+                )
+              : gt(
+                  "Run `{command}` on {serverLabel}, then follow the restart instructions it prints.",
+                  { command, serverLabel },
+                ),
       });
     },
     onError: (error) => {
@@ -399,12 +404,12 @@ export function ServerUpdateAction({
   }
 
   const manualCommand =
-    selfUpdate === null ? manualServerUpdateCommand(targetVersion, installation) : null;
+    selfUpdate === null
+      ? manualServerUpdateCommand(targetVersion, installation, server?.platform.os)
+      : null;
   const actionLabel =
     manualCommand !== null
-      ? updatesInstall
-        ? gt("Copy update command")
-        : gt("Copy relaunch command")
+      ? gt("Copy update command")
       : (label ?? gt("Update", { $context: "verb, updates the server" }));
   const onClick =
     manualCommand !== null
@@ -483,7 +488,12 @@ export function OutdatedServerUpdateAction({
     toastManager.add({
       type: "success",
       title: m(msg("{serverLabel} updated", { serverLabel })),
-      description: m(msg("Reconnected on t3@{version}.", { version: result.value.targetVersion })),
+      description: m(
+        msg("Reconnected on {app} {version}.", {
+          app: LIGHTNING_BRAND.baseName,
+          version: result.value.targetVersion,
+        }),
+      ),
     });
   };
   if (fromVersion !== undefined && crossesReleaseTrack(fromVersion, targetVersion)) {

@@ -1,3 +1,4 @@
+import { normalizeBrandCopy } from "@t3tools/shared/brand";
 import { decodeOptions, getReactI18nCache, gtFallback, type useMessages } from "gt-react";
 
 import { DEFAULT_LOCALE } from "./locales";
@@ -27,8 +28,12 @@ function resolve(message: string, variables: Parameters<MessageResolver>[1] = {}
       : getReactI18nCache().lookupTranslation(activeLocale, source, { ...options, $format: "ICU" });
   // Untranslated text is English, so it takes English plural rules.
   return typeof target === "string"
-    ? gtFallback(target, { ...options, $locale: activeLocale, $_fallback: source })
-    : gtFallback(source, { ...options, $locale: DEFAULT_LOCALE });
+    ? gtFallback(normalizeBrandCopy(target), {
+        ...options,
+        $locale: activeLocale,
+        $_fallback: source,
+      })
+    : gtFallback(normalizeBrandCopy(source), { ...options, $locale: DEFAULT_LOCALE });
 }
 
 /**

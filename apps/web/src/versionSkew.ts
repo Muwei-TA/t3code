@@ -1,10 +1,13 @@
 import type {
   EnvironmentId,
+  ExecutionEnvironmentPlatformOs,
   ServerConfig,
   ServerInstallation,
   ServerSelfUpdateCapability,
 } from "@t3tools/contracts";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
+import { CLI_NPM_PACKAGE_NAME, cliReleaseAssetUrl } from "@t3tools/shared/cliRelease";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import * as Schema from "effect/Schema";
 import { msg } from "gt-react";
@@ -101,21 +104,56 @@ export function supportsDesktopAppUpdate(
   return serverConfig?.environment.capabilities.desktopAppUpdate === true;
 }
 
+export function legacyServerUpdateRunner(installation?: ServerInstallation) {
+  if (installation?.kind === "npm-global") {
+    return installation.packageName === CLI_NPM_PACKAGE_NAME ? null : "npx";
+  }
+  if (
+    installation === undefined ||
+    installation.kind === "t3-launcher" ||
+    installation.launch !== undefined
+  ) {
+    return null;
+  }
+  return installation.kind;
+}
+
 export function manualServerUpdateCommand(
   targetVersion: string,
   installation?: ServerInstallation,
+  os?: ExecutionEnvironmentPlatformOs,
 ): string {
-  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-  if (installation?.kind === "npm-global") {
-    return `npm install --global --prefix ${quote(installation.prefix)} t3@${targetVersion}`;
-  }
+  const windows = os === "windows";
+  const quote = (value: string) =>
+    windows
+      ? `'${value.replace(/['\u2018\u2019\u201A\u201B]/g, "$&$&")}'`
+      : `'${value.replaceAll("'", "'\\''")}'`;
   if (installation?.kind === "t3-launcher") {
     // An inherited T3CODE_HOME would otherwise send the update to a home the launcher is not in.
-    return `${quote(installation.launcher)} update --base-dir ${quote(installation.baseDir)} ${targetVersion}`;
+    return `${windows ? "& " : ""}${quote(installation.launcher)} update --base-dir ${quote(installation.baseDir)} ${targetVersion}`;
   }
-  const runner =
-    installation?.kind === "pnpm-dlx" ? "pnpm dlx" : installation?.kind === "bunx" ? "bunx" : "npx";
-  return `${runner} t3@${targetVersion}`;
+  if (installation?.kind === "npm-global" && installation.packageName === CLI_NPM_PACKAGE_NAME) {
+    const tarball = cliReleaseAssetUrl(targetVersion, "t3.tgz");
+    return `${windows ? "npm.cmd" : "npm"} install --global --prefix ${quote(installation.prefix)} ${quote(tarball)}`;
+  }
+  if (installation && installation.kind !== "npm-global" && installation.launch) {
+    const { node, entry } = installation.launch;
+    return `${windows ? "& " : ""}${quote(node)} ${quote(entry)} update ${targetVersion}`;
+  }
+  const runner = legacyServerUpdateRunner(installation);
+  if (runner !== null) {
+    const tarball = quote(cliReleaseAssetUrl(targetVersion, "t3.tgz"));
+    const cli = LIGHTNING_BRAND.cliCommand;
+    switch (runner) {
+      case "npx":
+        return `${windows ? "npx.cmd" : "npx"} --yes --package ${tarball} -- ${cli}`;
+      case "pnpm-dlx":
+        return `pnpm --package=${tarball} dlx ${cli}`;
+      case "bunx":
+        return `bunx --package ${tarball} ${cli}`;
+    }
+  }
+  return `${LIGHTNING_BRAND.cliCommand} update ${targetVersion}`;
 }
 
 export function buildVersionMismatchDismissalKey(

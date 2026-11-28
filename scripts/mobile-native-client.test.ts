@@ -8,10 +8,39 @@ import * as Path from "effect/Path";
 import {
   androidSdk,
   buildRunTitle,
+  iosBuildTarget,
+  iosSimulatorProduct,
   NativeClientError,
   prebuildAndroid,
   remoteBuildState,
 } from "./mobile-native-client.ts";
+
+it.layer(NodeServices.layer)("iOS simulator builds", (it) => {
+  it.effect("uses the prebuilt workspace and scheme and copies the built application", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const ios = yield* fs.makeTempDirectoryScoped({ prefix: "mobile-ios-build-" });
+      const workspace = path.join(ios, "LightningCodeDev.xcworkspace");
+      const schemes = path.join(ios, "LightningCodeDev.xcodeproj/xcshareddata/xcschemes");
+      const derivedData = path.join(ios, "derived-data");
+      const product = path.join(
+        derivedData,
+        "Build/Products/Debug-iphonesimulator/Lightning Simulator.app",
+      );
+      yield* fs.makeDirectory(workspace);
+      yield* fs.makeDirectory(schemes, { recursive: true });
+      yield* fs.writeFileString(path.join(schemes, "Lightning Simulator.xcscheme"), "");
+      yield* fs.makeDirectory(product, { recursive: true });
+
+      assert.deepStrictEqual(yield* iosBuildTarget(ios), {
+        workspace,
+        scheme: "Lightning Simulator",
+      });
+      assert.strictEqual(yield* iosSimulatorProduct(derivedData), product);
+    }),
+  );
+});
 
 const caches = [".gradle/history", "app/.cxx/object"];
 

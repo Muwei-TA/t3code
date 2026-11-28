@@ -2269,23 +2269,6 @@
   "c65de112b48a66ed": "페어링 링크 추가",
   "bc8ab792af1d656f": "컴퓨터에서 실행:",
   "0ba14e4e920cfa00": "또는 데스크톱 앱 다운로드",
-  "0e79b7a6508a6286": "그다음",
-  "363b9991fa23d36b": [
-    "이미 ",
-    {
-      "t": "code",
-      "i": 1,
-      "c": "t3"
-    },
-    "이(가) 있다면 설치를 건너뛰세요. 설치 후",
-    " ",
-    {
-      "t": "code",
-      "i": 2,
-      "c": "t3"
-    },
-    "을(를) 찾을 수 없으면 설치 프로그램이 알려 주는 폴더를 PATH에 추가하세요."
-  ],
   "87b24d00c08f54bb": "단축키 파일을 열 수 없습니다",
   "0ee16208cbfcdbf4": "파일을 여는 중 알 수 없는 오류가 발생했습니다.",
   "9e20856550715c74": [
@@ -2509,21 +2492,18 @@
   "14c6474d167e703d": "{serverLabel} 업데이트 실패",
   "42276d8ce4986860": "{serverLabel} 업데이트됨",
   "6dc325bc8a355b3c": "데스크톱 앱이 {version}(으)로 다시 실행되었습니다.",
-  "9bbe83d7e15acf08": "t3@{version}에 다시 연결되었습니다.",
+  "6c2cccb894d17c86": "{app} {version}에 다시 연결했습니다.",
   "530f8d6d56cedc3b": "업데이트 명령을 복사하는 중 클립보드 API를 사용할 수 없습니다.",
   "d8e50e9835a12e8d": "업데이트 명령을 클립보드에 복사하지 못했습니다.",
-  "9b947c837e3756c0": "다시 실행 명령을 복사하는 중 클립보드 API를 사용할 수 없습니다.",
-  "4321f91645a6516a": "다시 실행 명령을 클립보드에 복사하지 못했습니다.",
   "c5422ea828b540ed": "{servers}의 T3 Code 데스크톱 앱을 업데이트할까요? 해당 머신에서 앱이 닫히고 다시 실행됩니다.",
   "b25472ef70df9b5d": "모두 업데이트",
   "febf4ec3cdcdf372": "업데이트 명령 복사됨",
-  "bee440d0da53841c": "다시 실행 명령 복사됨",
-  "9e17a8beb64d6130": "{serverLabel}에서 `{command}`을(를) 실행한 다음 평소 옵션으로 t3를 다시 시작하세요.",
-  "218253b96de09d5d": "{serverLabel}에서 t3를 중지한 다음 같은 하위 명령과 옵션으로 `{command}`을(를) 사용해 다시 실행하세요. 설치된 t3 명령은 업데이트되지 않습니다.",
+  "c1bcad4fe66893fa": "{serverLabel}에서 `{command}`을 실행한 후 같은 설치 경로에서 다시 시작하세요.",
+  "eb8d76053aaf6469": "{serverLabel}의 이전 서버를 중지하고 기존 플래그를 유지한 채 `{command}`로 다시 실행하세요.",
+  "d54f9303c5795bad": "{serverLabel}에서 `{command}`를 실행한 다음 표시되는 재시작 안내를 따르세요.",
   "3cb4fcae1546e2eb": "업데이트 명령을 복사할 수 없습니다",
   "c10262062b7f9a5e": "{serverLabel}을(를) 실행하는 T3 Code 데스크톱 앱을 업데이트할까요? 해당 머신에서 앱이 닫히고 다시 실행됩니다.",
   "a1581c125ff5ba06": "업데이트 명령 복사",
-  "b3ba2b8e2eb87795": "다시 실행 명령 복사",
   "deeb29ec7a4749c1": "업데이트",
   "097b5f9ddc46e66c": "{serverLabel}: {action}",
   "f8725d62bc72896d": "정보 → 업데이트 트랙에서 트랙을 전환하세요",
@@ -4964,6 +4944,7 @@
   "5ba22a660758e453": "첨부 파일 한도에 도달했습니다.",
   "181933312b23cb0c": "초안에서 이 첨부 파일을 거부했습니다(중복 또는 첨부 파일 한도 도달).",
   "df02c1d51d158d32": "이 스레드의 응답 모델 전환",
+  "724baefb1716842b": "MCP servers",
   "929781439a221aae": "새 사이드 채팅에서 곁가지 질문하기",
   "378c3404c430fc05": "/side와 같음",
   "8ce7ee2a95c49bdb": "새 세션 시작. 이전 메시지는 계속 표시됨",
@@ -6017,6 +5998,8 @@
   "f36faf18ea4b130a": "Paste a link or describe the change",
   "c042797cf356651e": "Add a project on this server to open an agent thread.",
   "619181f6a1b73fe7": "Open thread with instructions",
+  "7a4492e0fa79dca2": "Tools (MCP)",
+  "13acfdd2e7f96433": "Connect an environment to configure portable MCP servers and harness extensions.",
   "c614a41c7aa71164": "Conditional native",
   "f67d0170cde760bb": "Gateway",
   "f43b2a530d418624": "Hybrid",
@@ -6025,10 +6008,13 @@
   "61d3e5d50ac89d1c": "No native AGENTS.md",
   "7f4e9affebdf1126": "Native tool hooks",
   "5ea6906a9dc1b825": "Gateway & lifecycle",
-  "877e407e292f137b": "Create Hook with Agent",
+  "b31222510bd5d6ea": "Skills & Plugins",
   "43fbda290c4d7393": "Edit with Agent",
   "ef42298248058528": "Add with Agent",
-  "13acfdd2e7f96433": "Connect an environment to configure portable MCP servers and harness extensions.",
+  "4e5f1c0e990db46f": "Hooks",
+  "877e407e292f137b": "Create Hook with Agent",
+  "c9eafd03dec510c7": "Modes",
+  "8cf8658120885e30": "Portable Memory",
   "b739cb13af449fca": "CLI migration preserves skill files and executable permissions. Sync flags binary files as unscannable-binary when it cannot check them for secrets.",
   "b6f319cedd309b03": "Harness",
   "008ad7d6219755cd": "Sync & Migration",
@@ -6039,8 +6025,6 @@
   "893d27f47cdeebb9": "The server returned a partial file tree.",
   "1429a64f16526b00": "File read access is required.",
   "a08dfffb58eed789": "Loading file…",
-  "b31222510bd5d6ea": "Skills & Plugins",
-  "7a4492e0fa79dca2": "Tools (MCP)",
   "6bad24dc338be059": "Context & Roles",
   "c916ffa7d2f1cf1b": "Guardrails",
   "94ab4591ce101233": "댓글을 게시할 수 없습니다",
@@ -6171,6 +6155,10 @@
   "c9cae7bac5f42342": "더 불러오기",
   "54f59582f641cbaf": "이슈",
   "01e7836447bcad93": "나에게 할당된 이슈",
+  "1a07e4d043f5df4e": "연결",
+  "683dc8c4b42d1a89": "Harness",
+  "752fa31f9a4b7702": "Disconnected",
+  "935f2a074b265463": "Local workspace",
   "3a883fbaed8d7561": "앱",
   "3cc7159b902f36ec": "액세스",
   "a6615c82020deb59": "연결",
@@ -6382,6 +6370,7 @@
   ],
   "216ab7514aea1d61": "에이전트 없이 시작",
   "501ce2d99da8bfd1": "시작하려면 에이전트를 하나 설정하세요.",
+  "e29409ae107f57b1": "Anonymous usage data is sent only when enabled.",
   "dc099484b76a9526": [
     "T3 Code는 활성화한 경우에만 익명 사용 데이터를 전송합니다. 자세한 내용은",
     " ",
@@ -8036,15 +8025,15 @@
     },
     ")"
   ],
-  "d0e747ae0c4f68a5": "t3를 설치할 수 없습니다",
-  "ba3ac338f36cba74": "t3를 제거할 수 없습니다",
-  "9c942b53b58119b8": "t3를 PATH에 추가할 수 없습니다",
-  "dbd9a279df913da0": "새 터미널에서는 {path}의 다른 t3가 먼저 실행됩니다. T3 Code의 t3를 사용하려면 해당 항목을 제거하세요.",
-  "20a48e388fd71c1d": "어느 터미널에서나 T3 Code의 CLI를 `t3`로 실행합니다.",
+  "a20b66761ab8743d": "{command}를 설치할 수 없습니다",
+  "2d8c72d1fbb24ccd": "{command}를 제거할 수 없습니다",
+  "5231206d848f0f51": "{command}를 PATH에 추가할 수 없습니다",
+  "74c0bd0b60c1b4e1": "새 터미널에서는 {path}의 다른 {command}가 먼저 실행됩니다. T3 Code의 {command}를 사용하려면 해당 항목을 제거하세요.",
+  "e2bc9a831c257fbf": "어느 터미널에서나 T3 Code의 CLI를 `{command}`로 실행합니다.",
   "4f6e93011ef2da6f": "{path}에 설치되었습니다. 사용하려면 새 터미널을 여세요.",
   "371ca438cf467125": "{path}에 설치되었고 {file}에서 PATH에 추가되었습니다. 사용하려면 새 터미널을 여세요.",
   "fd3eece9d1a7ea38": "{path}에 설치되었지만 아직 PATH에 없습니다.",
-  "5fff98fa978bd008": "{path}에 설치되었지만 아직 PATH에 없습니다. `t3`를 실행하려면 해당 폴더를 PATH에 추가하세요.",
+  "8567db625e5549ae": "{path}에 설치되었지만 아직 PATH에 없습니다. `{command}`를 실행하려면 해당 폴더를 PATH에 추가하세요.",
   "dc06294dd4078b00": "제거",
   "b707d919dbf0222a": "설치",
   "9a284b5893dc04a2": "OpenRouter 모델",
@@ -8799,7 +8788,6 @@
   "df1b3dddecd4659f": "대상에만 있는 파일 삭제",
   "ad36b814f6a09f97": "확인 후 보내기",
   "682cc6348b64e626": "Failed to refresh Harness library",
-  "683dc8c4b42d1a89": "Harness",
   "ceee7a38b04806df": "재정의된 기본 모드",
   "3ee0fccb20600705": "Propose plan",
   "10f1a7a0f8a9c900": "MCP · {id}",
@@ -8942,7 +8930,6 @@
   "3c55c1bc971ab639": "Stored under ~/.t3/harness/modes/*.md and projected across all providers.",
   "1e88c5f19afe621a": "Save Mode",
   "cf34fc4aae4c9d49": "Read instructions",
-  "8cf8658120885e30": "Portable Memory",
   "3cc30b3af2b72eb4": "Search memory",
   "08c507d1999563c7": "Could not save memory note",
   "876e7a8c229f3d07": "Unpin",
@@ -9128,41 +9115,6 @@
   "60b069c909226eb0": "발견된 도구 추가",
   "b5cbec89930470c9": "Import from CLI",
   "e6e4b713eaf4d497": "Add MCP server",
-  "97388c061a394481": [
-    "Configure MCP servers once in",
-    " ",
-    {
-      "t": "code",
-      "i": 1,
-      "c": {
-        "i": 2,
-        "k": "_gt_value_2",
-        "v": "v"
-      }
-    },
-    " ",
-    "and reuse them across every provider through the isolated ",
-    {
-      "t": "code",
-      "i": 3,
-      "c": "/mcp/harness"
-    },
-    " ",
-    "gateway. Use ",
-    {
-      "t": "code",
-      "i": 4,
-      "c": "${secret:NAME}"
-    },
-    " or",
-    " ",
-    {
-      "t": "code",
-      "i": 5,
-      "c": "${secret:provider:ref}"
-    },
-    " for credentials."
-  ],
   "4247e5730988f6a9": "Restricted by organization policy",
   "3f28feb80259d963": [
     {
@@ -9227,6 +9179,41 @@
   "e9459149a38c95c1": "Revoke trust",
   "32111e0efc4c768e": "다시 로그인",
   "e2dd98f1b8c413c4": "로그인 연결 해제",
+  "97388c061a394481": [
+    "Configure MCP servers once in",
+    " ",
+    {
+      "t": "code",
+      "i": 1,
+      "c": {
+        "i": 2,
+        "k": "_gt_value_2",
+        "v": "v"
+      }
+    },
+    " ",
+    "and reuse them across every provider through the isolated ",
+    {
+      "t": "code",
+      "i": 3,
+      "c": "/mcp/harness"
+    },
+    " ",
+    "gateway. Use ",
+    {
+      "t": "code",
+      "i": 4,
+      "c": "${secret:NAME}"
+    },
+    " or",
+    " ",
+    {
+      "t": "code",
+      "i": 5,
+      "c": "${secret:provider:ref}"
+    },
+    " for credentials."
+  ],
   "7a45e9a9f2f0b41d": "브라우저에서 액세스를 승인하세요. 콜백 페이지가 열리지 않으면 해당 주소를 여기에 붙여 넣으세요.",
   "52d4be6f6cd63137": [
     "MCP diagnostics: ",
@@ -9292,14 +9279,40 @@
   ],
   "7e2e8bec840689a3": "Trust & enable",
   "9fb072ea040d84bf": "Retry loading Harness",
-  "0b27489e18ff9300": [
-    "Saved to your portable ",
+  "e331cad6483bf496": [
+    "Configure MCP servers once in",
+    " ",
     {
       "t": "code",
       "i": 1,
-      "c": "~/.t3/harness/harness.json"
+      "c": {
+        "i": 2,
+        "k": "_gt_value_2",
+        "v": "v"
+      }
     },
-    " and available to every provider."
+    " ",
+    "and reuse them across every provider through the isolated ",
+    {
+      "t": "code",
+      "i": 3,
+      "c": "/mcp/harness"
+    },
+    " ",
+    "gateway. Use ",
+    {
+      "t": "code",
+      "i": 4,
+      "c": "${secret:NAME}"
+    },
+    " or ",
+    {
+      "t": "code",
+      "i": 5,
+      "c": "${secret:provider:ref}"
+    },
+    " ",
+    "for credentials."
   ],
   "78ade2037b60c8f0": "Server ID",
   "e4c938ffecbcc0f9": "Transport",
@@ -9748,10 +9761,11 @@
   "0be6b2546df12f66": "중지",
   "7dbd7e8943e8931f": "마이크 여는 중…",
   "efa31f38b611e912": "이 녹음을 재생할 수 없습니다. 다시 녹음해 보세요.",
-  "0cebac0a2a6bdc99": "iPhone 및 iPad",
   "d797c9687a256a50": "휴대폰이나 태블릿에서 서버에 연결하세요.",
-  "c21858dee1b62639": "{store} 링크",
+  "e5e10738cd1b6d83": "모바일 설정",
+  "30340cddf36f92fa": "모바일 설정",
   "cdcdc54a444a3636": "휴대폰 카메라로 스캔하세요.",
+  "eb576a5feda7b535": "열기",
   "73da41e93823fd71": [
     "T3 Code에서 여러 ",
     {
@@ -10975,7 +10989,6 @@
   "126a28a1ad4b2d57": "텍스트 생성 모델을 선택하려면 환경을 연결하세요.",
   "5fe5a45199fa9c07": "사용 가능한 텍스트 생성 제공자가 없습니다.",
   "99ceba64591c9257": "진단 보기",
-  "eb576a5feda7b535": "열기",
   "66647e8c8123a51f": "정책 보기",
   "6d59e1e516e53d17": "라이선스 보기",
   "941d08db15f62d17": "보관됨",
@@ -12501,7 +12514,6 @@
   "f2bf529f85e05494": "공유 및 액세스",
   "7cf24feddad00a5e": "환경설정",
   "58058320796d28f6": "코드",
-  "1a07e4d043f5df4e": "연결",
   "d8cd577c915539bd": "{label} 계정 및 토큰",
   "a5ea998202be1fbc": "{label} 자격 증명",
   "8f636f473e42e657": "모든 로컬 파일 커밋하지 않은 변경 사항 편집된 추적 파일 무시된 env 빌드 출력 정리",
@@ -12614,10 +12626,10 @@
   "0c5fc3b5e41e1956": "생성된 스레드 제목 프롬프트 사용자 지정 스타일 이름 지정 이름 바꾸기 다시 생성",
   "a83570bcb45d8fa1": "정보 업데이트 확인 다운로드 설치 업그레이드 릴리스",
   "d65bdf6748801734": "릴리스 채널 안정 latest nightly 사전 릴리스",
-  "0767c794edea8f03": "t3 명령",
+  "7a761ec0d7eb5be7": "{command} 명령",
   "46dd4dc08c1e552f": "CLI 터미널 셸 경로 설치 명령줄",
   "86479042bae0e2db": "모바일 앱",
-  "dc2a999ca67ccf31": "휴대폰 태블릿 iPhone iPad iOS Android App Store Google Play QR",
+  "dc2a999ca67ccf31": "phone tablet iPhone iPad iOS Android App Store Google Play QR",
   "6310b97b04ef239f": "시작 페이지",
   "df9fa3a9cb004b9b": "온보딩 설정 첫 실행 시작하기 에이전트 프로젝트 가져오기",
   "3188bc3b3c4508bc": "개인정보 처리방침",
@@ -12698,10 +12710,7 @@
   "ff679e74f97044e6": "시크릿 제공자 추가",
   "ddd5990f613aebb4": "새 1Password 볼트 op cli 계정",
   "c1b7649ac731ed07": "Plugins",
-  "724baefb1716842b": "MCP servers",
   "e095b15447afbb6f": "Rules & AGENTS.md",
-  "c9eafd03dec510c7": "Modes",
-  "4e5f1c0e990db46f": "Hooks",
   "ce19cbab7a347f89": "Approvals",
   "d7ace0fcb370d8b1": "CLI Import / Export",
   "b9b1dccabd2ed00d": "보관된 스레드",
@@ -12735,7 +12744,7 @@
   "9c73aa0c2e2b4e7d": "단축키 선택",
   "300a948f90c4d75c": "뒤로",
   "2a50e229df85d553": "앞으로",
-  "8aa6404c8018ea67": "T3 Code 홈",
+  "bcdd5a1286c75b62": "{app} home",
   "8e9626aa27cb188a": "이슈",
   "9d2fc1003e82feb1": "사용량",
   "20283eb1dd6119f9": "{count, plural, other {첨부 파일 {count}개}}",

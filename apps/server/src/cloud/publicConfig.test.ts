@@ -23,6 +23,7 @@ it.effect("rejects an insecure runtime relay URL override", () =>
 it.effect("rejects malformed or insecure hosted app URLs", () =>
   Effect.gen(function* () {
     for (const value of [
+      "",
       "app.t3.codes",
       "http://app.t3.codes",
       "https://app.t3.codes/nested",
@@ -62,7 +63,7 @@ it("product opt-out disables relay tracing with either built-in or runtime crede
     tracesToken: "embedded-token",
   };
   const env = {
-    T3CODE_TELEMETRY_ENABLED: "false",
+    LIGHTNING_CODE_TELEMETRY_ENABLED: "false",
     T3CODE_OTEL_SDK_DISABLED: "false",
   };
 
@@ -90,7 +91,7 @@ it("relay tracing stays off unless the environment opts in", () => {
 
   assert.equal(resolveRelayClientTracingConfig({}, fallback), null);
   assert.deepEqual(
-    resolveRelayClientTracingConfig({ T3CODE_TELEMETRY_ENABLED: "true" }, fallback),
+    resolveRelayClientTracingConfig({ LIGHTNING_CODE_TELEMETRY_ENABLED: "true" }, fallback),
     fallback,
   );
 });

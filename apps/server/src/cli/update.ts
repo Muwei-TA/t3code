@@ -1,3 +1,4 @@
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   CLI_RELEASE_BASE_URL_ENV,
@@ -25,6 +26,7 @@ import * as BootService from "../cloud/bootService.ts";
 import {
   ensurePinnedRuntimeInstalled,
   findPosixLauncher,
+  findWindowsShim,
   generatedWindowsShimTarget,
   launcherOwnsVersionsDir,
   isUnpublishedRelease,
@@ -34,7 +36,6 @@ import {
   prunePinnedRuntimes,
   recordPinnedRuntimeLauncher,
   resolveLauncherPath,
-  windowsShimTarget,
   writePosixLauncher,
 } from "../cloud/pinnedRuntime.ts";
 import {
@@ -49,6 +50,7 @@ import { managedUpdateMirror, managedUpdateRefusal } from "../policy/managedUpda
 import * as ProcessRunner from "../processRunner.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { hostShellWord } from "./invocation.ts";
 import { createUpdateProgress } from "./updateProgress.ts";
 import * as CliService from "./service.ts";
 
@@ -89,15 +91,26 @@ export const resolveNewestVersion = Effect.fn("cli.update.resolve_newest")(funct
     const body = yield* httpClient.execute(authenticatedRequest).pipe(
       Effect.flatMap(HttpClientResponse.filterStatusOk),
       Effect.flatMap((response) => response.text),
-      Effect.mapError(() => new CliUpdateError({ reason: "Could not list t3 releases." })),
+      Effect.mapError(
+        () =>
+          new CliUpdateError({ reason: `Could not list ${LIGHTNING_BRAND.baseName} releases.` }),
+      ),
       Effect.timeoutOrElse({
         duration: RELEASE_INDEX_TIMEOUT,
-        orElse: () => Effect.fail(new CliUpdateError({ reason: "Timed out listing t3 releases." })),
+        orElse: () =>
+          Effect.fail(
+            new CliUpdateError({
+              reason: `Timed out listing ${LIGHTNING_BRAND.baseName} releases.`,
+            }),
+          ),
       }),
     );
     const releases = yield* decodeReleaseIndex(body).pipe(
       Effect.mapError(
-        () => new CliUpdateError({ reason: "The t3 release index had an unexpected shape." }),
+        () =>
+          new CliUpdateError({
+            reason: `The ${LIGHTNING_BRAND.baseName} release index had an unexpected shape.`,
+          }),
       ),
     );
     const version = newestCliReleaseVersion(releases, channel);
@@ -167,24 +180,34 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
   const remember = (launcher: string) =>
     recordPinnedRuntimeLauncher({ baseDir: input.baseDir, launcher }).pipe(
       Effect.mapError(
-        () => new CliUpdateError({ reason: `Could not record the t3 launcher at ${launcher}.` }),
+        () =>
+          new CliUpdateError({
+            reason: `Could not record the ${LIGHTNING_BRAND.cliCommand} launcher at ${launcher}.`,
+          }),
       ),
     );
 
   if (platform === "win32") {
     const shimPath = yield* findWindowsShim(input.launchedAs, versionsDir);
     if (shimPath === undefined) return Option.none<string>();
-    const current = yield* fs.readFileString(shimPath).pipe(Effect.option);
-    const quoted = Option.isSome(current) ? windowsShimTarget(current.value) : undefined;
-    if (quoted === undefined || !ownsTarget(quoted)) return Option.none<string>();
     yield* remember(shimPath);
-    yield* fs
-      .writeFileString(shimPath, `@echo off\r\n"${input.targetEntryPath}" %*`)
-      .pipe(
-        Effect.mapError(
-          () => new CliUpdateError({ reason: `Could not rewrite the t3 launcher at ${shimPath}.` }),
-        ),
-      );
+    const current = yield* fs.readFileString(shimPath).pipe(Effect.option);
+    const target = Option.isSome(current) ? generatedWindowsShimTarget(current.value) : undefined;
+    if (
+      target === undefined ||
+      !ownsTarget(target) ||
+      path.resolve(target).toLowerCase() !== path.resolve(input.launchedAs).toLowerCase()
+    ) {
+      return Option.none<string>();
+    }
+    yield* fs.writeFileString(shimPath, `@echo off\r\n"${input.targetEntryPath}" %*`).pipe(
+      Effect.mapError(
+        () =>
+          new CliUpdateError({
+            reason: `Could not rewrite the ${LIGHTNING_BRAND.cliCommand} launcher at ${shimPath}.`,
+          }),
+      ),
+    );
     return Option.some(shimPath);
   }
 
@@ -198,58 +221,20 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
   }).pipe(
     Effect.mapError(
       (cause) =>
-        new CliUpdateError({ reason: `Could not repoint the t3 launcher at ${launcher}.`, cause }),
+        new CliUpdateError({
+          reason: `Could not repoint the ${LIGHTNING_BRAND.cliCommand} launcher at ${launcher}.`,
+          cause,
+        }),
     ),
   );
   return Option.some(launcher);
-});
-
-/** Windows executables see their own path, so locate the installer shim by matching its target. */
-export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(function* (
-  executablePath: string,
-  versionsDir?: string,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const environment = yield* HostProcess.Environment;
-  const candidates = [
-    ...(environment["T3CODE_INSTALL_BIN_DIR"] ? [environment["T3CODE_INSTALL_BIN_DIR"]] : []),
-    ...(environment["PATH"] ?? environment["Path"] ?? "").split(";"),
-  ]
-    .filter((entry) => entry.trim().length > 0)
-    .map((directory) => ({
-      shimPath: path.join(directory, "t3.cmd"),
-      parseTarget: windowsShimTarget,
-    }));
-  if (versionsDir !== undefined) {
-    const recorded = yield* fs
-      .readFileString(path.join(path.dirname(versionsDir), "launchers"))
-      .pipe(Effect.orElseSucceed(() => ""));
-    for (const shimPath of recorded.split(/\r?\n/)) {
-      if (path.isAbsolute(shimPath) && path.basename(shimPath).toLowerCase() === "t3.cmd") {
-        candidates.push({ shimPath, parseTarget: generatedWindowsShimTarget });
-      }
-    }
-  }
-  for (const { shimPath, parseTarget } of candidates) {
-    const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
-    if (Option.isNone(contents)) continue;
-    const target = parseTarget(contents.value);
-    if (
-      target !== undefined &&
-      path.resolve(target).toLowerCase() === path.resolve(executablePath).toLowerCase()
-    ) {
-      return shimPath;
-    }
-  }
-  return undefined;
 });
 
 const updateFlags = {
   ...projectLocationFlags,
   channel: Flag.Literals("channel", CLI_RELEASE_CHANNELS).pipe(
     Flag.withDescription(
-      "Release channel to follow. Defaults to the channel this t3 was published on.",
+      `Release channel to follow. Defaults to the channel of this ${LIGHTNING_BRAND.baseName} release.`,
     ),
     Flag.optional,
   ),
@@ -278,7 +263,7 @@ export const updateCommand = Command.make("update", {
   version: versionArgument,
 }).pipe(
   Command.withDescription(
-    "Download a newer t3 and switch this machine to it, including the background service when one is installed.",
+    "Download a newer lightning and switch this machine to it, including the background service when one is installed.",
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
@@ -286,6 +271,7 @@ export const updateCommand = Command.make("update", {
       const config = yield* resolveCliAuthConfig(flags, logLevel);
       return yield* runUpdate({
         baseDir: config.baseDir,
+        includeBaseDirInHint: Option.isSome(flags.baseDir),
         logsDir: config.logsDir,
         databasePath: config.dbPath,
         serverRuntimeStatePath: config.serverRuntimeStatePath,
@@ -327,7 +313,7 @@ const belongsToBootService = Effect.fn("cli.update.belongs_to_boot_service")(fun
   const runner = yield* ProcessRunner.ProcessRunner;
   if (platform === "linux") {
     const cgroup = yield* fs.readFileString(`/proc/${pid}/cgroup`).pipe(Effect.option);
-    return Option.isSome(cgroup) && cgroup.value.includes("/t3code.service");
+    return Option.isSome(cgroup) && cgroup.value.includes(`/${BootService.BOOT_SERVICE_UNIT_FILE}`);
   }
   if (platform === "darwin") {
     const parent = yield* runner
@@ -352,6 +338,7 @@ const belongsToBootService = Effect.fn("cli.update.belongs_to_boot_service")(fun
 
 export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   readonly baseDir: string;
+  readonly includeBaseDirInHint?: boolean;
   readonly logsDir: string;
   readonly databasePath: string;
   readonly serverRuntimeStatePath: string;
@@ -370,6 +357,13 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   const service = yield* BootService.BootService;
   const policy = yield* ManagedPolicy.ManagedPolicy;
   const mirror = managedUpdateMirror(policy.document);
+  const { baseName, cliCommand } = LIGHTNING_BRAND;
+  const baseDirOption =
+    input.includeBaseDirInHint === true
+      ? ` --base-dir ${hostShellWord(platform, input.baseDir)}`
+      : "";
+  const invoke = (executable: string) =>
+    `${platform === "win32" ? "& " : ""}${hostShellWord(platform, executable)}`;
 
   const currentVersion = packageJson.version;
   const channel = input.channel ?? cliReleaseChannelOf(currentVersion);
@@ -382,7 +376,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   }
   if (input.requestedVersion !== undefined && !isExactServiceVersion(input.requestedVersion)) {
     return yield* new CliUpdateError({
-      reason: `'${input.requestedVersion}' is not an exact t3 version.`,
+      reason: `'${input.requestedVersion}' is not an exact ${baseName} version.`,
     });
   }
   const progress = createUpdateProgress();
@@ -400,10 +394,10 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   if (targetChannel === "preview" && currentChannel !== "preview") {
     yield* Console.log(
       [
-        `t3@${targetVersion} is a preview build.`,
+        `${baseName} ${targetVersion} is a preview build.`,
         "  Preview builds are cut by maintainers from unreleased branches to exercise the release",
         "  pipeline. They can be broken, receive no fixes, and are never offered as updates; you",
-        `  will have to switch back to ${currentChannel} yourself with \`t3 update --channel ${currentChannel} --allow-downgrade\`.`,
+        `  will have to switch back to ${currentChannel} yourself with \`${cliCommand} update --channel ${currentChannel} --allow-downgrade${baseDirOption}\`.`,
       ].join("\n"),
     );
     if (!(process.stdin.isTTY && process.stdout.isTTY)) {
@@ -446,14 +440,14 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   if (executableCurrent && serviceCurrent) {
     yield* Console.log(
       serviceVersion !== undefined
-        ? `t3 and its background service are already on ${targetVersion} (${targetChannel}).`
-        : `t3 is already on ${targetVersion} (${targetChannel}).`,
+        ? `${baseName} and its background service are already on ${targetVersion} (${targetChannel}).`
+        : `${baseName} is already on ${targetVersion} (${targetChannel}).`,
     );
     return;
   }
   if (!input.allowDowngrade && compareExactServiceVersions(targetVersion, newestInstalled) < 0) {
     return yield* new CliUpdateError({
-      reason: `t3@${targetVersion} is older than the installed ${newestInstalled}. Pass --allow-downgrade to install it anyway.`,
+      reason: `${baseName} ${targetVersion} is older than the installed ${newestInstalled}. Pass --allow-downgrade to install it anyway.`,
     });
   }
 
@@ -470,8 +464,8 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       : executableCurrent
         ? `Updating the background service ${serviceVersion ?? "(unknown version)"} -> ${targetVersion} (${targetChannel}).`
         : alreadyOnDisk
-          ? "Switching T3 Code"
-          : "Updating T3 Code",
+          ? `Switching ${baseName}`
+          : `Updating ${baseName}`,
     executableCurrent
       ? ""
       : `${currentVersion} → ${targetVersion}${targetChannel === "stable" ? "" : ` (${targetChannel})`}`,
@@ -479,7 +473,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   let restartService = false;
   if (serviceInstalled && !serviceCurrent) {
     yield* Console.log(
-      "  A background service is installed for this T3 home. Restarting it interrupts anything running in it: agent turns, terminals, remote clients.",
+      `  A background service is installed for this ${baseName} home. Restarting it interrupts anything running in it: agent turns, terminals, remote clients.`,
     );
     if (input.assumeYes) {
       restartService = true;
@@ -491,8 +485,14 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
         }),
       ).pipe(Effect.catchTags({ QuitError: () => Effect.succeed(false) }));
     } else {
+      const stagedEntry = pinnedRuntimePaths(
+        path,
+        input.baseDir,
+        targetVersion,
+        platform,
+      ).entryPath;
       yield* Console.log(
-        "  Not a terminal, so the service keeps running its current version. Rerun with --yes to restart it now, or run `t3 service restart` later.",
+        `  Without an interactive prompt, the service keeps running its current version. Rerun with --yes to restart it now, or run \`${invoke(stagedEntry)} service restart${baseDirOption}\` after the update.`,
       );
     }
   }
@@ -529,7 +529,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
                 ? error
                 : new PinnedRuntimePreflightBlockedError({
                     version: targetVersion,
-                    reason: `t3@${targetVersion} could not confirm it supports this database (its check exited with code ${error.exitCode}), so t3 did not switch to it.`,
+                    reason: `${baseName} ${targetVersion} could not confirm it supports this database (its check exited with code ${error.exitCode}), so the launcher stayed on the current version.`,
                   }),
             ),
         }),
@@ -545,8 +545,8 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
         new CliUpdateError({
           reason:
             mirror === undefined
-              ? `No release archive was published for t3@${targetVersion}.`
-              : `${mirror.organization}'s update mirror has no t3@${targetVersion} for this machine.`,
+              ? `No release archive was published for ${baseName} ${targetVersion}.`
+              : `${mirror.organization}'s update mirror has no ${baseName} ${targetVersion} for this machine.`,
         }),
       ),
     ),
@@ -582,7 +582,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       Effect.mapError(
         (error) =>
           new CliUpdateError({
-            reason: `t3@${targetVersion} is installed but the background service could not be ${restartService ? "updated" : "pointed at it"}: ${error.message}`,
+            reason: `${baseName} ${targetVersion} is installed but the background service could not be ${restartService ? "updated" : "pointed at it"}: ${error.message}`,
           }),
       ),
     );
@@ -601,12 +601,9 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     });
   }
 
-  progress.success(`Installed T3 Code ${targetVersion}`);
-  if (Option.isSome(repointed)) {
-    yield* Console.log("  Run t3 to get started.\n");
-  } else {
-    yield* Console.log(`  Run ${runtime.entryPath}\n`);
-  }
+  progress.success(`Installed ${baseName} ${targetVersion}`);
+  const restartLauncher = invoke(Option.getOrElse(repointed, () => runtime.entryPath));
+  yield* Console.log(`  Run ${restartLauncher}${baseDirOption} to get started.\n`);
   if (servicePlan?.handedOff === true) {
     yield* Console.log(
       `  Background service switching to ${targetVersion} outside this session, since this session runs inside it and disconnects when it restarts. Result: ${servicePlan.logPath}`,
@@ -624,11 +621,11 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
           ? `the version before ${serviceVersion}`
           : serviceVersion;
     yield* Console.log(
-      `  Background service still running ${running}. Run \`t3 service restart\` when you are ready to switch it to ${targetVersion}.`,
+      `  Background service still running ${running}. Run \`${restartLauncher} service restart${baseDirOption}\` when you are ready to switch it to ${targetVersion}.`,
     );
   } else if (status.installed && !servesThisHome) {
     yield* Console.log(
-      `  The background service serves ${status.installedBaseDir ?? "another T3 home"} and was left unchanged.`,
+      `  The background service serves ${status.installedBaseDir ?? `another ${baseName} home`} and was left unchanged.`,
     );
   }
   if (foreground !== undefined) {

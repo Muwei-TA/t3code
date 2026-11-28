@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- HMAC protects telemetry identifiers with an install-local key.
 // T3 ingest retains events and forwards to PostHog; UUIDs deduplicate retries there.
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import * as NodeCrypto from "node:crypto";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import type { ClientOs, ProductTelemetryStatus } from "@t3tools/contracts";
@@ -78,13 +79,9 @@ function retryDelayMs(failures: number, random: number): number {
 }
 
 const TelemetryEnvConfig = Config.all({
-  posthogKey: Config.String("T3CODE_POSTHOG_KEY").pipe(
-    Config.withDefault("phc_XOWci4oZP4VvLiEyrFqkFjP4CZn55mjYYBMREK5Wd6m"),
-  ),
-  posthogHost: Config.String("T3CODE_POSTHOG_HOST").pipe(
-    Config.withDefault("https://ingest.t3.codes"),
-  ),
-  enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.option),
+  posthogKey: Config.String("LIGHTNING_CODE_POSTHOG_KEY").pipe(Config.withDefault("")),
+  posthogHost: Config.String("LIGHTNING_CODE_POSTHOG_HOST").pipe(Config.withDefault("")),
+  enabled: Config.Boolean("LIGHTNING_CODE_TELEMETRY_ENABLED").pipe(Config.option),
   flushBatchSize: Config.Number("T3CODE_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
   maxBufferedEvents: Config.Number("T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
     Config.withDefault(1_000),
@@ -150,11 +147,14 @@ export const make = Effect.gen(function* () {
     ManagedPolicy.deniedBy(yield* ManagedPolicy.ManagedPolicy, "telemetry") === undefined;
   const settings = yield* ServerSettingsService;
   // A cached PATH does not establish consent from the current login shell.
+  const defaultStatus = LIGHTNING_BRAND.telemetryEnabledByDefault ? {} : { envOverride: false };
   const productTelemetryStatus = Effect.suspend((): Effect.Effect<ProductTelemetryStatus> => {
+    if (!telemetryConfig.posthogHost.trim() || !telemetryConfig.posthogKey.trim())
+      return Effect.succeed({ envOverride: false });
     if (Option.contains(telemetryConfig.enabled, false) || !awaitingShellConsent) {
       return Effect.succeed(
         Option.match(telemetryConfig.enabled, {
-          onNone: () => ({}),
+          onNone: () => defaultStatus,
           onSome: (envOverride) => ({ envOverride }),
         }),
       );
@@ -162,16 +162,18 @@ export const make = Effect.gen(function* () {
     if (hostEnvironment.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING === "1") {
       return Effect.succeed({ shellDiscoveryPending: true });
     }
-    const preference = hostEnvironment.T3CODE_TELEMETRY_ENABLED;
-    return Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(
+    const preference = hostEnvironment.LIGHTNING_CODE_TELEMETRY_ENABLED;
+    return Config.Boolean("LIGHTNING_CODE_TELEMETRY_ENABLED").pipe(
       Config.option,
       Effect.provideService(
         ConfigProvider.ConfigProvider,
         ConfigProvider.fromEnv({
-          env: preference === undefined ? {} : { T3CODE_TELEMETRY_ENABLED: preference },
+          env: preference === undefined ? {} : { LIGHTNING_CODE_TELEMETRY_ENABLED: preference },
         }),
       ),
-      Effect.map(Option.match({ onNone: () => ({}), onSome: (envOverride) => ({ envOverride }) })),
+      Effect.map(
+        Option.match({ onNone: () => defaultStatus, onSome: (envOverride) => ({ envOverride }) }),
+      ),
       Effect.orElseSucceed(() => ({ envOverride: false })),
     );
   });

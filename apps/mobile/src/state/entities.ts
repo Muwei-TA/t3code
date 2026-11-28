@@ -1,3 +1,4 @@
+import { hostedThreadLinkOrigin } from "../lib/hostedThreadLinkOrigin";
 import { useAtomValue } from "@effect/atom-react";
 import { deriveReportedModelSelection } from "@t3tools/client-runtime/state/thread-execution";
 
@@ -160,7 +161,7 @@ const threadChipIconsAtom = Atom.family((key: string) => {
   return Atom.make((get) => {
     const icons = new Map<string, string>();
     for (const target of targets) {
-      const link = target.link ? parseThreadLinkHref(target.href) : null;
+      const link = target.link ? parseThreadLinkHref(target.href, hostedThreadLinkOrigin) : null;
       const ref =
         (link ? resolveThreadLink(get, link, target.environmentId) : null) ??
         scopeThreadRef(target.environmentId, target.threadId);
@@ -253,8 +254,12 @@ export function useLiveThreadLinkLabels(
   const resolve = useMessages();
   const gt = useGT();
   const titles = useAtomValue(
-    hasThreadLinks(markdown)
-      ? threadLinkTitlesAtom(JSON.stringify(threadLinkRefs(markdown, environmentId).map(threadKey)))
+    hasThreadLinks(markdown, hostedThreadLinkOrigin)
+      ? threadLinkTitlesAtom(
+          JSON.stringify(
+            threadLinkRefs(markdown, environmentId, hostedThreadLinkOrigin).map(threadKey),
+          ),
+        )
       : EMPTY_THREAD_LINK_TITLES_ATOM,
   );
   return relabelThreadLinks(
@@ -271,6 +276,7 @@ export function useLiveThreadLinkLabels(
       return title && resolve(msg("Thread", { $context: "fallback title of a linked thread" }));
     },
     resolve,
+    hostedThreadLinkOrigin,
   );
 }
 

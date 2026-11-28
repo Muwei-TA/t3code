@@ -9,7 +9,7 @@ import { queuedRunEditBlockedReason } from "@t3tools/client-runtime/queued-run-e
 import { ScrollToEndButton, WorkspaceFileDropOverlay } from "./chat/TimelineOverlays";
 import { usePasteToFocusComposer } from "./chat/usePasteToFocusComposer";
 import { useFocusComposerOnThreadOpen } from "./chat/useFocusComposerOnThreadOpen";
-import { configuredHostedAppUrl } from "../hostedPairing";
+import { threadShareOptions } from "../lib/threadShareOptions";
 import {
   announcedRun,
   isDetailBehindShell,
@@ -303,6 +303,7 @@ import {
 import { useEnvironmentShellHasSnapshot } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
+import { LightningCosmicBackdrop } from "./lightning/LightningCosmicBackdrop";
 import { ExpandedImageDialogHost, openExpandedImagePreview } from "./chat/ExpandedImageDialog";
 import {
   BranchRestoreConfirmHost,
@@ -2534,7 +2535,7 @@ export default function ChatView(props: ChatViewProps) {
             openPanelPullRequestUrl,
             pullRequests: activeThread?.pullRequests,
             linkedPullRequestUrl: linkedThreadPullRequest?.url ?? null,
-            hostedAppUrl: configuredHostedAppUrl(),
+            ...threadShareOptions(),
           },
           messages,
         );
@@ -3825,6 +3826,7 @@ export default function ChatView(props: ChatViewProps) {
               {...conversationArea}
               className="relative flex min-h-0 flex-1 flex-col bg-background"
             >
+              {isDraftHeroState ? <LightningCosmicBackdrop variant="draft" /> : null}
               <WorkspaceMutationIdContext value={workspaceMutationId}>
                 <ThreadTimeline
                   pendingApprovals={pendingApprovals}

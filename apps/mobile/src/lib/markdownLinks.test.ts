@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { resolveMarkdownLinkPresentation } from "./markdownLinks";
+
+vi.mock("./hostedThreadLinkOrigin", () => ({ hostedThreadLinkOrigin: undefined }));
 
 describe("resolveMarkdownLinkPresentation", () => {
   it("opens relative directory links as workspace paths", () => {

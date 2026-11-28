@@ -1,3 +1,8 @@
+import {
+  LIGHTNING_BRAND,
+  normalizeBrandCopy,
+  normalizeTranslationCatalog,
+} from "@t3tools/shared/brand";
 import { resolveLocale } from "@t3tools/client-runtime/locales";
 import * as Effect from "effect/Effect";
 import { decodeOptions, gtFallback } from "gt-i18n";
@@ -29,6 +34,11 @@ let activeLocale = DEFAULT_LOCALE;
 let activeCatalog: Catalog = {};
 let requestedLocale = DEFAULT_LOCALE;
 
+const formatCommands = (text: string) =>
+  text
+    .replaceAll("T3CODE_HOME", LIGHTNING_BRAND.homeEnvVar)
+    .replace(/`t3(?= |`)/g, "`" + LIGHTNING_BRAND.cliCommand);
+
 /**
  * Resolves a `msg()` string in the active UI language at call time. Variables are strings so
  * ICU never reformats a number (a PID of 12345 would print "12,345").
@@ -43,8 +53,15 @@ export function m(message: string, variables: Readonly<Record<string, string>> =
       : activeCatalog[hashMessage(source, { ...options, $format: "ICU" })];
   // Untranslated text is English, so it takes English plural rules.
   return target === undefined
-    ? gtFallback(source, { ...options, $locale: DEFAULT_LOCALE })
-    : gtFallback(target, { ...options, $locale: activeLocale, $_fallback: source });
+    ? gtFallback(formatCommands(normalizeBrandCopy(source)), {
+        ...options,
+        $locale: DEFAULT_LOCALE,
+      })
+    : gtFallback(formatCommands(target), {
+        ...options,
+        $locale: activeLocale,
+        $_fallback: formatCommands(normalizeBrandCopy(source)),
+      });
 }
 
 /** Runs `listener` after each switch to a different UI language. */
@@ -58,7 +75,7 @@ export function onLocaleChange(listener: () => void): () => void {
 const loadCatalog = async (locale: string): Promise<Catalog> => {
   const loaded = loadedCatalogs.get(locale);
   if (loaded) return loaded;
-  const catalog = (await CATALOGS[locale]!()).default;
+  const catalog = normalizeTranslationCatalog((await CATALOGS[locale]!()).default);
   loadedCatalogs.set(locale, catalog);
   return catalog;
 };

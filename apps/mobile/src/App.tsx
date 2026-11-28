@@ -20,7 +20,7 @@ import {
   type NavigationState,
 } from "@react-navigation/native";
 import { pipe } from "effect/Function";
-import { DEFAULT_HOSTED_APP_URL } from "@t3tools/shared/connectAuth";
+import { MOBILE_APP_IDENTITIES } from "@t3tools/shared/mobileBrand";
 
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { ProjectChipIconRasterizer } from "./native/ProjectChipIconImages";
@@ -57,12 +57,13 @@ import { environmentThreadShells, threadEnvironment } from "./state/threads";
 import { environmentShell, shellCachesReadAtom } from "./state/shell";
 import { OverlayPortalHost } from "./components/ui/OverlayPortal";
 import { shouldHandleAppLink, restoreDraftLinkState } from "./lib/appLinking";
+import { hostedThreadLinkOrigin } from "./lib/hostedThreadLinkOrigin";
 import { hasCloudPublicConfig } from "./features/cloud/publicConfig";
 import { takeScheduledTaskNewLink } from "./features/settings/scheduled-task-editor-state";
 import {
   pairingFormLinkAction,
+  preparePairingFormLink,
   startDevAutoConnect,
-  withoutPairingTarget,
 } from "./features/connection/devAutoConnect";
 import {
   resolvePendingNewTaskPromptLink,
@@ -131,7 +132,7 @@ function getAppStateFromPath(path: string, options: Parameters<typeof getStateFr
     (state) => restoreSettingsLinkState(state, settingsLinkPage()),
     takeThreadPromptLink,
     takeNewTaskPromptLink,
-    withoutPairingTarget,
+    (state) => preparePairingFormLink(state, path),
     startDevAutoConnect,
     takeScheduledTaskNewLink,
   );
@@ -140,10 +141,8 @@ function getAppStateFromPath(path: string, options: Parameters<typeof getStateFr
 const appLinking = {
   prefixes: [
     Linking.createURL("/"),
-    "t3code://",
-    "t3code-dev://",
-    "t3code-preview://",
-    DEFAULT_HOSTED_APP_URL,
+    ...Object.values(MOBILE_APP_IDENTITIES).map(({ scheme }) => `${scheme}://`),
+    ...(hostedThreadLinkOrigin ? [hostedThreadLinkOrigin] : []),
   ],
   config: { initialRouteName: "Home" },
   filter: (url: string) => shouldHandleAppLink(url, hasCloudPublicConfig()),

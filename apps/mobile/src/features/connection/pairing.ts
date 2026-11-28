@@ -1,3 +1,4 @@
+import { MOBILE_APP_IDENTITIES } from "@t3tools/shared/mobileBrand";
 import { readHostedPairingRequest } from "@t3tools/shared/remote";
 import * as Schema from "effect/Schema";
 import { msg } from "gt-react-native";
@@ -73,6 +74,11 @@ export function parsePairingUrl(url: string): { host: string; code: string } {
   }
 }
 
+const MOBILE_PAIRING_SCHEMES = new Set([
+  ...Object.values(MOBILE_APP_IDENTITIES).map(({ scheme }) => `${scheme}:`),
+  "t3code:",
+]);
+
 export function extractPairingUrlFromQrPayload(payload: string): string {
   const trimmed = payload.trim();
   if (!trimmed) {
@@ -81,7 +87,7 @@ export function extractPairingUrlFromQrPayload(payload: string): string {
 
   try {
     const url = new URL(trimmed);
-    if (url.protocol === "t3code:") {
+    if (MOBILE_PAIRING_SCHEMES.has(url.protocol)) {
       const pairingUrl = url.searchParams.get(MOBILE_PAIRING_URL_PARAM)?.trim() ?? "";
       if (pairingUrl.length > 0) {
         return pairingUrl;

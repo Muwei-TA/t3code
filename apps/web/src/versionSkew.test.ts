@@ -17,16 +17,10 @@ import {
 } from "./versionSkew";
 
 const MISMATCH_HINT =
-  "Version mismatch. Try syncing the client and server to the same T3 Code version.";
+  "Version mismatch. Try syncing the client and server to the same Lightning Code version.";
 
 describe("versionSkew", () => {
   it("updates only the proven install and safely quotes its paths", () => {
-    expect(manualServerUpdateCommand("0.0.45", { kind: "npm-global", prefix: "/opt/node" })).toBe(
-      "npm install --global --prefix '/opt/node' t3@0.0.45",
-    );
-    expect(
-      manualServerUpdateCommand("0.0.45", { kind: "npm-global", prefix: "/opt/maria's node" }),
-    ).toBe("npm install --global --prefix '/opt/maria'\\''s node' t3@0.0.45");
     expect(
       manualServerUpdateCommand("0.0.45", {
         kind: "t3-launcher",
@@ -42,6 +36,76 @@ describe("versionSkew", () => {
       }),
     ).toBe("'/opt/maria'\\''s bin/t3' update --base-dir '/data/t3 home' 0.0.45");
   });
+  it("uses the Lightning CLI when there is no installed launcher path", () => {
+    expect(manualServerUpdateCommand("0.0.45")).toBe("lightning update 0.0.45");
+    expect(
+      manualServerUpdateCommand("0.0.45", {
+        kind: "npm-global",
+        prefix: "/opt/node",
+        packageName: "@muwei-ta/lightning-code",
+      }),
+    ).toBe(
+      "npm install --global --prefix '/opt/node' 'https://github.com/Muwei-TA/t3code/releases/download/v0.0.45/t3.tgz'",
+    );
+    expect(
+      manualServerUpdateCommand(
+        "0.0.45",
+        {
+          kind: "t3-launcher",
+          launcher: "C:\\Program Files\\Lightning\\t3.exe",
+          baseDir: "C:\\Data",
+        },
+        "windows",
+      ),
+    ).toBe("& 'C:\\Program Files\\Lightning\\t3.exe' update --base-dir 'C:\\Data' 0.0.45");
+    expect(
+      manualServerUpdateCommand("0.0.45", {
+        kind: "npx",
+        launch: { node: "/opt/local/bin/node", entry: "/cache with spaces/_npx/cli/bin.mjs" },
+      }),
+    ).toBe("'/opt/local/bin/node' '/cache with spaces/_npx/cli/bin.mjs' update 0.0.45");
+  });
+
+  const exactRelease =
+    "https://github.com/Muwei-TA/t3code/releases/download/v0.0.45-nightly.20261127.4/t3.tgz";
+  it.each([
+    ["npx", `npx --yes --package '${exactRelease}' -- lightning`],
+    ["pnpm-dlx", `pnpm --package='${exactRelease}' dlx lightning`],
+    ["bunx", `bunx --package '${exactRelease}' lightning`],
+  ] as const)("relaunches old %s installs from the exact Lightning release", (kind, command) => {
+    expect(manualServerUpdateCommand("0.0.45-nightly.20261127.4", { kind })).toBe(command);
+  });
+
+  it.each([undefined, "t3"])(
+    "relaunches a legacy global install (%s) without overwriting its executable",
+    (packageName) => {
+      expect(
+        manualServerUpdateCommand("0.0.45-nightly.20261127.4", {
+          kind: "npm-global",
+          prefix: "/opt/node",
+          ...(packageName === undefined ? {} : { packageName }),
+        }),
+      ).toBe(`npx --yes --package '${exactRelease}' -- lightning`);
+    },
+  );
+
+  it("uses the Node command shims when copying commands for PowerShell", () => {
+    expect(manualServerUpdateCommand("0.0.45-nightly.20261127.4", { kind: "npx" }, "windows")).toBe(
+      `npx.cmd --yes --package '${exactRelease}' -- lightning`,
+    );
+    expect(
+      manualServerUpdateCommand(
+        "0.0.45-nightly.20261127.4",
+        {
+          kind: "npm-global",
+          prefix: "C:\\Maria's tools",
+          packageName: "@muwei-ta/lightning-code",
+        },
+        "windows",
+      ),
+    ).toBe(`npm.cmd install --global --prefix 'C:\\Maria''s tools' '${exactRelease}'`);
+  });
+
   beforeEach(() => {
     branding.APP_VERSION = "0.0.34";
   });

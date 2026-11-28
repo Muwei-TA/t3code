@@ -205,6 +205,9 @@ private final class ImmediateImageProvider: NSItemProvider {
   let image: UIImage
   private(set) var loadCount = 0
 
+  // UIKit can advertise HEIC for a UIImage. This fixture exercises the UIImage-to-PNG fallback.
+  override var registeredTypeIdentifiers: [String] { [UTType.image.identifier] }
+
   init(image: UIImage) {
     self.image = image
     super.init()
@@ -251,6 +254,24 @@ func interceptedPaste(_ items: [String]) -> String? {
 let halfA = String(repeating: "A", count: 20_000)
 let halfB = String(repeating: "B", count: 20_000)
 check(interceptedPaste([halfA, halfB]) == halfA + halfB, "Text items that together reach the threshold must fold")
+
+do {
+  let savedItems = UIPasteboard.general.items
+  defer { UIPasteboard.general.items = savedItems }
+  let editor = ComposerTextView()
+  editor.hostedThreadLinkPrefix = "https://lightning.example/threads/"
+  var pastedLinks: [String] = []
+  editor.onPasteContext = { if let text = $0["text"] { pastedLinks.append(text) } }
+  let links = [
+    "https://lightning.example/threads/demo/thread",
+    "lightningcode-preview://threads/demo/thread",
+  ]
+  for link in links {
+    UIPasteboard.general.items = [[UTType.utf8PlainText.identifier: link]]
+    editor.paste(nil)
+  }
+  check(pastedLinks == links, "Single plain-text thread links must reach the context importer")
+}
 
 // Two-frame animated GIF: a mixed paste keeps the GIF's original bytes and the still image's PNG, in order.
 private let gifBytes = Data(base64Encoded: "R0lGODlhAQABAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAAAQABAAAIBAABBAQAIfkEAAoAAAAsAAAAAAEAAQCBAP8AAAAAAAAAAAAACAQAAQQEADs=")!

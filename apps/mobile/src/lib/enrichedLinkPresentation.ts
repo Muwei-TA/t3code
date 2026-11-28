@@ -1,3 +1,4 @@
+import { hostedThreadLinkOrigin } from "./hostedThreadLinkOrigin";
 import type { ComposerContextRecord, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
   composerChipSizeSuffix,
@@ -41,7 +42,7 @@ export function enrichedContextLinkPresentation(
 export function enrichedThreadLinkPresentation(
   href: string,
 ): { accent?: string; icon: ContextChipIconRef } | undefined {
-  if (!parseThreadLinkHref(href)) return undefined;
+  if (!parseThreadLinkHref(href, hostedThreadLinkOrigin)) return undefined;
   const presentation = contextChipPresentation("thread");
   return {
     ...(presentation.accent ? { accent: presentation.accent } : {}),
@@ -62,9 +63,9 @@ export function threadChipTargets(
   records?: ReadonlyArray<ComposerContextRecord>,
 ): ReadonlyArray<ThreadChipTarget> {
   const targets = new Map<string, ThreadChipTarget>();
-  if (hasThreadLinks(markdown)) {
+  if (hasThreadLinks(markdown, hostedThreadLinkOrigin)) {
     for (const [, href = ""] of markdown.matchAll(/\]\(<?(t3-thread:\/\/v[12]\/[^\s>)]+)>?\)/g)) {
-      const link = parseThreadLinkHref(href);
+      const link = parseThreadLinkHref(href, hostedThreadLinkOrigin);
       if (link) {
         targets.set(href, {
           href,

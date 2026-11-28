@@ -2,6 +2,7 @@
 import * as NodeFSP from "node:fs/promises";
 
 import type { DesktopCliCommandState } from "@t3tools/contracts";
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -30,8 +31,7 @@ export class DesktopCliCommandError extends Schema.TaggedError<DesktopCliCommand
 
 const userCandidates = (home: string) => [`${home}/.local/bin`, `${home}/bin`];
 
-// Older builds also linked into these macOS folders. Such a link is found, updated in place, and
-// removed, but no new link goes there.
+// Older builds also linked into these macOS folders. Fresh installs only use the user folders.
 const knownLocations = (home: string, platform: NodeJS.Platform) =>
   platform === "darwin"
     ? [...userCandidates(home), "/opt/homebrew/bin", "/usr/local/bin"]
@@ -88,13 +88,17 @@ export const make = Effect.gen(function* () {
   const windows = environment.platform === "win32";
   const launcher = DesktopCliShim.launcherPath(environment);
   const binDirectory = path.dirname(launcher);
+  const commandLocations = knownLocations(environment.homeDirectory, environment.platform);
+  const legacyCommandLinks = windows
+    ? []
+    : commandLocations.map((directory) => path.join(directory, "t3"));
   const ownedPathMarker = path.join(environment.stateDir, "cli-command-path-entry");
   const firstLaunchMarker = path.join(environment.stateDir, "cli-command-first-launch");
 
   const fail = (message: string) => new DesktopCliCommandError({ message });
   const exists = (target: string) => fs.exists(target).pipe(Effect.orElseSucceed(() => false));
   // Read before this launch writes either one: an app that ran before left its launcher or
-  // settings. Its user may have removed t3 or chosen another, so only Settings installs there.
+  // settings. Its user may have removed the command, so only Settings installs there.
   const freshInstall =
     !(yield* exists(launcher)) && !(yield* exists(environment.desktopSettingsPath));
   const writableDirectory = (directory: string) =>
@@ -104,9 +108,10 @@ export const make = Effect.gen(function* () {
     );
 
   const isOurLink = Effect.fn("DesktopCliCommand.isOurLink")(
-    function* (link: string) {
-      yield* fs.readLink(link);
-      // The launcher is a few KB; never read a large binary another `t3` links to.
+    function* (link: string, expectedTarget?: string) {
+      const target = yield* fs.readLink(link);
+      if (expectedTarget !== undefined && target !== expectedTarget) return false;
+      // The launcher is a few KB; skip large files a command may link to.
       const info = yield* fs.stat(link);
       if (info.type !== "File" || Number(info.size) > 16_384) return false;
       const content = yield* fs.readFileString(link);
@@ -114,6 +119,20 @@ export const make = Effect.gen(function* () {
     },
     Effect.orElseSucceed(() => false),
   );
+
+  // The old name is shared with upstream. The shim marker and the exact target identify our link.
+  const ownedLegacyLinks = Effect.filter(legacyCommandLinks, (link) => isOurLink(link, launcher));
+
+  const removeOwnedLink = Effect.fn("DesktopCliCommand.removeOwnedLink")(function* (
+    link: string,
+    expectedTarget?: string,
+  ) {
+    if (yield* isOurLink(link, expectedTarget)) {
+      yield* fs
+        .remove(link, { force: true })
+        .pipe(Effect.mapError(() => fail(`Could not remove ${link}.`)));
+    }
+  });
 
   // PATH can reach the regular launcher directly; removal still requires isOurLink.
   const runsOurLauncher = Effect.fn("DesktopCliCommand.runsOurLauncher")(
@@ -172,7 +191,7 @@ export const make = Effect.gen(function* () {
 
   const firstOnPath = Effect.gen(function* () {
     for (const directory of pathEntries(env.PATH, ":")) {
-      const candidate = path.join(directory, "t3");
+      const candidate = path.join(directory, LIGHTNING_BRAND.cliCommand);
       if (yield* isExecutableFile(candidate)) return Option.some(candidate);
     }
     return Option.none<string>();
@@ -200,8 +219,8 @@ export const make = Effect.gen(function* () {
         ? Option.some(launcher)
         : Option.none<string>();
     }
-    for (const directory of knownLocations(environment.homeDirectory, environment.platform)) {
-      const link = path.join(directory, "t3");
+    for (const directory of commandLocations) {
+      const link = path.join(directory, LIGHTNING_BRAND.cliCommand);
       if (yield* isOurLink(link)) return Option.some(link);
     }
     return Option.none<string>();
@@ -240,7 +259,7 @@ export const make = Effect.gen(function* () {
     }
     const launcherPath = (yield* exists(launcher)) ? launcher : null;
     const found = yield* installedAt;
-    // Our link into another T3 home is not this app's command; Install updates it in place.
+    // Install can take over a link from another Lightning Code home.
     const installed =
       windows || (Option.isSome(found) && (yield* leadsHere(found.value)))
         ? found
@@ -253,8 +272,7 @@ export const make = Effect.gen(function* () {
     const onPath = windows
       ? Option.isSome(installed)
       : Option.isSome(first) && (yield* runsOurLauncher(first.value));
-    // Only a folder missing from PATH, with no other t3 first: with one, the added folder (last
-    // on PATH) would still not run this t3.
+    // Adding a folder at the end of PATH only helps when no other command runs first.
     const setup =
       onPath ||
       Option.isSome(shadowedBy) ||
@@ -264,7 +282,7 @@ export const make = Effect.gen(function* () {
         : startupLine(installed.value);
     return {
       supported: true,
-      installedPath: Option.getOrNull(installed),
+      installedPath: Option.getOrUndefined(installed) ?? (yield* ownedLegacyLinks)[0] ?? null,
       onPath,
       launcherPath,
       ...shadow,
@@ -286,20 +304,31 @@ export const make = Effect.gen(function* () {
     Effect.provideService(FileSystem.FileSystem, fs),
     Effect.flatMap(
       Option.match({
-        onNone: () => Effect.fail(fail(`Could not set up the t3 launcher at ${launcher}.`)),
+        onNone: () =>
+          Effect.fail(
+            fail(`Could not set up the ${LIGHTNING_BRAND.cliCommand} launcher at ${launcher}.`),
+          ),
         onSome: () => Effect.void,
       }),
     ),
   );
 
-  const install: DesktopCliCommand["Service"]["install"] = Effect.gen(function* () {
-    if (!environment.isPackaged) return yield* fail("The t3 command needs an installed app.");
+  const removeLegacyLinks = (links: ReadonlyArray<string>) =>
+    Effect.forEach(links, (link) => removeOwnedLink(link, launcher), { discard: true });
+
+  const installCommand = Effect.fn("desktop.cliCommand.install")(function* (
+    legacyLinks: ReadonlyArray<string>,
+    allowTakeover: boolean,
+  ) {
+    if (!environment.isPackaged) {
+      return yield* fail(`The ${LIGHTNING_BRAND.cliCommand} command needs an installed app.`);
+    }
     yield* ensureLauncher;
     if (windows) {
       // PATH would split the folder at the `;`, leaving two wrong entries behind.
       if (binDirectory.includes(";")) {
         return yield* fail(
-          `T3 Code cannot put ${binDirectory} on PATH because it has a ";". Run ${launcher} directly.`,
+          `${LIGHTNING_BRAND.baseName} cannot put ${binDirectory} on PATH because it has a ";". Run ${launcher} directly.`,
         );
       }
       const entries = pathEntries(yield* readUserPath, ";");
@@ -307,24 +336,36 @@ export const make = Effect.gen(function* () {
         yield* writeUserPath([...entries, binDirectory].join(";"));
         yield* fs
           .writeFileString(ownedPathMarker, `${binDirectory}\n`)
-          .pipe(Effect.mapError(() => fail("Added t3 to your PATH but could not record it.")));
+          .pipe(
+            Effect.mapError(() =>
+              fail(`Added ${LIGHTNING_BRAND.cliCommand} to your PATH but could not record it.`),
+            ),
+          );
       }
       return yield* state;
     }
-    const candidates = userCandidates(environment.homeDirectory);
+    const candidates = [
+      ...legacyLinks.map((link) => path.dirname(link)),
+      ...userCandidates(environment.homeDirectory),
+    ];
     const replaced = Option.getOrUndefined(yield* installedAt);
     if (replaced !== undefined) {
-      const target = yield* fs.readLink(replaced).pipe(Effect.option);
-      if (Option.getOrUndefined(target) === launcher) return yield* state;
+      if (yield* leadsHere(replaced)) {
+        yield* removeLegacyLinks(legacyLinks);
+        return yield* state;
+      }
+      if (!allowTakeover) {
+        return yield* fail(`Another Lightning Code installation owns the command at ${replaced}.`);
+      }
     }
     const shadowedBy = yield* foreignFirstOnPath;
-    // Our own link into another T3 home runs first too; it is the one this install updates.
+    // Our own link into another home runs first too; it is the one this install updates.
     if (Option.isSome(shadowedBy) && shadowedBy.value !== replaced) {
       return yield* fail(
-        `Another t3 at ${shadowedBy.value} runs first in a new terminal. Remove it, or run the launcher directly at ${launcher}.`,
+        `Another ${LIGHTNING_BRAND.cliCommand} at ${shadowedBy.value} runs first in a new terminal. Remove it, or run the launcher directly at ${launcher}.`,
       );
     }
-    // An old link of ours is updated where it is, so a t3 that works now keeps working. It is
+    // An old link of ours is updated where it is, so a command that works now keeps working. It is
     // removed only once a new link exists elsewhere.
     const onPath = pathEntries(env.PATH, ":").map((entry) => entry.replace(/\/+$/, ""));
     for (const directory of new Set([
@@ -332,7 +373,7 @@ export const make = Effect.gen(function* () {
       ...candidates.filter((candidate) => onPath.includes(candidate)),
       ...candidates.filter((candidate) => !onPath.includes(candidate)),
     ])) {
-      const link = path.join(directory, "t3");
+      const link = path.join(directory, LIGHTNING_BRAND.cliCommand);
       const created = (yield* exists(directory))
         ? yield* writableDirectory(directory)
         : yield* fs.makeDirectory(directory, { recursive: true }).pipe(
@@ -362,12 +403,18 @@ export const make = Effect.gen(function* () {
       if (replaced !== undefined && replaced !== link) {
         yield* fs.remove(replaced).pipe(Effect.ignore);
       }
+      yield* removeLegacyLinks(legacyLinks);
       return yield* state;
     }
     return yield* fail(
-      `Another t3 command is already in ~/.local/bin and ~/bin, or neither is writable. Run the launcher directly at ${launcher}.`,
+      `Another ${LIGHTNING_BRAND.cliCommand} command is already in ~/.local/bin and ~/bin, or neither is writable. Run the launcher directly at ${launcher}.`,
     );
-  }).pipe(Effect.withSpan("desktop.cliCommand.install"));
+  });
+
+  const commandPermit = yield* Semaphore.make(1);
+  const install: DesktopCliCommand["Service"]["install"] = Effect.gen(function* () {
+    return yield* installCommand(yield* ownedLegacyLinks, true);
+  }).pipe(commandPermit.withPermits(1));
 
   const uninstall: DesktopCliCommand["Service"]["uninstall"] = Effect.gen(function* () {
     // A first launch put off for the shell PATH must not bring back what the user removed.
@@ -381,36 +428,46 @@ export const make = Effect.gen(function* () {
       }
       return yield* state;
     }
-    for (const directory of knownLocations(environment.homeDirectory, environment.platform)) {
-      const link = path.join(directory, "t3");
-      if (yield* isOurLink(link)) {
-        yield* fs.remove(link).pipe(Effect.mapError(() => fail(`Could not remove ${link}.`)));
-      }
+    for (const directory of commandLocations) {
+      yield* removeOwnedLink(path.join(directory, LIGHTNING_BRAND.cliCommand), launcher);
     }
+    yield* removeLegacyLinks(legacyCommandLinks);
     return yield* state;
-  }).pipe(Effect.withSpan("desktop.cliCommand.uninstall"));
+  }).pipe(commandPermit.withPermits(1), Effect.withSpan("desktop.cliCommand.uninstall"));
 
   // One at a time, so Settings and onboarding cannot both append the line.
   const addToPathPermit = yield* Semaphore.make(1);
   const addToPath: DesktopCliCommand["Service"]["addToPath"] = Effect.gen(function* () {
     const installed = yield* installedAt;
     if (Option.isNone(installed) || !(yield* leadsHere(installed.value))) {
-      return yield* fail("Install the t3 command first.");
+      return yield* fail(`Install the ${LIGHTNING_BRAND.cliCommand} command first.`);
     }
     const setup = startupLine(installed.value);
-    if (setup === undefined) return yield* fail("T3 Code cannot add t3 to this shell's PATH.");
+    if (setup === undefined) {
+      return yield* fail(
+        `${LIGHTNING_BRAND.baseName} cannot add ${LIGHTNING_BRAND.cliCommand} to this shell's PATH.`,
+      );
+    }
     const shadowedBy = yield* foreignFirstOnPath;
     if (Option.isSome(shadowedBy)) {
       return yield* fail(
-        `Another t3 at ${shadowedBy.value} runs first; T3 Code leaves it in place.`,
+        `Another ${LIGHTNING_BRAND.cliCommand} at ${shadowedBy.value} runs first; ${LIGHTNING_BRAND.baseName} leaves it in place.`,
       );
     }
     if (!(yield* folderOnPath(installed.value)) && !(yield* hasLine(setup))) {
       yield* fs.makeDirectory(path.dirname(setup.path), { recursive: true }).pipe(
         Effect.andThen(
-          fs.writeFileString(setup.path, `\n# Added by T3 Code\n${setup.line}\n`, { flag: "a" }),
+          fs.writeFileString(
+            setup.path,
+            `\n# Added by ${LIGHTNING_BRAND.baseName}\n${setup.line}\n`,
+            {
+              flag: "a",
+            },
+          ),
         ),
-        Effect.mapError(() => fail(`Could not add t3 to ${setup.file}.`)),
+        Effect.mapError(() =>
+          fail(`Could not add ${LIGHTNING_BRAND.cliCommand} to ${setup.file}.`),
+        ),
       );
     }
     return yield* state;
@@ -418,44 +475,62 @@ export const make = Effect.gen(function* () {
 
   const installOnFirstLaunch: DesktopCliCommand["Service"]["installOnFirstLaunch"] = Effect.gen(
     function* () {
-      if (!environment.isPackaged || (yield* exists(firstLaunchMarker))) return;
+      if (!environment.isPackaged) return;
+      const legacyLinks = yield* ownedLegacyLinks;
+      if (legacyLinks.length > 0) {
+        yield* installCommand(legacyLinks, false);
+        return;
+      }
+      if (yield* exists(firstLaunchMarker)) return;
       // Mark first so a failed or removed install is never retried behind the user's back.
       yield* fs.writeFileString(firstLaunchMarker, "");
       if (!freshInstall) {
-        return yield* logInfo("left the t3 command to Settings on an existing install");
+        return yield* logInfo(
+          `left the ${LIGHTNING_BRAND.cliCommand} command to Settings on an existing install`,
+        );
       }
-      // Another T3 home's app owns the existing link; only Install in Settings may take it over.
+      // Another home's app owns the existing link; only Install in Settings may take it over.
       const existing = Option.getOrUndefined(yield* installedAt);
       if (existing !== undefined) {
         const target = yield* fs.readLink(existing).pipe(Effect.option);
         if (Option.getOrUndefined(target) !== launcher) {
-          return yield* logInfo("left another T3 Code app's t3 command in place", {
-            existing,
-          });
+          return yield* logInfo(
+            `left another ${LIGHTNING_BRAND.baseName} app's ${LIGHTNING_BRAND.cliCommand} command in place`,
+            {
+              existing,
+            },
+          );
         }
       }
-      // A t3 that is not ours in these folders, even off PATH, means the user has one already. On
-      // Windows the app never writes there, so any t3 there is someone else's.
+      // A command that is not ours in these folders, even off PATH, means the user has one already. On
+      // Windows the app never writes there, so any command there is someone else's.
+      const cliCommandNames = windows
+        ? [`${LIGHTNING_BRAND.cliCommand}.cmd`, `${LIGHTNING_BRAND.cliCommand}.exe`]
+        : [LIGHTNING_BRAND.cliCommand];
       for (const directory of userCandidates(environment.homeDirectory)) {
-        for (const name of windows ? ["t3.cmd", "t3.exe"] : ["t3"]) {
+        for (const name of cliCommandNames) {
           const other = path.join(directory, name);
           const present =
             (yield* exists(other)) || Option.isSome(yield* fs.readLink(other).pipe(Effect.option));
           if (present && (windows || !(yield* isOurLink(other)))) {
-            return yield* logInfo("left the t3 command to Settings beside another t3", { other });
+            return yield* logInfo(
+              `left the ${LIGHTNING_BRAND.cliCommand} command to Settings beside another ${LIGHTNING_BRAND.cliCommand}`,
+              { other },
+            );
           }
         }
       }
-      const installed = yield* install;
-      yield* logInfo("installed the t3 command on first launch", {
+      const installed = yield* installCommand([], false);
+      yield* logInfo(`installed the ${LIGHTNING_BRAND.cliCommand} command on first launch`, {
         installedPath: installed.installedPath,
         onPath: installed.onPath,
       });
     },
   ).pipe(
+    commandPermit.withPermits(1),
     // Our own messages are short and name only paths; anything else is logged as a category.
     Effect.catch((error) =>
-      logWarning("did not install the t3 command on first launch", {
+      logWarning(`did not install the ${LIGHTNING_BRAND.cliCommand} command on first launch`, {
         reason: error._tag === "DesktopCliCommandError" ? error.message : "state-write-failed",
       }),
     ),

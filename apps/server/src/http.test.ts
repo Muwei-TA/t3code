@@ -301,6 +301,25 @@ it.layer(
     Layer.provideMerge(NodeServices.layer),
   ),
 )("static HTTP responses", (it) => {
+  it.effect("serves mobile domain associations as JSON without falling back to the web app", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const staticDir = yield* fs.makeTempDirectoryScoped();
+      const wellKnown = path.join(staticDir, ".well-known");
+      yield* fs.makeDirectory(wellKnown);
+      yield* fs.writeFileString(path.join(staticDir, "index.html"), "<!doctype html>");
+      yield* fs.writeFileString(path.join(wellKnown, "apple-app-site-association.json"), "{}");
+      const request = yield* makeStaticRequest(staticDir);
+
+      const response = yield* request("/.well-known/apple-app-site-association");
+      expect(response.status).toBe(200);
+      expect(response.headers["content-type"]).toContain("application/json");
+      expect(yield* response.json).toEqual({});
+      expect((yield* request("/.well-known/assetlinks.json")).status).toBe(404);
+    }),
+  );
+
   it.effect("revalidates non-HTML files and returns changed contents", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

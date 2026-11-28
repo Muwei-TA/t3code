@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodePath from "@effect/platform-node/NodePath";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { CLI_NPM_PACKAGE_NAME } from "@t3tools/shared/cliRelease";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -34,7 +36,7 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const bin = yield* fs.makeTempDirectoryScoped();
-    yield* fs.writeFileString(path.join(bin, "t3"), "#!/bin/sh\n", { mode: 0o755 });
+    yield* fs.writeFileString(path.join(bin, "lightning"), "#!/bin/sh\n", { mode: 0o755 });
     return bin;
   });
 
@@ -42,18 +44,18 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
     Effect.gen(function* () {
       const npx = "/home/theo/.npm/_npx/abc/node_modules/t3/dist/bin.mjs";
       expect(yield* rootCommand({ node: "/usr/bin/node", entry: npx })).toBe(
-        "sudo npx t3 browser setup",
+        `sudo /usr/bin/node ${npx} browser setup`,
       );
       expect(
         yield* rootCommand({ node: "/home/theo/.nvm/versions/node/v24/bin/node", entry: npx }),
-      ).toBe('sudo env "PATH=$PATH" npx t3 browser setup');
+      ).toBe(`sudo /home/theo/.nvm/versions/node/v24/bin/node ${npx} browser setup`);
       expect(
         yield* rootCommand({
           node: "/home/theo/.local/node/bin/node",
           entry: "/home/theo/.local/lib/node_modules/t3/dist/bin.mjs",
           path: yield* pathWithT3,
         }),
-      ).toBe('sudo env "PATH=$PATH" t3 browser setup');
+      ).toBe('sudo env "PATH=$PATH" lightning browser setup');
     }),
   );
 
@@ -67,7 +69,7 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
           path: yield* pathWithT3,
           args,
         }),
-      ).toBe(`sudo env "PATH=$PATH" t3 browser setup --base-dir '/srv/t3 home'`);
+      ).toBe(`sudo env "PATH=$PATH" lightning browser setup --base-dir '/srv/t3 home'`);
       expect(
         yield* rootCommand({ node: "/opt/t3/t3", entry: "/opt/t3/t3", executable: true, args }),
       ).toBe("sudo /opt/t3/t3 browser setup --base-dir '/srv/t3 home'");
@@ -85,7 +87,7 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
       const desktop = {
         node: "/tmp/.mount_T3abc/t3code",
         entry: "/tmp/.mount_T3abc/resources/app.asar/apps/server/dist/bin.mjs",
-        env: { T3CODE_CLI_PATH: shim },
+        env: { LIGHTNING_CODE_CLI_PATH: shim },
       };
 
       expect(yield* rootCommand(desktop)).toBe(`sudo '${shim}' browser setup`);
@@ -97,9 +99,9 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
 
       // The link the app installs onto PATH leads to its own launcher, so plain `t3` is right.
       const linked = yield* fs.makeTempDirectoryScoped();
-      yield* fs.symlink(shim, path.join(linked, "t3"));
+      yield* fs.symlink(shim, path.join(linked, "lightning"));
       expect(yield* rootCommand({ ...desktop, path: linked })).toBe(
-        'sudo env "PATH=$PATH" t3 browser setup',
+        'sudo env "PATH=$PATH" lightning browser setup',
       );
 
       expect(
@@ -122,15 +124,20 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
 
       // A global npm launcher runs the downloaded executable; PATH's `t3` is that launcher.
       const prefix = path.join(home, "npm");
-      const npmLauncher = path.join(prefix, "lib/node_modules/t3/bin/t3.mjs");
+      const npmPackage = path.join(prefix, "lib/node_modules", CLI_NPM_PACKAGE_NAME);
+      const npmLauncher = path.join(npmPackage, "bin/t3.mjs");
       yield* fs.makeDirectory(path.dirname(npmLauncher), { recursive: true });
       yield* fs.makeDirectory(path.join(prefix, "bin"));
       yield* fs.writeFileString(npmLauncher, "", { mode: 0o755 });
       yield* fs.writeFileString(
-        path.join(prefix, "lib/node_modules/t3/package.json"),
-        `{"name":"t3","version":"${packageJson.version}"}`,
+        path.join(npmPackage, "package.json"),
+        JSON.stringify({
+          name: CLI_NPM_PACKAGE_NAME,
+          version: packageJson.version,
+          bin: { lightning: "./bin/t3.mjs" },
+        }),
       );
-      yield* fs.symlink(npmLauncher, path.join(prefix, "bin/t3"));
+      yield* fs.symlink(npmLauncher, path.join(prefix, "bin/lightning"));
       expect(
         yield* rootCommand({
           node: "/home/theo/.t3/runtime/versions/1.0.0/t3",
@@ -139,11 +146,14 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
           path: path.join(prefix, "bin"),
           env: { T3CODE_NPM_LAUNCHER_PATH: npmLauncher },
         }),
-      ).toBe('sudo env "PATH=$PATH" t3 browser setup');
+      ).toBe('sudo env "PATH=$PATH" lightning browser setup');
 
       expect(
-        yield* rootCommand({ ...desktop, env: { T3CODE_CLI_PATH: path.join(home, "gone") } }),
-      ).toBe('sudo env "PATH=$PATH" t3 browser setup');
+        yield* rootCommand({
+          ...desktop,
+          env: { LIGHTNING_CODE_CLI_PATH: path.join(home, "gone") },
+        }),
+      ).toBe('sudo env "PATH=$PATH" lightning browser setup');
     }),
   );
 });
@@ -167,11 +177,11 @@ it.layer(NodeServices.layer)("host CLI commands", (it) => {
           Effect.provideService(HostProcess.Platform, platform),
           Effect.provideService(HostProcess.Environment, { PATH: "", ...env }),
         );
-      expect((yield* hostCommand("win32", { T3CODE_CLI_PATH: shim })).command).toBe(
+      expect((yield* hostCommand("win32", { LIGHTNING_CODE_CLI_PATH: shim })).command).toBe(
         `& "${shim}" doctor "--base-dir" "C:\\Users\\Jane Doe\\.t3"`,
       );
       expect((yield* hostCommand("win32", {})).command).toBe(
-        't3 doctor "--base-dir" "C:\\Users\\Jane Doe\\.t3"',
+        'lightning doctor "--base-dir" "C:\\Users\\Jane Doe\\.t3"',
       );
       expect(
         (yield* resolveHostCliCommand("doctor", ["--base-dir", "C:\\T3\\\u201CArchive\u201D"]).pipe(
@@ -181,8 +191,8 @@ it.layer(NodeServices.layer)("host CLI commands", (it) => {
           Effect.provideService(HostProcess.Arguments, ["C:\\t3.exe", "C:\\bin.mjs"]),
           Effect.provideService(HostProcess.IsExecutable, false),
         )).command,
-      ).toBe('t3 doctor "--base-dir" "C:\\T3\\\u201C\u201CArchive\u201D\u201D"');
-      expect((yield* hostCommand("linux", { T3CODE_CLI_PATH: shim })).command).toMatch(
+      ).toBe('lightning doctor "--base-dir" "C:\\T3\\\u201C\u201CArchive\u201D\u201D"');
+      expect((yield* hostCommand("linux", { LIGHTNING_CODE_CLI_PATH: shim })).command).toMatch(
         / doctor --base-dir 'C:\\Users\\Jane Doe\\\.t3'$/,
       );
     }),
@@ -209,10 +219,10 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
         yield* fs.writeFileString(entry, "");
         yield* fs.writeFileString(
           path.join(path.dirname(entry), "../package.json"),
-          `{"name":"t3","version":"${packageJson.version}","bin":{"t3":"./bin/t3.mjs"}}`,
+          `{"name":"t3","version":"${packageJson.version}","bin":{"lightning":"./bin/t3.mjs"}}`,
         );
         const launchedBy = entry.endsWith("t3.mjs");
-        const installation = yield* resolveServerInstallation.pipe(
+        const withLaunch = [
           Effect.provideService(HostProcess.Arguments, [launchedBy ? executable : "node", entry]),
           Effect.provideService(HostProcess.ExecutablePath, executable),
           Effect.provideService(HostProcess.IsExecutable, launchedBy),
@@ -220,8 +230,17 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
             HostProcess.Environment,
             launchedBy ? { T3CODE_NPM_LAUNCHER_PATH: entry } : {},
           ),
+        ] as const;
+        const installation = yield* resolveServerInstallation.pipe(...withLaunch);
+        expect(installation).toEqual(
+          launchedBy
+            ? { kind: "t3-launcher", launcher: executable, baseDir: path.join(root, ".t3") }
+            : { kind, launch: { node: executable, entry: yield* fs.realPath(entry) } },
         );
-        expect(installation).toEqual({ kind });
+        if (launchedBy) {
+          const command = yield* resolveHostCliCommand("pair").pipe(...withLaunch);
+          expect(command).toEqual({ command: `${executable} pair`, launcher: true });
+        }
       }
     }),
   );
@@ -230,17 +249,21 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped();
+      const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
       const prefix = path.join(root, "bunx-tools");
-      const packageRoot = path.join(prefix, "lib/node_modules/t3");
+      const packageRoot = path.join(prefix, "lib/node_modules", CLI_NPM_PACKAGE_NAME);
       const entry = path.join(packageRoot, "dist/bin.mjs");
-      const globalBin = path.join(prefix, "bin/t3");
+      const globalBin = path.join(prefix, "bin/lightning");
       yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
       yield* fs.makeDirectory(path.dirname(globalBin), { recursive: true });
       yield* fs.writeFileString(entry, "");
       yield* fs.writeFileString(
         path.join(packageRoot, "package.json"),
-        '{"name":"t3","version":"0.0.45","bin":{"t3":"./dist/bin.mjs"}}',
+        JSON.stringify({
+          name: CLI_NPM_PACKAGE_NAME,
+          version: "0.0.45",
+          bin: { lightning: "./dist/bin.mjs" },
+        }),
       );
       const resolve = resolveServerInstallation.pipe(
         Effect.provideService(HostProcess.Arguments, ["node", entry]),
@@ -249,7 +272,11 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       );
       expect(yield* resolve).toBeNull();
       yield* fs.symlink(entry, globalBin);
-      expect(yield* resolve).toEqual({ kind: "npm-global", prefix });
+      expect(yield* resolve).toEqual({
+        kind: "npm-global",
+        prefix,
+        packageName: CLI_NPM_PACKAGE_NAME,
+      });
       yield* fs.remove(globalBin);
       yield* fs.writeFileString(globalBin, "an unrelated t3 command");
       expect(yield* resolve).toBeNull();
@@ -257,38 +284,134 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
     }),
   );
 
-  it.effect("proves the downloaded executable was started by a global npm launcher", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped();
-      const prefix = path.join(root, "bunx-tools");
-      const packageRoot = path.join(prefix, "lib/node_modules/t3");
-      const launcher = path.join(packageRoot, "bin/t3.mjs");
-      const executable = path.join(root, ".t3/runtime/versions/1.0.0/t3");
-      yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
-      yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
-      yield* fs.makeDirectory(path.join(prefix, "bin"));
-      yield* fs.writeFileString(launcher, "");
-      yield* fs.writeFileString(executable, "");
-      yield* fs.symlink(launcher, path.join(prefix, "bin/t3"));
-      const resolve = resolveServerInstallation.pipe(
-        Effect.provideService(HostProcess.ExecutablePath, executable),
-        Effect.provideService(HostProcess.Arguments, [executable, executable]),
-        Effect.provideService(HostProcess.IsExecutable, true),
-        Effect.provideService(HostProcess.Platform, "linux"),
-        Effect.provideService(HostProcess.Environment, { T3CODE_NPM_LAUNCHER_PATH: launcher }),
-      );
-      for (const [version, expected] of [
-        ["0.0.1", null],
-        [packageJson.version, { kind: "npm-global", prefix }],
-      ] as const) {
+  it.effect.each(["t3", CLI_NPM_PACKAGE_NAME])(
+    "proves launcher ownership for the npm package %s",
+    (name) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+        const prefix = path.join(root, "bunx-tools");
+        const packageRoot = path.join(prefix, "lib/node_modules", name);
+        const launcher = path.join(packageRoot, "bin/t3.mjs");
+        const executable = path.join(root, ".t3/runtime/versions/1.0.0/t3");
+        yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
+        yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+        yield* fs.makeDirectory(path.join(prefix, "bin"));
+        yield* fs.writeFileString(launcher, "");
+        yield* fs.writeFileString(executable, "");
+        yield* fs.symlink(launcher, path.join(prefix, "bin/lightning"));
+        const resolve = resolveServerInstallation.pipe(
+          Effect.provideService(HostProcess.ExecutablePath, executable),
+          Effect.provideService(HostProcess.Arguments, [executable, executable]),
+          Effect.provideService(HostProcess.IsExecutable, true),
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HostProcess.Environment, { T3CODE_NPM_LAUNCHER_PATH: launcher }),
+        );
+        for (const [version, bin, expected] of [
+          ["0.0.1", { lightning: "./bin/t3.mjs" }, null],
+          [packageJson.version, { t3: "./bin/t3.mjs" }, null],
+          [packageJson.version, { lightning: "./dist/bin.mjs" }, null],
+          [
+            packageJson.version,
+            { lightning: "./bin/t3.mjs" },
+            {
+              kind: "npm-global",
+              prefix,
+              packageName: name,
+              ...(name === "t3" ? { legacyPackage: true } : {}),
+            },
+          ],
+        ] as const) {
+          yield* fs.writeFileString(
+            path.join(packageRoot, "package.json"),
+            JSON.stringify({ name, version, bin }),
+          );
+          expect(yield* resolve).toEqual(expected);
+        }
+      }),
+  );
+
+  it.effect.each(["t3", CLI_NPM_PACKAGE_NAME])(
+    "checks npm's generated Windows wrapper for %s",
+    (name) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const prefix = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+        const packageRoot = path.join(prefix, "node_modules", name);
+        const entry = path.join(packageRoot, "bin/t3.mjs");
+        const wrapper = path.join(prefix, "lightning.cmd");
+        yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
+        yield* fs.writeFileString(entry, "#!/usr/bin/env node\n");
         yield* fs.writeFileString(
           path.join(packageRoot, "package.json"),
-          `{"name":"t3","version":"${version}","bin":{"t3":"./bin/t3.mjs"}}`,
+          JSON.stringify({
+            name,
+            version: packageJson.version,
+            bin: { lightning: "./bin/t3.mjs" },
+          }),
         );
-        expect(yield* resolve).toEqual(expected);
-      }
+        const resolve = resolveServerInstallation.pipe(
+          Effect.provideService(HostProcess.Arguments, ["node", entry]),
+          Effect.provideService(HostProcess.IsExecutable, false),
+          Effect.provideService(HostProcess.Platform, "win32"),
+        );
+        expect(yield* resolve).toBeNull();
+        // Captured from npm's cmd-shim for a Node package with a lightning bin.
+        const relativeEntry = `\\node_modules\\${name.replaceAll("/", "\\")}\\bin\\t3.mjs`;
+        const shim = String.raw`@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\node.exe" (
+  SET "_prog=%dp0%\node.exe"
+) ELSE (
+  SET "_prog=node"
+  SET PATHEXT=%PATHEXT:;.JS;=;%
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%${relativeEntry}" %*
+`.replaceAll("\n", "\r\n");
+        yield* fs.writeFileString(wrapper, shim);
+        expect(yield* resolve).toEqual({
+          kind: "npm-global",
+          prefix,
+          packageName: name,
+          ...(name === "t3" ? { legacyPackage: true } : {}),
+        });
+        yield* fs.writeFileString(wrapper, shim.replace("bin\\t3.mjs", "bin\\another.mjs"));
+        expect(yield* resolve).toBeNull();
+        yield* fs.writeFileString(
+          wrapper,
+          shim.replace("GOTO start", "ECHO running custom commands\r\nGOTO start"),
+        );
+        expect(yield* resolve).toBeNull();
+      }),
+  );
+
+  it.effect("keeps the Windows npm cache classified as a runner", () =>
+    Effect.gen(function* () {
+      const entry = "C:\\cache\\_npx\\hash\\node_modules\\t3\\dist\\bin.mjs";
+      const node = "C:\\Program Files\\nodejs\\node.exe";
+      const installation = yield* resolveServerInstallation.pipe(
+        Effect.provide(NodePath.layerWin32),
+        Effect.provideService(
+          FileSystem.FileSystem,
+          FileSystem.makeNoop({ realPath: (value) => Effect.succeed(value) }),
+        ),
+        Effect.provideService(HostProcess.Arguments, [node, entry]),
+        Effect.provideService(HostProcess.ExecutablePath, node),
+        Effect.provideService(HostProcess.IsExecutable, false),
+        Effect.provideService(HostProcess.Platform, "win32"),
+        Effect.provideService(HostProcess.Environment, {}),
+      );
+      expect(installation).toEqual({ kind: "npx", launch: { node, entry } });
     }),
   );
 
@@ -297,20 +420,20 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
-      // The install script's launcher names ~/.t3, which here links to a home elsewhere.
+      // The install script's launcher names ~/.lightning-code, which here links to a home elsewhere.
       const executable = path.join(root, "data/t3/runtime/versions/1.0.0/t3");
-      const launcher = path.join(root, "bin/t3");
+      const launcher = path.join(root, "bin/lightning");
       const copy = path.join(root, "bin/t3-copy");
       yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
       yield* fs.writeFileString(executable, "", { mode: 0o755 });
       yield* fs.writeFileString(copy, "", { mode: 0o755 });
-      yield* fs.symlink(path.join(root, "data/t3"), path.join(root, ".t3"));
-      yield* fs.symlink(path.join(root, ".t3/runtime/versions/1.0.0/t3"), launcher);
+      yield* fs.symlink(path.join(root, "data/t3"), path.join(root, ".lightning-code"));
+      yield* fs.symlink(path.join(root, ".lightning-code/runtime/versions/1.0.0/t3"), launcher);
       // Earlier PATH entries hold a directory and a non-executable file named t3.
-      yield* fs.makeDirectory(path.join(root, "shadow-dir/t3"), { recursive: true });
+      yield* fs.makeDirectory(path.join(root, "shadow-dir/lightning"), { recursive: true });
       yield* fs.makeDirectory(path.join(root, "shadow-file"));
-      yield* fs.writeFileString(path.join(root, "shadow-file/t3"), "");
+      yield* fs.writeFileString(path.join(root, "shadow-file/lightning"), "");
       const resolve = (invokedAs: string, PATH = "shadow-dir:shadow-file:bin") =>
         resolveServerInstallation.pipe(
           Effect.provideService(HostProcess.ExecutablePath, executable),
@@ -321,9 +444,9 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
           Effect.provideService(HostProcess.HomeDirectory, root),
           Effect.provideService(HostProcess.Platform, "linux"),
         );
-      const baseDir = path.join(root, ".t3");
+      const baseDir = path.join(root, ".lightning-code");
 
-      expect(yield* resolve("t3")).toEqual({ kind: "t3-launcher", launcher, baseDir });
+      expect(yield* resolve("lightning")).toEqual({ kind: "t3-launcher", launcher, baseDir });
       expect(yield* resolve(launcher)).toEqual({ kind: "t3-launcher", launcher, baseDir });
       expect(yield* resolve(executable)).toBeNull();
       expect(yield* resolve(copy)).toBeNull();
@@ -332,7 +455,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       yield* fs.remove(launcher);
       yield* fs.writeFileString(
         launcher,
-        posixLauncherScript(path.join(root, ".t3/runtime/versions/1.0.0/t3")),
+        posixLauncherScript(path.join(root, ".lightning-code/runtime/versions/1.0.0/t3")),
         { mode: 0o755 },
       );
       expect(yield* resolve(executable, path.join(root, "bin"))).toEqual({
@@ -340,6 +463,35 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
         launcher,
         baseDir,
       });
+    }),
+  );
+
+  it.effect("finds the recorded Windows launcher without changing another install", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+      const baseDir = path.join(root, "Lightning home");
+      const executable = path.join(baseDir, "runtime/versions/1.2.3/t3.exe");
+      const installed = path.join(root, "custom bin", "lightning.cmd");
+      const otherBin = path.join(root, "other bin");
+      const other = path.join(otherBin, "lightning.cmd");
+      yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+      yield* fs.makeDirectory(path.dirname(installed), { recursive: true });
+      yield* fs.makeDirectory(otherBin);
+      yield* fs.writeFileString(executable, "");
+      yield* fs.writeFileString(installed, `@echo off\r\n"${executable}" %*\r\n`);
+      yield* fs.writeFileString(other, `@echo off\r\nset PROFILE=other\r\n"${executable}" %*\r\n`);
+      yield* fs.writeFileString(path.join(baseDir, "runtime/launchers"), `${installed}\r\n`);
+      const resolve = resolveServerInstallation.pipe(
+        Effect.provideService(HostProcess.ExecutablePath, executable),
+        Effect.provideService(HostProcess.IsExecutable, true),
+        Effect.provideService(HostProcess.Platform, "win32"),
+        Effect.provideService(HostProcess.Environment, { PATH: otherBin }),
+      );
+      expect(yield* resolve).toEqual({ kind: "t3-launcher", launcher: installed, baseDir });
+      yield* fs.remove(installed);
+      expect(yield* resolve).toEqual({ kind: "t3-launcher", launcher: executable, baseDir });
     }),
   );
 
@@ -351,7 +503,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       for (const relative of [
         "project/node_modules/t3/dist/bin.mjs",
         "project/apps/server/dist/bin.mjs",
-        ".t3/runtime/0.0.45/t3",
+        ".lightning-code/runtime/0.0.45/t3",
         "missing/dist/bin.mjs",
       ]) {
         const entry = path.join(root, relative);

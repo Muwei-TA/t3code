@@ -2,6 +2,8 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
+import { MOBILE_APP_IDENTITIES, MOBILE_DEV_IOS_ARTIFACT } from "@t3tools/shared/mobileBrand";
 import { isCommandAvailable, resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
@@ -135,7 +137,7 @@ export const hashBundle = Effect.fn("hashBundle")(function* (root: string) {
 });
 type FileSystemError = import("effect/PlatformError").PlatformError;
 
-const bundleId = "com.t3tools.t3code.dev";
+const { identifier: bundleId, scheme: devScheme } = MOBILE_APP_IDENTITIES.development;
 const roots = Effect.gen(function* () {
   const path = yield* Path.Path;
   const repo = yield* path.fromFileUrl(new URL("../", import.meta.url));
@@ -431,7 +433,44 @@ export const prebuildAndroid = Effect.fn("nativeClient.prebuildAndroid")(functio
   );
 });
 
-const artifactNames = { ios: "T3CodeDev.app", android: "app-debug.apk" } as const;
+const artifactNames = { ios: MOBILE_DEV_IOS_ARTIFACT, android: "app-debug.apk" } as const;
+
+const nativeBuildEntry = Effect.fn("nativeClient.nativeBuildEntry")(function* (
+  directory: string,
+  extension: string,
+  preferred?: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const candidates = (yield* fs.readDirectory(directory)).filter((name) =>
+    name.endsWith(extension),
+  );
+  if (preferred && candidates.includes(preferred)) return preferred;
+  if (candidates.length === 1) return candidates[0]!;
+  return yield* new NativeClientError({
+    message: `Expected one ${extension} in ${directory}; found ${candidates.join(", ") || "none"}.`,
+  });
+});
+
+export const iosBuildTarget = Effect.fn("nativeClient.iosBuildTarget")(function* (ios: string) {
+  const path = yield* Path.Path;
+  const project = yield* nativeBuildEntry(ios, ".xcodeproj");
+  const target = path.basename(project, ".xcodeproj");
+  const workspace = yield* nativeBuildEntry(ios, ".xcworkspace", `${target}.xcworkspace`);
+  const scheme = yield* nativeBuildEntry(
+    path.join(ios, project, "xcshareddata/xcschemes"),
+    ".xcscheme",
+    `${target}.xcscheme`,
+  );
+  return { workspace: path.join(ios, workspace), scheme: path.basename(scheme, ".xcscheme") };
+});
+
+export const iosSimulatorProduct = Effect.fn("nativeClient.iosSimulatorProduct")(function* (
+  derivedData: string,
+) {
+  const path = yield* Path.Path;
+  const products = path.join(derivedData, "Build/Products/Debug-iphonesimulator");
+  return path.join(products, yield* nativeBuildEntry(products, ".app"));
+});
 // R2 requires equal-sized parts and Workers cap request bodies at 100 MB.
 const partSize = 64 * 1024 * 1024;
 const RemoteCredentials = Schema.fromJsonString(
@@ -699,8 +738,7 @@ const buildIosOnEas = Effect.fn("nativeClient.buildIosOnEas")(function* (staging
   yield* command("curl", ["-fsSL", "--retry", "3", "-o", archive, build.artifacts.buildUrl]);
   yield* command("tar", ["-xzf", archive, "-C", staging]);
   yield* fs.remove(archive);
-  const app = (yield* fs.readDirectory(staging)).find((name) => name.endsWith(".app"));
-  if (!app) return yield* new NativeClientError({ message: "The EAS build archive has no .app." });
+  const app = yield* nativeBuildEntry(staging, ".app");
   if (app !== artifactNames.ios)
     yield* fs.rename(path.join(staging, app), path.join(staging, artifactNames.ios));
 });
@@ -736,16 +774,18 @@ const build = Effect.fn("nativeClient.build")(function* (
       yield* buildIosOnEas(staging);
     } else if (platform === "ios") {
       const output = yield* fs.makeTempDirectoryScoped({ prefix: "t3-native-client-" });
-      yield* command("pod", ["install"], true, path.join(mobile, "ios"));
+      const ios = path.join(mobile, "ios");
+      yield* command("pod", ["install"], true, ios);
+      const { workspace, scheme } = yield* iosBuildTarget(ios);
       // One device-independent arm64 simulator build installs on every iPhone and iPad simulator.
       yield* command(
         "xcrun",
         [
           "xcodebuild",
           "-workspace",
-          path.join(mobile, "ios/T3CodeDev.xcworkspace"),
+          workspace,
           "-scheme",
-          "T3CodeDev",
+          scheme,
           "-configuration",
           "Debug",
           "-destination",
@@ -759,7 +799,7 @@ const build = Effect.fn("nativeClient.build")(function* (
         true,
       );
       yield* command("ditto", [
-        path.join(output, "Build/Products/Debug-iphonesimulator", artifactNames.ios),
+        yield* iosSimulatorProduct(output),
         path.join(staging, artifactNames.ios),
       ]);
     } else {
@@ -876,7 +916,9 @@ const buildOnBlacksmith = Effect.fn("nativeClient.buildOnBlacksmith")(
     if (environment.GITHUB_ACTIONS === "true" || environment.T3_NATIVE_CLIENT_BUILD === "local")
       return false;
     if (!(yield* isCommandAvailable("gh"))) return false;
-    const repository = environment.T3_NATIVE_CLIENT_REPOSITORY ?? "pingdotgg/t3code";
+    const repository =
+      environment.T3_NATIVE_CLIENT_REPOSITORY ??
+      new URL(LIGHTNING_BRAND.repositoryUrl).pathname.slice(1);
     const { repo } = yield* roots;
     const sha = yield* command("git", ["rev-parse", "HEAD"], false, repo);
     const pushed = yield* command(
@@ -1193,7 +1235,7 @@ const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function
         agentDevice,
         "open",
         bundleId,
-        `t3code-dev://expo-development-client/?url=${url}&disableOnboarding=1&disableFab=1&disableAutoLaunch=1`,
+        `${devScheme}://expo-development-client/?url=${url}&disableOnboarding=1&disableFab=1&disableAutoLaunch=1`,
         ...target,
       ],
       true,

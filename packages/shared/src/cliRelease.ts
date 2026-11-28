@@ -1,12 +1,15 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { LIGHTNING_BRAND } from "./brand.ts";
 import { compareSemverVersions } from "./semver.ts";
 
-const CLI_RELEASE_REPOSITORY = "pingdotgg/t3code";
+const CLI_RELEASE_REPOSITORY = new URL(LIGHTNING_BRAND.repositoryUrl).pathname.replace(/^\/+/, "");
 export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
-export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
+export const CLI_RELEASE_BASE_URL_ENV = "LIGHTNING_CODE_RELEASE_BASE_URL";
+// A separate package lets npm keep the upstream t3 launcher in the same prefix.
+export const CLI_NPM_PACKAGE_NAME = "@muwei-ta/lightning-code";
 
 // Keep archive keys aligned with the Linux matrix, Windows ARM64 build, and cli_archive rows in release.yml,
 // and with the SSH runner's host check in packages/ssh/src/tunnel.ts.

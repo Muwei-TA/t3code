@@ -4,15 +4,19 @@ import { mFallback } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
 
 import {
-  formatHostedThreadLink,
+  formatThreadShareLink,
   formatThreadLink,
   guessThreadLinkRef,
+  hasThreadLinks,
   hostedThreadLink,
   parseThreadLinkHref,
   threadLinkCandidates,
   threadLinkRefs,
+  threadShareHref,
 } from "./threadLinks.ts";
+import { promptLinkAppPath } from "./promptLinks.ts";
 import { relabelThreadLinks } from "./threadLinksCopy.ts";
+import { threadLinkContextReferences } from "./composerContextReferences.ts";
 
 const ref = (environmentId: string, threadId = "chat-1") => ({
   environmentId: EnvironmentId.make(environmentId),
@@ -214,6 +218,23 @@ describe("thread links", () => {
 });
 
 describe("hosted thread links", () => {
+  it("round-trips pasted links from the configured hosted app without trusting other origins", () => {
+    const origin = "https://lightning.example";
+    const thread = ref("there", "a:b");
+    const href = hostedThreadLink(thread, origin);
+    const text = `[A chat](${href})`;
+
+    expect(hasThreadLinks(text, origin)).toBe(true);
+    expect(parseThreadLinkHref(href, origin)).toEqual(thread);
+    expect(parseThreadLinkHref(href, "https://another.example")).toBeNull();
+    expect(threadLinkRefs(text, local, origin)).toEqual([thread]);
+    expect(
+      threadLinkRefs(`\`${href}\` https://another.example/threads/there/a%3Ab`, local, origin),
+    ).toEqual([]);
+    expect(
+      threadLinkContextReferences(text, [], () => "A chat", undefined, origin).records,
+    ).toMatchObject([{ ...thread, title: "A chat" }]);
+  });
   it("escapes every id character a sentence or path could claim, and reads it back", () => {
     const thread = ref("env.1", "thread:delegated/mcp%3A1.");
     const link = hostedThreadLink(thread);
@@ -236,10 +257,32 @@ describe("hosted thread links", () => {
   });
 
   it("writes a copied link a reader can follow, labeled when it has a title", () => {
-    expect(formatHostedThreadLink(ref("e", "t1"), "Fix [ci]")).toBe(
-      "[Fix ci](https://app.t3.codes/threads/e/t1)",
+    expect(
+      formatThreadShareLink(ref("e", "t1"), "Fix [ci]", {
+        hostedAppUrl: "https://lightning.example",
+      }),
+    ).toBe("[Fix ci](https://lightning.example/threads/e/t1)");
+    expect(formatThreadShareLink(ref("e", "t1"), " ")).toBe("lightningcode://threads/e/t1");
+  });
+
+  it("copies a direct Lightning link that can open in desktop and import into a composer", () => {
+    const thread = ref("env-1", "provider:child/task%3A1");
+    const href = threadShareHref(thread, { appScheme: "lightningcode-dev" });
+    expect(href).toBe("lightningcode-dev://threads/env-1/provider%3Achild%2Ftask%253A1");
+    expect(promptLinkAppPath(href)).toBe("/env-1/provider%3Achild%2Ftask%253A1");
+    expect(parseThreadLinkHref(href)).toEqual(thread);
+    expect(threadLinkRefs(`See ${href}.`, local)[0]).toEqual(thread);
+    expect(
+      threadLinkContextReferences(`[A chat](${href})`, [], () => undefined).records,
+    ).toMatchObject([{ ...thread, title: "A chat" }]);
+    expect(
+      threadLinkRefs(`https://example.test/?next=${href} \`${href}\` ${href}?prompt=other`, local),
+    ).toEqual([]);
+    expect(parseThreadLinkHref("lightningcode://pair?pairingUrl=secret")).toBeNull();
+    expect(parseThreadLinkHref("t3code://threads/env-1/thread-1")).toBeNull();
+    expect(threadShareHref(thread, { hostedAppUrl: "file:///invalid" })).toBe(
+      "lightningcode://threads/env-1/provider%3Achild%2Ftask%253A1",
     );
-    expect(formatHostedThreadLink(ref("e", "t1"), " ")).toBe("https://app.t3.codes/threads/e/t1");
   });
 
   it("titles hosted links in every Markdown form and writes them as v2 links", () => {

@@ -98,7 +98,11 @@ export const installRelayTelemetryEnabled = Effect.fn("desktop.ipc.window.instal
     );
     const shellEnvironment = yield* DesktopShellEnvironment.DesktopShellEnvironment;
     const explicitlyOptedOut =
-      env.T3CODE_TELEMETRY_ENABLED !== undefined && !isRelayTracingEnabled(env);
+      env.LIGHTNING_CODE_TELEMETRY_ENABLED !== undefined &&
+      !isRelayTracingEnabled({
+        ...env,
+        T3CODE_TELEMETRY_ENABLED: env.LIGHTNING_CODE_TELEMETRY_ENABLED,
+      });
     yield* ipc.handleSync(
       DesktopIpc.makeSyncIpcMethod({
         channel: IpcChannels.GET_RELAY_TELEMETRY_ENABLED_CHANNEL,
@@ -109,7 +113,10 @@ export const installRelayTelemetryEnabled = Effect.fn("desktop.ipc.window.instal
               !policyAllows || explicitlyOptedOut
                 ? false
                 : known
-                  ? isRelayTracingEnabled(env)
+                  ? isRelayTracingEnabled({
+                      ...env,
+                      T3CODE_TELEMETRY_ENABLED: env.LIGHTNING_CODE_TELEMETRY_ENABLED,
+                    })
                   : null,
             ),
           ),

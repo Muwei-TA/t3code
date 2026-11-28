@@ -1,5 +1,7 @@
 import { sha256 } from "@noble/hashes/sha2";
 
+import { LIGHTNING_BRAND } from "./brand.ts";
+
 export interface DesktopAppControlAddress {
   readonly address: string;
   readonly directory: string | null;
@@ -22,7 +24,7 @@ export function resolveDesktopAppControlAddress(input: {
   const stateHash = shortHash(input.stateDir);
   if (input.platform === "win32") {
     return {
-      address: `\\\\.\\pipe\\t3code-app-${stateHash}`,
+      address: `\\\\.\\pipe\\${LIGHTNING_BRAND.slug}-app-${stateHash}`,
       directory: null,
     };
   }
@@ -31,9 +33,9 @@ export function resolveDesktopAppControlAddress(input: {
     input.userId === undefined ? shortHash(input.stateDir).slice(0, 12) : input.userId;
   const socketName = `${stateHash}.sock`;
   const maxPathBytes = input.platform === "linux" ? 107 : 103;
-  let directory = input.joinPath(input.tempDir, `t3code-${userKey}`);
+  let directory = input.joinPath(input.tempDir, `${LIGHTNING_BRAND.slug}-${userKey}`);
   if (new TextEncoder().encode(input.joinPath(directory, socketName)).byteLength > maxPathBytes) {
-    directory = input.joinPath("/tmp", `t3code-${userKey}`);
+    directory = input.joinPath("/tmp", `${LIGHTNING_BRAND.slug}-${userKey}`);
   }
   return {
     address: input.joinPath(directory, socketName),

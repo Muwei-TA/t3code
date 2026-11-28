@@ -133,6 +133,12 @@ it.each([
     );
     const link = screen.getByRole("link", { name: "Thread, Older essay" });
     await expect.element(link).toBeVisible();
+    await expect
+      .element(link)
+      .toHaveAttribute(
+        "data-markdown-copy",
+        `[Older essay](lightningcode://threads/environment/${encodeURIComponent(threadId)})`,
+      );
     await expect.element(screen.getByRole("img", { name: "Essays project icon" })).toBeVisible();
     await link.click();
     await vi.waitFor(() =>

@@ -1,5 +1,6 @@
 import { redirect } from "@tanstack/react-router";
 import { validateSettingsScopeSearch } from "../settings/settingsScope";
+import { readLightningShell } from "../lightning/shell";
 import { msg } from "gt-react";
 
 export const harnessDomains = [
@@ -9,8 +10,10 @@ export const harnessDomains = [
   { tab: "guardrails", title: msg("Guardrails") },
 ] as const;
 export type HarnessDomain = (typeof harnessDomains)[number]["tab"];
-export function harnessDomain(value: unknown): HarnessDomain {
-  return harnessDomains.find((domain) => domain.tab === value)?.tab ?? "skills";
+export function harnessDomain(value: unknown, shell: "lightning" | "classic"): HarnessDomain {
+  const domain = harnessDomains.find((item) => item.tab === value)?.tab;
+  if (shell === "lightning" && (!domain || domain === "skills")) return "tools";
+  return domain ?? "skills";
 }
 
 export function redirectLegacyHarness(location: {
@@ -46,6 +49,6 @@ export function redirectLegacyHarness(location: {
         ? "guardrails"
         : ["rules", "modes", "commands", "memory"].includes(section)
           ? "context"
-          : harnessDomain(section);
+          : harnessDomain(section, readLightningShell());
   throw redirect({ to: "/harness", search: { ...scope, tab }, hash, replace: true });
 }

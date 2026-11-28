@@ -45,9 +45,20 @@ Windows packages the bundled server and its unpacked native modules in `resource
 
 ## One-time credentials setup
 
+### Lightning Code release assets
+
+When publishing a Lightning Code release from this fork, attach the version-matched `t3.tgz`
+from `node scripts/build-npm-launcher.ts --version <version>` alongside the CLI archives.
+The tarball installs `@muwei-ta/lightning-code` with the `lightning` command. Web and Desktop
+use it to upgrade at the installed npm prefix. For a legacy Lightning tarball installed under
+the `t3` package name, the copied command launches the requested release through npm's cache
+so the installed commands stay available.
+
 ### npm OIDC trusted publishing
 
-Configure `t3` on npm with GitHub Actions Trusted Publishing for `.github/workflows/release.yml` (the workflow publishes only the `t3` launcher tarball via `npm publish --provenance`).
+For npm releases, configure GitHub Actions Trusted Publishing for the launcher's package name
+and `.github/workflows/release.yml`. The workflow publishes that launcher tarball with
+`npm publish --provenance`.
 
 ### Apple signing and notarization (macOS)
 

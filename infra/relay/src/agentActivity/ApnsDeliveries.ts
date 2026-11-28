@@ -5,6 +5,7 @@ import type {
   RelayDeliveryKind,
   RelayDeliveryResult,
 } from "@t3tools/contracts/relay";
+import { MOBILE_APP_IDENTITIES } from "@t3tools/shared/mobileBrand";
 import {
   RelayAgentActivityAggregateState as RelayAgentActivityAggregateStateSchema,
   RelayAgentAwarenessPreferences as RelayAgentAwarenessPreferencesSchema,
@@ -444,12 +445,17 @@ function makeLiveActivityDeliveryRequest(
   apns: Apns.ApnsClient["Service"],
   input: SendLiveActivityDeliveryInput,
   now: DateTime.DateTime,
+  bundleId: string,
 ) {
   const epochSeconds = Math.floor(now.epochMilliseconds / 1_000);
+  const urlScheme = Object.values(MOBILE_APP_IDENTITIES).find(
+    ({ identifier }) => identifier === bundleId,
+  )?.scheme;
   const base = {
     token: input.token,
     nowEpochSeconds: epochSeconds,
     nowIso: DateTime.formatIso(now),
+    ...(urlScheme ? { urlScheme } : {}),
   };
   switch (input.kind) {
     case "live_activity_update":
@@ -734,14 +740,16 @@ const make = Effect.gen(function* () {
       });
       return staleJobResult({ deviceId: input.target.device_id, kind: input.kind });
     }
+    const credentials = credentialsForTarget(config.apns, deliveryTarget);
     const { epochSeconds, iso, request } = makeLiveActivityDeliveryRequest(
       apns,
       { ...input, aggregate, alert } as SendLiveActivityDeliveryInput,
       now,
+      credentials.bundleId,
     );
     const result = yield* apns
       .sendLiveActivityRequest({
-        credentials: credentialsForTarget(config.apns, deliveryTarget),
+        credentials,
         request,
         issuedAtUnixSeconds: epochSeconds,
       })

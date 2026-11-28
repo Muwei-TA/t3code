@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderDriverKind } from "@t3tools/contracts";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -263,6 +264,13 @@ const layerService = (input: {
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(ServerSettings.layerTest(input.settings ?? {})),
     Layer.provideMerge(layerHttpClient(input.response)),
+    Layer.provideMerge(
+      ConfigProvider.layer(
+        ConfigProvider.fromUnknown({
+          LIGHTNING_CODE_MODEL_MANIFEST_URL: "https://manifest.example.test/models.json",
+        }),
+      ),
+    ),
   );
 
 describe("ModelManifest service", () => {
@@ -400,6 +408,33 @@ describe("ModelManifest service", () => {
         layerService({
           prefix: "model-manifest-newer-bundle-test",
           response: () => Response.json(REMOTE_MANIFEST),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("uses only the bundle for every refresh path when no URL is configured", () =>
+    Effect.gen(function* () {
+      const service = yield* ModelManifest.make.pipe(
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
+      );
+      yield* service.refreshInBackground;
+      for (const read of [
+        service.current,
+        service.refresh,
+        service.forceRefresh,
+        service.refreshOnDemand,
+      ]) {
+        assert.strictEqual(yield* read, ModelManifest.BUNDLED_MODEL_MANIFEST);
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        layerService({
+          prefix: "offline-manifest-",
+          response: () => {
+            throw new Error("Unexpected manifest request");
+          },
         }),
       ),
     ),

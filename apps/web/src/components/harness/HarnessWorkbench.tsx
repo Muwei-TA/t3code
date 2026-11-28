@@ -2,15 +2,17 @@ import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { T, useGT, useMessages } from "gt-react";
-import { useState } from "react";
+import { use, useState } from "react";
 import { isElectron } from "../../env";
 import { harnessEnvironment } from "../../state/harness";
 import { useEnvironmentQuery } from "../../state/query";
+import { LightningShell } from "../lightning/shell";
+import { AdvancedSettings } from "../settings/AdvancedSettings";
 import { HarnessLibraryPanels } from "../settings/HarnessLibraryTabs";
 import { HarnessMemoryTab, HarnessSyncTab } from "../settings/HarnessMemoryAndSyncTabs";
 import { HarnessHooksTab, HarnessPluginsTab } from "../settings/HarnessPluginsAndHooksTabs";
 import { EnvironmentHarnessMcpSection } from "../settings/HarnessSettings";
-import { SettingsPageContainer } from "../settings/settingsLayout";
+import { SettingsPageContainer, SettingsSearchTarget } from "../settings/settingsLayout";
 import { SettingsScopeProvider, useSettingsScope } from "../settings/SettingsScopeContext";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -18,7 +20,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { HarnessAgentAction } from "./HarnessAgentAction";
-import { harnessDomains, type HarnessDomain } from "./harnessNavigation";
+import { harnessDomain, harnessDomains, type HarnessDomain } from "./harnessNavigation";
 
 function HarnessDelivery({
   environmentId,
@@ -92,6 +94,7 @@ function HarnessContextMemory({
 
 function HarnessContent({ tab }: { tab: HarnessDomain | "sync" }) {
   const gt = useGT();
+  const lightning = use(LightningShell) === "lightning";
   const { scope, environment } = useSettingsScope();
   const [revision, setRevision] = useState(0);
   if (
@@ -117,11 +120,28 @@ function HarnessContent({ tab }: { tab: HarnessDomain | "sync" }) {
   const library = (panel: "skills" | "approvals" | "rules" | "modes" | "commands" | "transfer") => (
     <HarnessLibraryPanels {...props} activeTab={panel} />
   );
+  const action = (domain: HarnessDomain, label: string) => (
+    <div>
+      <HarnessAgentAction
+        {...props}
+        domain={domain}
+        label={label}
+        {...(domain === "skills" && !lightning
+          ? { onInstalled: () => setRevision((value) => value + 1) }
+          : {})}
+      />
+    </div>
+  );
+  const delivery =
+    tab === "sync" ? null : <HarnessDelivery environmentId={environmentId} tab={tab} />;
+  const hooks = <HarnessHooksTab environmentId={environmentId} />;
+  const plugins = <HarnessPluginsTab environmentId={environmentId} />;
   return (
     <div
       key={JSON.stringify([environmentId, workspaceRoot, revision])}
       className="flex min-w-0 flex-col gap-5"
     >
+      {lightning ? null : delivery}
       {tab === "sync" ? (
         <>
           <p className="text-sm text-muted-foreground">
@@ -133,40 +153,64 @@ function HarnessContent({ tab }: { tab: HarnessDomain | "sync" }) {
           <HarnessSyncTab environmentId={environmentId} />
           {library("transfer")}
         </>
+      ) : tab === "tools" ? (
+        <>
+          <EnvironmentHarnessMcpSection environment={environment} workspaceRoot={workspaceRoot} />
+          {lightning ? (
+            <AdvancedSettings
+              title={gt("Skills & Plugins")}
+              targetIds={["harness-skills", "harness-plugins"]}
+            >
+              <div className="space-y-4 py-3">
+                <SettingsSearchTarget id="harness-skills">
+                  {action("skills", gt("Edit with Agent"))}
+                </SettingsSearchTarget>
+                {plugins}
+              </div>
+            </AdvancedSettings>
+          ) : null}
+        </>
+      ) : tab === "skills" ? (
+        <>
+          {action("skills", gt("Add with Agent"))}
+          {library("skills")}
+          {plugins}
+        </>
+      ) : tab === "guardrails" ? (
+        lightning ? (
+          <>
+            {library("approvals")}
+            <AdvancedSettings title={gt("Hooks")} targetIds={["harness-hooks"]}>
+              <div className="space-y-4 py-3">
+                {action("guardrails", gt("Create Hook with Agent"))}
+                {hooks}
+              </div>
+            </AdvancedSettings>
+          </>
+        ) : (
+          <>
+            {action("guardrails", gt("Create Hook with Agent"))}
+            {hooks}
+            {library("approvals")}
+          </>
+        )
       ) : (
         <>
-          <div>
-            <HarnessAgentAction
-              {...props}
-              domain={tab}
-              label={
-                tab === "guardrails"
-                  ? gt("Create Hook with Agent")
-                  : tab === "context"
-                    ? gt("Edit with Agent")
-                    : gt("Add with Agent")
-              }
-              {...(tab === "skills"
-                ? { onInstalled: () => setRevision((value) => value + 1) }
-                : {})}
-            />
-          </div>
-          <HarnessDelivery environmentId={environmentId} tab={tab} />
-          {tab === "skills" ? (
-            <>
-              {library("skills")}
-              <HarnessPluginsTab environmentId={environmentId} />
-            </>
-          ) : tab === "tools" ? (
-            <EnvironmentHarnessMcpSection environment={environment} workspaceRoot={workspaceRoot} />
-          ) : tab === "guardrails" ? (
-            <>
-              <HarnessHooksTab environmentId={environmentId} />
-              {library("approvals")}
-            </>
+          {library("rules")}
+          {lightning ? (
+            <div className="divide-y divide-border/60">
+              <AdvancedSettings title={gt("Modes")} targetIds={["harness-modes"]}>
+                {library("modes")}
+              </AdvancedSettings>
+              <AdvancedSettings title={gt("Commands")} targetIds={["harness-commands"]}>
+                {library("commands")}
+              </AdvancedSettings>
+              <AdvancedSettings title={gt("Portable Memory")} targetIds={["harness-memory"]}>
+                <HarnessContextMemory {...props} />
+              </AdvancedSettings>
+            </div>
           ) : (
             <>
-              {library("rules")}
               {library("modes")}
               {library("commands")}
               <HarnessContextMemory {...props} />
@@ -174,6 +218,9 @@ function HarnessContent({ tab }: { tab: HarnessDomain | "sync" }) {
           )}
         </>
       )}
+      {lightning && delivery ? (
+        <AdvancedSettings title={gt("Provider delivery")}>{delivery}</AdvancedSettings>
+      ) : null}
     </div>
   );
 }
@@ -190,7 +237,13 @@ export function HarnessWorkbench() {
   const search = useSearch({ from: "/_chat/harness" });
   const navigate = useNavigate();
   const m = useMessages();
-  const { tab = "skills", ...scope } = search;
+  const shell = use(LightningShell);
+  const { tab: requestedTab, ...scope } = search;
+  const tab = harnessDomain(requestedTab, shell);
+  const domains =
+    shell === "classic"
+      ? harnessDomains
+      : harnessDomains.filter((domain) => domain.tab !== "skills");
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden">
       <WorkspacePageHeader electron={isElectron} className="justify-between border-b">
@@ -208,10 +261,11 @@ export function HarnessWorkbench() {
       >
         <SettingsPageContainer width="wide">
           <nav className="flex flex-wrap gap-2">
-            {harnessDomains.map((domain) => (
+            {domains.map((domain) => (
               <Button
                 key={domain.tab}
                 size="sm"
+                aria-current={domain.tab === tab ? "page" : undefined}
                 variant={domain.tab === tab ? "default" : "outline"}
                 render={<Link to="/harness" search={{ ...scope, tab: domain.tab }} />}
               >

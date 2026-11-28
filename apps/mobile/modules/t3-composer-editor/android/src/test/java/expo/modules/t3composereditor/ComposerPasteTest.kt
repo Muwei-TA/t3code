@@ -251,6 +251,26 @@ class ComposerPasteTest {
   }
 
   @Test
+  fun regularPasteImportsHostedAndDirectThreadLinks() {
+    val links = listOf(
+      "https://lightning.example/threads/demo/thread",
+      "lightningcode-preview://threads/demo/thread"
+    )
+    editor.hostedThreadLinkPrefix = "https://lightning.example/threads/"
+    editor.setText("Keep this draft")
+    editor.setSelection(editor.length())
+    val imported = mutableListOf<String?>()
+    editor.pasteContextListener = { imported.add(it["text"]) }
+
+    for (link in links) {
+      clipboard.setPrimaryClip(ClipData.newPlainText("test", link))
+      assertTrue(editor.onTextContextMenuItem(android.R.id.paste))
+    }
+    assertEquals(links, imported)
+    assertEquals("Keep this draft", editor.text.toString())
+  }
+
+  @Test
   fun readOnlyShortcutDoesNotPasteOrEmitAnEvent() {
     clipboard.setPrimaryClip(ClipData.newPlainText("test", "x".repeat(120_001)))
     editor.setText("unchanged")

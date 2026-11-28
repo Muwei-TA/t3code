@@ -1,7 +1,4 @@
-# T3 Code Mobile
-
-> [!NOTE]
-> To install the released app from the App Store or Google Play, see [Mobile app](../../docs/user/install.md#mobile-app). This guide covers building it from source.
+# Lightning Code Mobile
 
 ## Quickstart
 
@@ -10,15 +7,39 @@
 
 This app has three variants:
 
-- `development`: Expo dev client, installable side-by-side as `T3 Code Dev`
-- `preview`: persistent internal preview build, installable side-by-side as `T3 Code Preview`
-- `production`: store/release build as `T3 Code`
+- `development`: Expo dev client, installable side-by-side as `Lightning Code Dev`
+- `preview`: persistent internal preview build, installable side-by-side as `Lightning Code Preview`
+- `production`: store/release build as `Lightning Code`
 
 Run commands from `apps/mobile`.
 
 T3 Connect is optional and disabled in a fresh clone. Public configuration belongs in the
 repository-root `.env` or `.env.local`, not an `apps/mobile/.env` file. See
 [`../../.env.example`](../../.env.example).
+
+## Verified thread links
+
+Verified HTTPS links open `/threads/…` in a signed mobile build. Use the same
+`LIGHTNING_MOBILE_LINK_HOST` (a hostname without a scheme or path) when building
+the mobile app and web app, and deploy the web build to that HTTPS host. Set
+`VITE_HOSTED_APP_URL=https://<host>` on the hosted web build so it generates links
+to that domain.
+
+- Set `LIGHTNING_IOS_TEAM_ID` to the Apple Team ID you use to sign the iOS app.
+  Register the bundle IDs for the variants you sign.
+- Set `LIGHTNING_ANDROID_APP_LINK_SHA256_PRODUCTION`,
+  `LIGHTNING_ANDROID_APP_LINK_SHA256_PREVIEW`, or
+  `LIGHTNING_ANDROID_APP_LINK_SHA256_DEVELOPMENT` to the colon-separated SHA-256
+  fingerprints for the variants you distribute. Separate multiple fingerprints
+  with commas. For Google Play builds use the Play app signing certificate.
+
+The web build emits the association documents from these settings. The host
+must serve `/.well-known/apple-app-site-association` as JSON without a redirect
+(the build file ends in `.json`) and `/.well-known/assetlinks.json`. The
+bundled server and Vercel configuration map the Apple URL automatically.
+
+`lightning pair` uses the app scheme and works independently of HTTPS
+thread-link verification.
 
 ## Development
 
@@ -35,11 +56,11 @@ The device argument can be omitted when exactly one device is booted or connecte
 compares this checkout's Expo fingerprint and the installed binary with its last install record,
 and reuses a matching client. Otherwise it installs the build for that fingerprint from
 `~/.cache/t3code/native-clients/artifacts`, then the shared task cache, and builds only when
-neither has it. A build runs in the `Mobile Dev Client` workflow (Blacksmith runners with warm
-Gradle and ccache state, and a macOS runner for iOS) when `gh` may dispatch workflows on
-`pingdotgg/t3code` and HEAD is pushed; the helper waits for the client in the shared cache.
-Otherwise, or when HEAD lacks your native edits or `T3_NATIVE_CLIENT_BUILD=local` is set, it builds
-on this machine. Main's client is built there on every native change, so most checkouts hit. One iOS simulator build serves every iPhone and iPad simulator, and one APK per
+neither has it. The helper builds locally when CI runners are unavailable, the current commit
+lacks your native edits, or `T3_NATIVE_CLIENT_BUILD=local` is set. If a repository enables
+the `Mobile Dev Client` workflow with a shared cache, the helper can dispatch it for commits
+already pushed to that repository. One iOS simulator build serves every iPhone and iPad
+simulator, and one APK per
 ABI (x86_64 or arm64-v8a) serves every emulator and phone of that ABI. Build output goes to the
 log file it prints (`T3_NATIVE_CLIENT_VERBOSE=1` streams it instead). Builds are shared back when
 your task-cache login (`bash infra/task-cache/install.sh`) can write. `T3_NATIVE_CLIENT_CACHE=read`
@@ -89,7 +110,7 @@ entitlement, and native Sign in with Apple entitlement; builds without this opt-
 
 ```bash
 T3CODE_IOS_PERSONAL_TEAM=1 \
-T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.t3code.dev \
+T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.lightningcode.dev \
 vp run ios:dev
 ```
 
@@ -103,7 +124,7 @@ The Personal Team equivalent also needs a unique bundle identifier:
 
 ```bash
 T3CODE_IOS_PERSONAL_TEAM=1 \
-T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.t3code \
+T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.lightningcode \
 vp run ios:release
 ```
 
@@ -130,13 +151,21 @@ The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin.
 
 ## EAS Builds
 
+Source builds work without an EAS account and start with OTA updates disabled. To use EAS,
+create a `lightning-code` project in your Expo account and set `LIGHTNING_MOBILE_EAS_OWNER`
+to its owner and `LIGHTNING_MOBILE_EAS_PROJECT_ID` to its project UUID. Builds with a project
+check for updates from that project. Set `T3CODE_MOBILE_UPDATES_ENABLED=0` to build without
+OTA updates. Before submitting iOS builds, set `ascAppId` in the EAS submit profile to the
+App Store Connect app you registered for Lightning Code.
+
 Preview and production variants use Expo fingerprinting so OTA updates only reach binaries with matching native dependencies, config plugins, and patches. CI uses the `preview:dev` profile to reuse a compatible native build when possible.
 
 The development variant uses `appVersion` to avoid recalculating the native fingerprint for each Metro launch manifest. `MOBILE_VERSION_POLICY` can override either default. If you distribute a custom Release build with the development identity and publish OTA updates to it, set `MOBILE_VERSION_POLICY=fingerprint` for both its build and updates. Changing the runtime policy requires a native rebuild for OTA matching; an existing dev client can still load local Metro bundles.
 
-For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY`,
+To use a custom Clerk instance in preview or production, set `T3CODE_CLERK_PUBLISHABLE_KEY`,
 `T3CODE_CLERK_JWT_TEMPLATE`, and `T3CODE_RELAY_URL`
-as EAS environment variables. Expo config maps the canonical values into the mobile build.
+as EAS environment variables. For iOS associated domains, set
+`LIGHTNING_MOBILE_CLERK_DOMAIN` to your Clerk relying party hostname.
 
 Create a PR preview dev-client build manually:
 

@@ -6,7 +6,9 @@ import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { T, useGT, Var } from "gt-react";
 import { FolderPlusIcon } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
-import { useRef, useState } from "react";
+import { use, useRef, useState } from "react";
+import { LightningShell } from "../lightning/shell";
+import { WorkspaceStatus } from "../lightning/WorkspaceStatus";
 
 import { openCommandPalette } from "~/commandPaletteBus";
 import { shortcutLabelForCommand } from "~/keybindings";
@@ -357,8 +359,18 @@ export function DraftHeroHeadline({
     );
   }
 
+  const isLightning = use(LightningShell) === "lightning";
+
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col items-center">
+    <div
+      data-lightning-draft-hero={isLightning ? "" : undefined}
+      className="mx-auto flex w-full max-w-5xl flex-col items-center"
+    >
+      {isLightning ? (
+        <div className="lightning-eyebrow-pill mb-4 inline-flex items-center rounded-full px-3 py-1">
+          <WorkspaceStatus hero />
+        </div>
+      ) : null}
       {hasResolvedProject && !isScratchDraft ? (
         <DraftHeroProjectHeading projectName={activeProjectTitle ?? gt("Choose a project")}>
           {projectSelector}

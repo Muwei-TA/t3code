@@ -5,6 +5,7 @@ import { msg } from "gt-react-native";
 import { m } from "../../i18n/messages";
 
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { mobileThreadShareOptions } from "../../lib/hostedThreadLinkOrigin";
 import {
   getComposerDraftSnapshot,
   setComposerDraftText,
@@ -46,7 +47,9 @@ export async function applyLinkedPromptToThreadDraft(
 }
 
 export async function copyPromptLink(prompt: string): Promise<void> {
-  if (!(await tryCopyTextWithHaptic(buildNewThreadLink({ prompt }), { target: "prompt link" }))) {
+  const { hostedAppUrl, appScheme } = mobileThreadShareOptions;
+  const link = buildNewThreadLink({ prompt, origin: hostedAppUrl, appScheme });
+  if (!(await tryCopyTextWithHaptic(link, { target: "prompt link" }))) {
     Dialog.alert(m(msg("Could not copy")), m(msg("Try again.")));
   }
 }

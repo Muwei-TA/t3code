@@ -279,6 +279,10 @@ class T3ComposerEditorView(context: Context, appContext: AppContext) : ExpoView(
     editor.placeholder = placeholder
   }
 
+  fun setHostedThreadLinkPrefix(prefix: String) {
+    editor.hostedThreadLinkPrefix = prefix
+  }
+
   fun setClipboardFragment(fragment: String) {
     editor.clipboardFragment = fragment
   }
@@ -640,6 +644,7 @@ internal class SelectionAwareEditText(
   var textPasteThresholdBytes = 0
   var maxInputChars = Int.MAX_VALUE
   var clipboardFragment = ""
+  var hostedThreadLinkPrefix = ""
   private var touchDownScrollX = 0
   private var touchDownScrollY = 0
   private var touchDownCaret = -1
@@ -903,12 +908,20 @@ internal class SelectionAwareEditText(
     return true
   }
 
+  private fun hasThreadLink(text: String): Boolean =
+    text.contains("t3-thread://v2/") ||
+      text.contains("lightningcode://threads/") ||
+      text.contains("lightningcode-dev://threads/") ||
+      text.contains("lightningcode-preview://threads/") ||
+      text.contains("https://app.t3.codes/threads/") ||
+      (hostedThreadLinkPrefix.isNotEmpty() && text.contains(hostedThreadLinkPrefix))
+
   private fun pasteContextOrImages(): Boolean {
     val payload = T3ComposerClipboard.read(context)
     return when {
       payload["html"]?.contains("data-t3-context-fragment=") == true -> pasteContext(payload)
       pasteImagesOrInterceptedText() -> true
-      isSingleItemClip() && T3ComposerClipboard.hasThreadLink(payload["text"].orEmpty()) ->
+      isSingleItemClip() && hasThreadLink(payload["text"].orEmpty()) ->
         pasteContext(payload)
       else -> false
     }

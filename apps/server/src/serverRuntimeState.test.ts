@@ -17,7 +17,13 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vite-plus/test";
 
-import { renderBootServicePlist, renderBootServiceUnit } from "./cloud/bootService.ts";
+import {
+  BOOT_SERVICE_LAUNCHD_LABEL,
+  BOOT_SERVICE_PLIST_FILE,
+  BOOT_SERVICE_UNIT_FILE,
+  renderBootServicePlist,
+  renderBootServiceUnit,
+} from "./cloud/bootService.ts";
 import { ServiceLauncherHostProcess } from "./cloud/serviceLauncherClient.ts";
 import { SERVICE_LAUNCHER_CONTEXT_ENV } from "./cloud/serviceProtocol.ts";
 import * as ProcessRunner from "./processRunner.ts";
@@ -28,6 +34,7 @@ const startBesideBootService = Effect.fn("test.startBesideBootService")(function
   readonly platform: "darwin" | "linux";
   readonly outputs: Readonly<Record<string, { readonly code: number; readonly stdout?: string }>>;
   readonly unitServesOtherHome?: boolean;
+  readonly upstreamUnit?: boolean;
   readonly restartPending?: boolean;
   readonly activeVersion?: string;
   readonly npmRuntime?: boolean;
@@ -38,7 +45,7 @@ const startBesideBootService = Effect.fn("test.startBesideBootService")(function
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-owner-boot-service-" });
-  const t3Home = path.join(root, ".t3");
+  const t3Home = path.join(root, ".lightning-code");
   const serviceHome = input.unitServesOtherHome ? path.join(root, "other") : t3Home;
   for (const home of [t3Home, serviceHome]) {
     yield* fs.makeDirectory(path.join(home, "userdata"), { recursive: true });
@@ -75,11 +82,22 @@ const startBesideBootService = Effect.fn("test.startBesideBootService")(function
   const [unitPath, unit] =
     input.platform === "darwin"
       ? [
-          path.join(root, "Library", "LaunchAgents", "com.t3tools.t3code.service.plist"),
+          path.join(
+            root,
+            "Library",
+            "LaunchAgents",
+            input.upstreamUnit ? "com.t3tools.t3code.service.plist" : BOOT_SERVICE_PLIST_FILE,
+          ),
           renderBootServicePlist(plan, { homeDir: root, environmentPath: "" }),
         ]
       : [
-          path.join(root, ".config", "systemd", "user", "t3code.service"),
+          path.join(
+            root,
+            ".config",
+            "systemd",
+            "user",
+            input.upstreamUnit ? "t3code.service" : BOOT_SERVICE_UNIT_FILE,
+          ),
           renderBootServiceUnit(plan),
         ];
   yield* fs.makeDirectory(path.dirname(unitPath), { recursive: true });
@@ -339,7 +357,7 @@ describe("server ownership", () => {
               "launchctl print": { code: 113 },
               "launchctl print-disabled": {
                 code: 0,
-                stdout: '"com.t3tools.t3code.service" => false',
+                stdout: `"${BOOT_SERVICE_LAUNCHD_LABEL}" => false`,
               },
             },
           },
@@ -370,8 +388,8 @@ describe("server ownership", () => {
           assert.equal(result.failure._tag, "OlderBootServiceError");
           assert.equal(Runtime.getErrorExitCode(result.failure), 78);
           assert.include(result.failure.message, t3Home);
-          assert.include(result.failure.message, "t3 update");
-          assert.include(result.failure.message, "t3 service restart");
+          assert.include(result.failure.message, "lightning update --base-dir");
+          assert.include(result.failure.message, "lightning service restart --base-dir");
           assert.include(result.failure.message, "No server was stopped");
         }
       }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
@@ -439,6 +457,7 @@ describe("server ownership", () => {
           "launchctl print": { code: 0 },
         };
         for (const fixture of [
+          { platform: "darwin", outputs, upstreamUnit: true },
           { platform: "darwin", outputs, unitServesOtherHome: true },
           {
             platform: "darwin",
@@ -452,7 +471,7 @@ describe("server ownership", () => {
               "launchctl print": { code: 113 },
               "launchctl print-disabled": {
                 code: 0,
-                stdout: '"com.t3tools.t3code.service" => disabled',
+                stdout: `"${BOOT_SERVICE_LAUNCHD_LABEL}" => disabled`,
               },
             },
           },

@@ -39,6 +39,7 @@ import { m } from "../../i18n/messages";
 type ConnectionsNewRouteParams = {
   readonly mode?: string;
   readonly pairingUrl?: string;
+  readonly pairingLinkUrl?: string;
   readonly autoConnect?: string;
   readonly routeFor?: EnvironmentId;
   /** A linked machine this app chose to pair with; its details come from app state, never the link. */
@@ -49,8 +50,9 @@ export function ConnectionsNewRouteScreen({
   route,
 }: StaticScreenProps<ConnectionsNewRouteParams | undefined>) {
   const params = route.params ?? {};
-  // Dev-only prefill prevents production links from supplying an attacker-chosen host and token.
-  const routePairingUrl = __DEV__ ? (params.pairingUrl?.trim() ?? "") : "";
+  const devPairingUrl =
+    __DEV__ && typeof params.pairingUrl === "string" ? params.pairingUrl.trim() : "";
+  const routePairingUrl = params.pairingLinkUrl ?? (devPairingUrl || undefined);
   const known = useAtomValue(linkedEnvironmentPrefillAtom);
   const linked = known !== null && known.environmentId === params.linked ? known : null;
   // A new prefill link replaces whatever the form held.
@@ -69,7 +71,7 @@ function PairingForm({
   routeFor,
   linked,
 }: {
-  readonly routePairingUrl: string;
+  readonly routePairingUrl: string | undefined;
   readonly routeFor: EnvironmentId | undefined;
   readonly linked: { readonly label: string; readonly host: string | null } | null;
 }) {
@@ -78,7 +80,7 @@ function PairingForm({
     useRemoteConnections();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const [initialPairing] = useState(() => parsePairingUrl(routePairingUrl || connectionPairingUrl));
+  const [initialPairing] = useState(() => parsePairingUrl(routePairingUrl ?? connectionPairingUrl));
   const [hostInput, setHostInput] = useState(linked?.host ?? initialPairing.host);
   const [codeInput, setCodeInput] = useState(initialPairing.code);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -87,7 +89,7 @@ function PairingForm({
   const [ownAttempt, setOwnAttempt] = useState(false);
   const autoConnect = autoConnectReport(
     useAtomValue(devAutoConnectAttemptAtom),
-    routePairingUrl,
+    routePairingUrl ?? "",
     ownAttempt,
   );
   const connecting = isSubmitting || autoConnect.connecting;

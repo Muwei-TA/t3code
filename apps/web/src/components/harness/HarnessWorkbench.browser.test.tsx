@@ -18,6 +18,7 @@ import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { act, render } from "../../../test/render";
+import { LightningShell } from "../lightning/shell";
 import { SidebarProvider } from "../ui/sidebar";
 import { redirectLegacyHarness } from "./harnessNavigation";
 import { HarnessWorkbench } from "./HarnessWorkbench";
@@ -243,10 +244,7 @@ vi.mock(import("../../state/harness"), async (original) => {
   };
 });
 
-it("reads the selected package member in project scope and approves a pending hook", async () => {
-  const library = Promise.withResolvers<HarnessLibrarySnapshot>();
-  const pending = Atom.make(Effect.promise(() => library.promise));
-  libraryQuery.mockReturnValue(pending);
+function harnessRouter(initialEntry: string) {
   const root = createRootRoute();
   const chat = createRoute({ getParentRoute: () => root, id: "_chat" });
   const harness = createRoute({
@@ -260,15 +258,24 @@ it("reads the selected package member in project scope and approves a pending ho
     path: "settings/harness",
     beforeLoad: ({ location }) => redirectLegacyHarness(location),
   });
-  const router = createRouter({
+  return createRouter({
     routeTree: root.addChildren([chat.addChildren([harness, legacy])]),
     history: createMemoryHistory({
-      initialEntries: ["/settings/harness?tab=skills&machine=test-server#harness-memory"],
+      initialEntries: [initialEntry],
     }),
   });
+}
+
+it("reads the selected package member in project scope and approves a pending hook", async () => {
+  const library = Promise.withResolvers<HarnessLibrarySnapshot>();
+  const pending = Atom.make(Effect.promise(() => library.promise));
+  libraryQuery.mockReturnValue(pending);
+  const router = harnessRouter("/settings/harness?tab=skills&machine=test-server#harness-memory");
   await using screen = await render(
     <SidebarProvider>
-      <RouterProvider router={router} />
+      <LightningShell value="classic">
+        <RouterProvider router={router} />
+      </LightningShell>
     </SidebarProvider>,
     { router: false },
   ); // Workbench tabs navigate inside the named Harness route.
@@ -319,4 +326,41 @@ it("reads the selected package member in project scope and approves a pending ho
   await screen.getByRole("button", { name: "Approve & Enable" }).click();
   await expect.element(screen.getByText("Pending hook proposal")).not.toBeInTheDocument();
   await expect.element(screen.getByRole("switch")).toBeChecked();
+});
+
+it("opens legacy skills links in MCP and reveals secondary settings on a search jump", async () => {
+  libraryQuery.mockImplementation(() => success(fixture));
+  const router = harnessRouter("/harness?tab=skills&machine=test-server");
+  await using screen = await render(
+    <SidebarProvider>
+      <RouterProvider router={router} />
+    </SidebarProvider>,
+    { router: false },
+  ); // The named Harness route owns the search state.
+  await expect.element(screen.getByRole("heading", { name: "MCP servers" })).toBeVisible();
+  await expect
+    .element(screen.getByRole("link", { name: "Skills & Plugins" }))
+    .not.toBeInTheDocument();
+  await screen.getByRole("link", { name: "Plugin: tools" }).click();
+  await expect.element(screen.getByRole("button", { name: "Remove Project helper" })).toBeVisible();
+  await screen.getByRole("link", { name: "Context & Roles" }).click();
+  await expect.element(screen.getByRole("heading", { name: "Rules & AGENTS.md" })).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Portable Memory", exact: true }))
+    .toHaveAttribute("aria-expanded", "false");
+  await act(() =>
+    router.navigate({
+      to: "/harness",
+      search: { tab: "context", machine: "test-server" },
+      hash: "harness-memory",
+    }),
+  );
+  await expect.element(screen.getByRole("button", { name: "Delete Layout note" })).toBeVisible();
+  await screen.getByRole("link", { name: "Guardrails" }).click();
+  await expect.element(screen.getByRole("heading", { name: "Approvals" })).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Provider delivery" }))
+    .toHaveAttribute("aria-expanded", "false");
+  await screen.getByRole("button", { name: "Hooks", exact: true }).click();
+  await expect.element(screen.getByText("Pending hook proposal")).toBeVisible();
 });

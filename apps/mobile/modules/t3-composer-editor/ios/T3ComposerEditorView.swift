@@ -91,6 +91,7 @@ private final class ComposerTextView: UITextView {
   var onPasteContext: (([String: String]) -> Void)?
   var onPasteText: ((String, NSRange) -> Void)?
   var clipboardFragment = ""
+  var hostedThreadLinkPrefix = ""
   var onSubmit: ((Bool) -> Void)?
   var isReadOnly = false
   var textPasteThresholdBytes = 0
@@ -260,11 +261,20 @@ private final class ComposerTextView: UITextView {
     }
     // read() sees only the first item; native paste keeps every item of a longer pasteboard.
     if !bypassTextPasteInterception, pasteboard.numberOfItems == 1,
-       T3ComposerClipboard.hasThreadLink(context["text", default: ""]) {
+       hasThreadLink(context["text", default: ""]) {
       onPasteContext?(context)
       return
     }
     super.paste(sender)
+  }
+
+  private func hasThreadLink(_ text: String) -> Bool {
+    text.contains("t3-thread://v2/") ||
+      text.contains("lightningcode://threads/") ||
+      text.contains("lightningcode-dev://threads/") ||
+      text.contains("lightningcode-preview://threads/") ||
+      text.contains("https://app.t3.codes/threads/") ||
+      (!hostedThreadLinkPrefix.isEmpty && text.contains(hostedThreadLinkPrefix))
   }
 
   private func shouldInterceptTextPaste(_ text: String) -> Bool {
@@ -719,6 +729,10 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
       height: max(lineHeight, placeholderLabel.font.lineHeight)
     )
     emitContentSizeIfNeeded()
+  }
+
+  func setHostedThreadLinkPrefix(_ prefix: String) {
+    textView.hostedThreadLinkPrefix = prefix
   }
 
   func setClipboardFragment(_ fragment: String) {

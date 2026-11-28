@@ -58,6 +58,7 @@ describe("ApnsClient", () => {
         event: "update",
         token: "token",
         state,
+        urlScheme: "lightningcode-preview",
         alert: { title: "Thread", body: "Approval: Project" },
         nowEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
         nowIso: DateTime.formatIso(now),
@@ -67,6 +68,9 @@ describe("ApnsClient", () => {
       expect(request.payload).toMatchObject({
         aps: {
           event: "update",
+          "content-state": {
+            props: JSON.stringify({ ...state, urlScheme: "lightningcode-preview" }),
+          },
           alert: {
             title: "Thread",
             body: "Approval: Project",

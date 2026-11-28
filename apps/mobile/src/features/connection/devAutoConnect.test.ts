@@ -1,5 +1,6 @@
 import * as NodeModule from "node:module";
 import type { NavigationState, PartialState } from "@react-navigation/native";
+import { buildPairingAppLink } from "@t3tools/shared/remote";
 import { expect, it, vi } from "vite-plus/test";
 
 const requireFromNative = NodeModule.createRequire(
@@ -66,8 +67,10 @@ vi.mock("../../lib/rootNavigation", () => ({
 import { appAtomRegistry } from "../../state/atom-registry";
 import {
   autoConnectReport,
+  connectionsNewLinking,
   devAutoConnectAttemptAtom,
   pairingFormLinkAction,
+  preparePairingFormLink,
   startDevAutoConnect,
 } from "./devAutoConnect";
 
@@ -213,6 +216,25 @@ it("a success that waited for navigation leaves a newer link's form open", async
   expect(harness.dispatch).not.toHaveBeenCalled();
 });
 
+it("a CLI pairing link opens a manual confirmation form even with automation parameters", () => {
+  vi.stubGlobal("__DEV__", true);
+  harness.pair.mockClear();
+  const path = buildPairingAppLink(PAIRING_URL).split("://")[1]!;
+  const input = `${path}&autoConnect=1&routeFor=existing&linked=saved`;
+  const state = getStateFromPath(input, {
+    initialRouteName: "Home",
+    screens: { Home: "", ConnectionsNew: connectionsNewLinking, NotFound: "*" },
+  });
+
+  const pairing = startDevAutoConnect(preparePairingFormLink(state, input));
+
+  expect(pairing?.routes.at(-1)).toEqual({
+    name: "ConnectionsNew",
+    params: { pairingLinkUrl: "http://192.168.1.10:3773/#token=abc" },
+  });
+  expect(harness.pair).not.toHaveBeenCalled();
+});
+
 it("a pairing link fills the pairing form already on screen instead of stacking a second one", () => {
   const linking = {
     initialRouteName: "Home",
@@ -220,7 +242,7 @@ it("a pairing link fills the pairing form already on screen instead of stacking 
       Home: "",
       Settings: "settings",
       SettingsEnvironmentNew: "settings/environment-new",
-      ConnectionsNew: "connections/new",
+      ConnectionsNew: connectionsNewLinking,
     },
   };
   const router = StackRouter({});

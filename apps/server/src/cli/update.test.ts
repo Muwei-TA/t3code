@@ -1,3 +1,4 @@
+import { CLI_RELEASES_PAGE_URL } from "@t3tools/shared/cliRelease";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type { ManagedUpdatesPolicy } from "@t3tools/contracts";
@@ -58,7 +59,7 @@ it.effect("authenticates each release page until the requested channel is found"
     const httpClient = HttpClient.make((request) => {
       const url = new URL(request.url);
       assert.equal(url.origin, "https://api.github.com");
-      assert.equal(url.pathname, "/repos/pingdotgg/t3code/releases");
+      assert.equal(url.pathname, `/repos${new URL(CLI_RELEASES_PAGE_URL).pathname}`);
       assert.equal(request.headers.accept, "application/vnd.github+json");
       assert.equal(request.headers.authorization, "Bearer gh-token");
       const page = url.searchParams.get("page") ?? "";
@@ -236,7 +237,7 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
       const root = yield* fs.makeTempDirectoryScoped();
       const baseDir = path.join(root, "home");
       const runtimeDir = path.join(baseDir, "runtime");
-      const launcher = path.join(root, "custom bin", "t3.cmd");
+      const launcher = path.join(root, "custom bin", "lightning.cmd");
       const launchedAs = path.join(runtimeDir, "versions", "1.0.0", "t3.exe");
       const targetEntryPath = path.join(runtimeDir, "versions", "2.0.0", "t3.exe");
       yield* fs.makeDirectory(runtimeDir, { recursive: true });
@@ -274,8 +275,8 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
             mode: 0o755,
           });
         }
-        const launcher = path.join(root, "bin/t3");
-        const alias = path.join(root, "alias/t3");
+        const launcher = path.join(root, "bin/lightning");
+        const alias = path.join(root, "alias/lightning");
         yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
         yield* fs.makeDirectory(path.dirname(alias), { recursive: true });
         yield* fs.writeFileString(launcher, posixLauncherScript(entry("1.0.0")), { mode: 0o755 });
@@ -301,7 +302,7 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
 
         // Like the shell, a relative PATH entry resolves from the working directory, and a
         // script nobody can execute is passed over.
-        const unrunnable = path.join(root, "unrunnable/t3");
+        const unrunnable = path.join(root, "unrunnable/lightning");
         yield* fs.makeDirectory(path.dirname(unrunnable), { recursive: true });
         yield* fs.writeFileString(unrunnable, posixLauncherScript(entry("2.0.0")), { mode: 0o644 });
         yield* fs.writeFileString(launcher, posixLauncherScript(entry("2.0.0")), { mode: 0o755 });
@@ -330,7 +331,7 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
     { name: "no launcher records", recorded: undefined },
     { name: "an empty launcher record", recorded: "" },
     { name: "whole launcher records", recorded: "/opt/t3\n" },
-    { name: "Windows launcher records", recorded: "C:\\t3.cmd\r\n" },
+    { name: "Windows launcher records", recorded: "C:\\lightning.cmd\r\n" },
     // An interrupted append cut this record short.
     { name: "an unterminated launcher record", recorded: "/opt/t" },
     // Another process's append is cut short after t3 update reads the records.
@@ -405,6 +406,29 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
     yield* fs.symlink(oldExe, launcher);
     return { root, oldExe, newExe, launcher, launchersFile: path.join(root, "runtime/launchers") };
   });
+
+  it.effect("updates generated Windows shims and preserves customized wrappers", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped();
+      const launchedAs = path.join(baseDir, "runtime/versions/1.0.0/t3.exe");
+      const targetEntryPath = path.join(baseDir, "runtime/versions/2.0.0/t3.exe");
+      const shim = path.join(baseDir, "lightning.cmd");
+      const custom = `@echo off\r\nset PROJECT_HOME=work\r\n"${launchedAs}" %*`;
+      const repoint = repointLauncher({ launchedAs, baseDir, targetEntryPath }).pipe(
+        Effect.provideService(HostProcess.Environment, { PATH: baseDir }),
+      );
+      yield* fs.writeFileString(shim, custom);
+      assert.isTrue(Option.isNone(yield* repoint));
+      assert.equal(yield* fs.readFileString(shim), custom);
+
+      yield* fs.makeDirectory(path.join(baseDir, "runtime"));
+      yield* fs.writeFileString(shim, `@echo off\r\n"${launchedAs}" %*`);
+      assert.equal(Option.getOrUndefined(yield* repoint), shim);
+      assert.equal(yield* fs.readFileString(shim), `@echo off\r\n"${targetEntryPath}" %*`);
+    }).pipe(Effect.provideService(HostProcess.Platform, "win32")),
+  );
 
   it.effect("records a relative launcher path as absolute", () =>
     Effect.gen(function* () {
@@ -562,85 +586,109 @@ const withoutTerminals = Effect.acquireRelease(
     }),
 );
 
-it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
-  it.effect("names the version a service with a pending restart still runs", () =>
-    Effect.gen(function* () {
-      yield* withoutTerminals;
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
-      const version = packageJson.version;
-      const runtime = pinnedRuntimePaths(path, baseDir, version, "linux");
-      yield* fs.makeDirectory(runtime.versionDir, { recursive: true });
-      yield* fs.writeFileString(runtime.entryPath, "");
-      yield* fs.writeFileString(runtime.sentinelPath, `${version}\n`);
-      const unitPath = path.join(baseDir, "t3code.service");
-      const logPath = path.join(baseDir, "boot-service.log");
-      // An earlier `t3 update` pointed the service at this version without restarting it.
-      const service = Layer.mock(BootService.BootService, {
-        status: Effect.succeed<BootService.BootServiceStatus>({
-          supported: true,
-          installed: true,
-          current: false,
-          installedVersion: version,
-          installedBaseDir: baseDir,
-          problems: ["restart-pending"],
-          unitPath,
-          logPath,
-        }),
-        install: () => Effect.succeed({ program: [runtime.entryPath], baseDir, unitPath, logPath }),
-      });
-      vi.spyOn(BootService, "layer").mockReturnValue(service);
-      const runner = ProcessRunner.ProcessRunner.of({
-        run: (input) =>
-          input.args?.includes("__service-preflight") === true
-            ? unrelatedLsof.run(input).pipe(
-                Effect.map((result) => ({
-                  ...result,
-                  stdout: JSON.stringify({
-                    status: "ready",
-                    version,
-                    launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
-                  }),
-                })),
-              )
-            : unrelatedLsof.run(input),
-      });
+it.layer(NodeServices.layer)("lightning update with a background service", (it) => {
+  it.effect.each(["linux", "win32"] as const)(
+    "names the exact launcher and the pending service version on %s",
+    (platform) =>
+      Effect.gen(function* () {
+        yield* withoutTerminals;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
+        const baseDir = path.join(root, "Lightning home");
+        const version = packageJson.version;
+        const runtime = pinnedRuntimePaths(path, baseDir, version, platform);
+        yield* fs.makeDirectory(runtime.versionDir, { recursive: true });
+        yield* fs.writeFileString(runtime.entryPath, "");
+        yield* fs.writeFileString(runtime.sentinelPath, `${version}\n`);
+        const windows = platform === "win32";
+        const launcher = path.join(root, "custom bin", windows ? "lightning.cmd" : "lightning");
+        yield* fs.makeDirectory(path.dirname(launcher));
+        if (windows) {
+          yield* fs.writeFileString(launcher, `@echo off\r\n"${runtime.entryPath}" %*`);
+          yield* fs.writeFileString(path.join(baseDir, "runtime/launchers"), `${launcher}\r\n`);
+        } else {
+          yield* fs.symlink(runtime.entryPath, launcher);
+        }
+        const unitPath = path.join(baseDir, "lightning-code.service");
+        const logPath = path.join(baseDir, "boot-service.log");
+        // An earlier update pointed the service at this version without restarting it.
+        const service = Layer.mock(BootService.BootService, {
+          status: Effect.succeed<BootService.BootServiceStatus>({
+            supported: true,
+            installed: true,
+            current: false,
+            installedVersion: version,
+            installedBaseDir: baseDir,
+            problems: ["restart-pending"],
+            unitPath,
+            logPath,
+          }),
+          install: () =>
+            Effect.succeed({ program: [runtime.entryPath], baseDir, unitPath, logPath }),
+        });
+        vi.spyOn(BootService, "layer").mockReturnValue(service);
+        const runner = ProcessRunner.ProcessRunner.of({
+          run: (input) =>
+            input.args?.includes("__service-preflight") === true
+              ? unrelatedLsof.run(input).pipe(
+                  Effect.map((result) => ({
+                    ...result,
+                    stdout: JSON.stringify({
+                      status: "ready",
+                      version,
+                      launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
+                    }),
+                  })),
+                )
+              : unrelatedLsof.run(input),
+        });
 
-      const output = yield* runUpdate({
-        baseDir,
-        logsDir: baseDir,
-        databasePath: path.join(baseDir, "statev2.sqlite"),
-        serverRuntimeStatePath: path.join(baseDir, "server-runtime.json"),
-        channel: undefined,
-        requestedVersion: version,
-        allowDowngrade: false,
-        assumeYes: false,
-      }).pipe(
-        Effect.andThen(TestConsole.logLines),
-        Effect.map((lines) => lines.join("\n")),
-        Effect.provide(
-          Layer.mergeAll(
-            service,
-            Layer.succeed(ProcessRunner.ProcessRunner, runner),
-            ManagedPolicy.layerTest(),
-            Layer.succeed(
-              HttpClient.HttpClient,
-              HttpClient.make(() => Effect.die("unexpected release lookup")),
+        const output = yield* runUpdate({
+          baseDir,
+          includeBaseDirInHint: true,
+          logsDir: baseDir,
+          databasePath: path.join(baseDir, "statev2.sqlite"),
+          serverRuntimeStatePath: path.join(baseDir, "server-runtime.json"),
+          channel: undefined,
+          requestedVersion: version,
+          allowDowngrade: false,
+          assumeYes: false,
+        }).pipe(
+          Effect.andThen(TestConsole.logLines),
+          Effect.map((lines) => lines.join("\n")),
+          Effect.provide(
+            Layer.mergeAll(
+              service,
+              Layer.succeed(ProcessRunner.ProcessRunner, runner),
+              ManagedPolicy.layerTest(),
+              Layer.succeed(
+                HttpClient.HttpClient,
+                HttpClient.make(() => Effect.die("unexpected release lookup")),
+              ),
+              Layer.fresh(TestConsole.layer),
             ),
-            Layer.fresh(TestConsole.layer),
           ),
-        ),
-      );
+          Effect.provideService(HostProcess.InvokedAs, windows ? runtime.entryPath : launcher),
+          Effect.provideService(HostProcess.IsExecutable, true),
+        );
 
-      assert.include(
-        output,
-        `Background service still running the version before ${version}. Run \`t3 service restart\` when you are ready to switch it to ${version}.`,
-      );
-    }).pipe(
-      Effect.provideService(HostProcess.Platform, "linux"),
-      Effect.provideService(HostProcess.Environment, { PATH: "" }),
-    ),
+        const expectedLauncher = windows ? `& "${launcher}"` : `'${launcher}'`;
+        const expectedArgs = windows ? `--base-dir "${baseDir}"` : `--base-dir '${baseDir}'`;
+        const stagedExecutable = windows ? `& "${runtime.entryPath}"` : `'${runtime.entryPath}'`;
+        assert.include(output, `Run ${expectedLauncher} ${expectedArgs} to get started.`);
+        assert.include(
+          output,
+          `Background service still running the version before ${version}. Run \`${expectedLauncher} service restart ${expectedArgs}\` when you are ready to switch it to ${version}.`,
+        );
+        assert.include(
+          output,
+          `or run \`${stagedExecutable} service restart ${expectedArgs}\` after the update.`,
+        );
+      }).pipe(
+        Effect.provideService(HostProcess.Platform, platform),
+        Effect.provideService(HostProcess.Environment, { PATH: "" }),
+      ),
   );
 });
 
@@ -682,7 +730,7 @@ it.layer(NodeServices.layer)("t3 update checks the database before switching", (
       launcherProtocol: 3,
       preflight: preflightOutput("", 1),
       failure:
-        "t3@0.1.8 could not confirm it supports this database (its check exited with code 1), so t3 did not switch to it.",
+        "Lightning Code 0.1.8 could not confirm it supports this database (its check exited with code 1), so the launcher stayed on the current version.",
     },
     {
       // Newer builds keep accepting the current launcher protocol, which may drop 3.
@@ -713,7 +761,7 @@ it.layer(NodeServices.layer)("t3 update checks the database before switching", (
           supported: true,
           installed: false,
           current: false,
-          unitPath: path.join(baseDir, "t3code.service"),
+          unitPath: path.join(baseDir, "lightning-code.service"),
           logPath: path.join(baseDir, "boot-service.log"),
         }),
       });

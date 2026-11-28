@@ -9,7 +9,8 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ProcessRunner from "../processRunner.ts";
 import { BOOT_SERVICE_UNIT_FILE } from "./bootService.ts";
 
-const PROTECT_DROP_IN = "90-t3code-protect.conf";
+const PROTECT_DROP_IN = "90-lightning-code-protect.conf";
+const LEGACY_PROTECT_DROP_IN = "90-t3code-protect.conf";
 const SYSTEM_UNIT_DIR = "/etc/systemd/system";
 export const REMOTE_ACCESS_UNITS = ["tailscaled.service", "ssh.service", "sshd.service"];
 
@@ -39,6 +40,10 @@ export interface ProtectionPlan {
   /** System units whose running main process takes its configured OOM score at once. */
   readonly oomUnits: ReadonlyArray<string>;
 }
+
+type ProtectionRemoval = Omit<ProtectionPlan, "managerDefaults"> & {
+  readonly managerDefaults: DropIn | undefined;
+};
 
 const dropIn = (
   directory: string,
@@ -98,7 +103,10 @@ export function protectionPlan(input: {
 const quoteShell = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 const directoryOf = (file: string) => file.slice(0, file.lastIndexOf("/"));
 
-export function renderPrivilegedScript(plan: ProtectionPlan, mode: "apply" | "undo"): string {
+export function renderPrivilegedScript(
+  plan: Pick<ProtectionPlan, "system" | "systemUnitDir" | "oomUnits">,
+  mode: "apply" | "undo",
+): string {
   const lines = ["set -e"];
   const remove = (dropIns: ReadonlyArray<DropIn>, indent = "") => {
     for (const { path } of dropIns) {
@@ -276,27 +284,48 @@ export const applyProtection = Effect.fn("ServiceProtection.apply")(function* (
 });
 
 export const removeProtection = Effect.fn("ServiceProtection.remove")(function* (
-  plan: ProtectionPlan,
+  plan: ProtectionRemoval,
 ) {
   yield* removeDropIns(plan.user);
   yield* reloadUserManager;
   if (plan.system.length > 0) yield* runPrivileged(renderPrivilegedScript(plan, "undo"));
-  yield* removeDropIns([plan.managerDefaults]);
-  yield* reloadUserManager;
+  if (plan.managerDefaults !== undefined) {
+    yield* removeDropIns([plan.managerDefaults]);
+    yield* reloadUserManager;
+  }
 });
 
-/** The plan narrowed to drop-ins that exist, for undo. */
+const dropInExists = Effect.fn("ServiceProtection.dropInExists")(function* (path: string) {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false));
+});
+
+const legacyDropIn = (dropIn: DropIn): DropIn => ({
+  ...dropIn,
+  path: `${directoryOf(dropIn.path)}/${LEGACY_PROTECT_DROP_IN}`,
+});
+
+/** Finds removable Lightning drop-ins and reports legacy drop-ins of uncertain ownership. */
 export const installedProtection = Effect.fn("ServiceProtection.installed")(function* (
   plan: ProtectionPlan,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  const exists = (dropIn: DropIn) => fs.exists(dropIn.path).pipe(Effect.orElseSucceed(() => false));
+  const exists = ({ path }: DropIn) => dropInExists(path);
   const system = yield* Effect.filter(plan.system, exists);
-  const user = yield* Effect.filter(plan.user, exists);
-  const managerDefaults = yield* exists(plan.managerDefaults);
-  return system.length + user.length === 0 && !managerDefaults
-    ? undefined
-    : { ...plan, system, user };
+  // The old drop-ins lack ownership markers. Only the Lightning-specific unit separates
+  // our copy from a byte-identical copy written by T3 Code.
+  const service = plan.user.find(({ unit }) => unit === BOOT_SERVICE_UNIT_FILE);
+  const user = yield* Effect.filter(
+    service === undefined ? plan.user : [...plan.user, legacyDropIn(service)],
+    exists,
+  );
+  const managerDefaults = (yield* exists(plan.managerDefaults)) ? plan.managerDefaults : undefined;
+  const retainedLegacy = yield* Effect.filter(
+    [...plan.system, plan.managerDefaults, ...plan.user.filter((dropIn) => dropIn !== service)].map(
+      legacyDropIn,
+    ),
+    exists,
+  );
+  return { ...plan, system, user, managerDefaults, retainedLegacy };
 });
 
 /**
@@ -353,12 +382,13 @@ export const readProtection = Effect.fn("ServiceProtection.read")(function* (use
   }
   const pid = Number(values.get("MainPID") ?? 0);
   const score = pid > 0 ? yield* read(`/proc/${pid}/oom_score_adj`) : "";
+  const dropInDirectory = path.join(userUnitDir, `${BOOT_SERVICE_UNIT_FILE}.d`);
   return {
     memoryControllerAvailable: memoryController,
     unprotected,
     oomScoreAdj: score === "" ? undefined : Number(score),
-    setByProtect: yield* fs
-      .exists(path.join(userUnitDir, `${BOOT_SERVICE_UNIT_FILE}.d`, PROTECT_DROP_IN))
-      .pipe(Effect.orElseSucceed(() => false)),
+    setByProtect:
+      (yield* dropInExists(path.join(dropInDirectory, PROTECT_DROP_IN))) ||
+      (yield* dropInExists(path.join(dropInDirectory, LEGACY_PROTECT_DROP_IN))),
   } satisfies ServiceProtectionState;
 });

@@ -1,6 +1,7 @@
 // @effect-diagnostics globalTimers:off -- The Node socket client owns its response deadline and clears it on every completion path.
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect stat follows symlinks; IPC ownership validation requires lstat.
 import * as NodeFSP from "node:fs/promises";
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 
@@ -37,7 +38,7 @@ export class DesktopAppSshUnsupportedError extends Schema.TaggedError<DesktopApp
   {},
 ) {
   override get message(): string {
-    return "`t3 app` only controls a desktop app on the same machine. It cannot run over SSH.";
+    return "`lightning app` only controls a desktop app on the same machine. It cannot run over SSH.";
   }
 }
 
@@ -46,7 +47,7 @@ export class DesktopAppPlatformUnsupportedError extends Schema.TaggedError<Deskt
   { platform: Schema.String },
 ) {
   override get message(): string {
-    return `\`t3 app\` is not supported on ${this.platform}.`;
+    return `\`lightning app\` is not supported on ${this.platform}.`;
   }
 }
 
@@ -60,7 +61,7 @@ export class DesktopAppUnreachableError extends Schema.TaggedError<DesktopAppUnr
   },
 ) {
   override get message(): string {
-    return "Could not reach the T3 Code desktop app. Start or update the desktop app on this machine, then run `t3 app` again. A running T3 Code server is not enough.";
+    return "Could not reach the Lightning Code desktop app. Start or update the desktop app on this machine, then run `lightning app` again. A running Lightning Code server is not enough.";
   }
 }
 
@@ -74,7 +75,7 @@ export class DesktopAppRequestFailedError extends Schema.TaggedError<DesktopAppR
   },
 ) {
   override get message(): string {
-    return `T3 Code could not open ${this.workspaceRoot} (${this.code}).`;
+    return `Lightning Code could not open ${this.workspaceRoot} (${this.code}).`;
   }
 }
 
@@ -192,7 +193,10 @@ async function sendDesktopAppActivationRequest(input: {
 }
 
 const appEnvironment = Config.all({
-  t3Home: Config.String("T3CODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  t3Home: Config.String(LIGHTNING_BRAND.homeEnvVar).pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   sshConnection: Config.String("SSH_CONNECTION").pipe(Config.option),
   sshTty: Config.String("SSH_TTY").pipe(Config.option),
 });
@@ -266,7 +270,7 @@ const runAppCommand = Effect.fn("cli.app")(function* (flags: {
     });
   }
 
-  yield* Console.log(`Opened ${workspaceRoot} in T3 Code.`);
+  yield* Console.log(`Opened ${workspaceRoot} in Lightning Code.`);
 });
 
 export const appCommand = Command.make("app", {
@@ -276,6 +280,6 @@ export const appCommand = Command.make("app", {
     Argument.optional,
   ),
 }).pipe(
-  Command.withDescription("Open a project in the running T3 Code desktop app."),
+  Command.withDescription("Open a project in the running Lightning Code desktop app."),
   Command.withHandler(runAppCommand),
 );

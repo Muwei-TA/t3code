@@ -11,6 +11,7 @@ import {
 } from "@t3tools/shared/hostClassification";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { QrCode } from "@t3tools/shared/qrCode";
+import { LIGHTNING_BRAND } from "@t3tools/shared/brand";
 import { buildPairingAppLink } from "@t3tools/shared/remote";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -242,7 +243,7 @@ export const renderTerminalQrCode = (value: string, margin = 2): string => {
 
 export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): string =>
   [
-    "T3 Code server is ready.",
+    `${LIGHTNING_BRAND.baseName} server is ready.`,
     `Connection string: ${accessInfo.connectionString}`,
     `Token: ${accessInfo.token}`,
     `Pairing URL: ${accessInfo.pairingUrl}`,

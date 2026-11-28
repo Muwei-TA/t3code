@@ -1,3 +1,4 @@
+import { hostedThreadLinkOrigin } from "./hostedThreadLinkOrigin";
 import { requireNativeModule } from "expo";
 import { msg } from "gt-react-native";
 import { m } from "../i18n/messages";
@@ -93,6 +94,7 @@ export async function importComposerContextClipboard(
       linkedEnvironments.has(record.environmentId)
         ? record.contextId
         : undefined,
+    hostedThreadLinkOrigin,
   );
   const source =
     copied?.source ??

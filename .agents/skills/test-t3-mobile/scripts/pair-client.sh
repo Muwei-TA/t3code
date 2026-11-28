@@ -18,8 +18,16 @@ shift 4
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
+read -r app_id app_scheme < <(node --input-type=module - <<'NODE'
+import { MOBILE_APP_IDENTITIES } from "./packages/shared/src/mobileBrand.ts";
+
+const { identifier, scheme } = MOBILE_APP_IDENTITIES.development;
+console.log(identifier, scheme);
+NODE
+)
+
 if ! pairing_output="$({
-  T3CODE_PORT="$server_port" node apps/server/src/bin.ts auth pairing create \
+  LIGHTNING_CODE_PORT="$server_port" node apps/server/src/bin.ts auth pairing create \
     --base-dir "$base_dir" \
     --base-url "$mobile_origin" \
     --ttl 15m \
@@ -35,16 +43,16 @@ if [[ -z "$pairing_url" ]]; then
   exit 1
 fi
 
-deep_link="$(PAIRING_URL="$pairing_url" node - <<'NODE'
+deep_link="$(PAIRING_URL="$pairing_url" PAIRING_SCHEME="$app_scheme" node --input-type=module - <<'NODE'
 const query = new URLSearchParams({
   pairingUrl: process.env.PAIRING_URL,
   autoConnect: "1",
 });
-process.stdout.write(`t3code-dev://connections/new?${query}`);
+process.stdout.write(`${process.env.PAIRING_SCHEME}://connections/new?${query}`);
 NODE
 )"
 
-if ! "$agent_device_command" open com.t3tools.t3code.dev "$deep_link" "$@" \
+if ! "$agent_device_command" open "$app_id" "$deep_link" "$@" \
   >/dev/null 2>&1; then
   echo "AgentDevice could not open the pairing route. Check the Device panel and retry with a fresh credential." >&2
   exit 1

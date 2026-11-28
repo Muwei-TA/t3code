@@ -1,3 +1,4 @@
+import { configuredHostedAppUrl } from "~/hostedPairing";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import {
@@ -86,7 +87,9 @@ function markdownNodeText(node: Nodes): string {
   const separator = node.type === "element" && INLINE_PARENTS.has(node.tagName) ? "" : " ";
   const text = node.children.map(markdownNodeText).join(separator);
   // A thread autolink's only text is its URL.
-  return node.type === "element" && node.tagName === "a" && parseThreadLinkHref(text) !== null
+  return node.type === "element" &&
+    node.tagName === "a" &&
+    parseThreadLinkHref(text, configuredHostedAppUrl()) !== null
     ? "a thread"
     : text;
 }

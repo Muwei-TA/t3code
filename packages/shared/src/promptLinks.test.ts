@@ -101,10 +101,20 @@ describe("link round trips", () => {
       model: "opus",
     });
     const path = promptLinkAppPath(link);
-    expect(path).toBe(new URL(link).pathname + new URL(link).search);
+    expect(new URL(link).protocol).toBe("lightningcode:");
+    expect(path).toBe(`/new${new URL(link).search}`);
     const parsed = parseNewThreadLink(new URL(link).search);
     expect(parsed.ok && parsed.value.kind === "new" && parsed.value.prompt.text).toBe(
       "Swear count & rating?",
+    );
+  });
+
+  it("uses an explicit hosted app or the current app scheme when sharing", () => {
+    expect(buildNewThreadLink({ prompt: "Review", origin: "https://lightning.example" })).toBe(
+      "https://lightning.example/new?prompt=Review",
+    );
+    expect(buildNewThreadLink({ prompt: "Review", appScheme: "lightningcode-preview" })).toBe(
+      "lightningcode-preview://new?prompt=Review",
     );
   });
 
@@ -116,13 +126,14 @@ describe("link round trips", () => {
     const path = promptLinkAppPath(link);
     expect(path).toBe("/env-1/mcp%3A1");
     const deepLink = promptLinkDeepLink(path!);
-    expect(deepLink).toBe("t3code://threads/env-1/mcp%3A1");
+    expect(deepLink).toBe("lightningcode://threads/env-1/mcp%3A1");
     expect(promptLinkAppPath(deepLink)).toBe(path);
   });
 
   it("maps app scheme and hosted links to in-app paths, and nothing else", () => {
-    expect(promptLinkAppPath("t3code://new?prompt=hi")).toBe("/new?prompt=hi");
-    expect(promptLinkAppPath("t3code-dev://threads/env-1/thread-1")).toBe("/env-1/thread-1");
+    expect(promptLinkAppPath("lightningcode://new?prompt=hi")).toBe("/new?prompt=hi");
+    expect(promptLinkAppPath("lightningcode-dev://threads/env-1/thread-1")).toBe("/env-1/thread-1");
+    expect(promptLinkAppPath("t3code://new?prompt=hi")).toBeNull();
     expect(promptLinkAppPath("https://app.t3.codes/env-1/thread-1?prompt=go")).toBe(
       "/env-1/thread-1?prompt=go",
     );
@@ -137,7 +148,7 @@ describe("link round trips", () => {
     expect(promptLinkAppPath("https://app.t3.codes/threads/env-1")).toBeNull();
     expect(promptLinkAppPath("https://app.t3.codes/settings/general")).toBeNull();
     expect(promptLinkAppPath("https://evil.test/new?prompt=hi")).toBeNull();
-    expect(promptLinkAppPath("t3code://app/index.html")).toBeNull();
+    expect(promptLinkAppPath("lightningcode://app/index.html")).toBeNull();
   });
 
   it("maps links in browsers without URL.canParse, such as Safari before 17", () => {

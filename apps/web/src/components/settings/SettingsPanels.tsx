@@ -2714,23 +2714,25 @@ export function AboutSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection id="legal" title={gt("Legal")}>
-        <SettingsRow
-          {...setting("privacy-policy")}
-          description={
-            telemetryOff === undefined
-              ? gt("How we handle your data, including anonymous usage data when enabled.")
-              : gt("How we handle your data. {telemetryOff}", { telemetryOff })
-          }
-          control={
-            <Button
-              render={<a href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer noopener" />}
-              size="sm"
-              variant="outline"
-            >
-              <T>View policy</T>
-            </Button>
-          }
-        />
+        {PRIVACY_POLICY_URL ? (
+          <SettingsRow
+            {...setting("privacy-policy")}
+            description={
+              telemetryOff === undefined
+                ? gt("How we handle your data, including anonymous usage data when enabled.")
+                : gt("How we handle your data. {telemetryOff}", { telemetryOff })
+            }
+            control={
+              <Button
+                render={<a href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer noopener" />}
+                size="sm"
+                variant="outline"
+              >
+                <T>View policy</T>
+              </Button>
+            }
+          />
+        ) : null}
         <SettingsRow
           {...setting("open-source-licenses")}
           description={gt("Notices for dependencies, assets, and optional tools used by T3 Code.")}
